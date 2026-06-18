@@ -340,8 +340,33 @@ p { line-height: 1.7; color: var(--clr-text-2); }
 .sidebar a.active { color: var(--clr-primary); font-weight: 600; background: var(--clr-primary-lt); }
 
 @media (max-width: 768px) {
-  .layout-sidebar { grid-template-columns: 1fr; }
+  .layout-sidebar { grid-template-columns: 1fr; gap: 1rem; }
   .sidebar { position: static; }
+  /* docs layout: main content first, sidebar below on mobile */
+  .docs-layout .docs-main     { order: 1; }
+  .docs-layout .docs-sidebar-wrap { order: 2; }
+}
+
+/* docs detail classes */
+.docs-page-title-h1 { font-size: 1.4rem; margin-bottom: 1.5rem; }
+@media (max-width: 480px) { .docs-page-title-h1 { font-size: 1.2rem; } }
+
+.docs-chunk {
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--clr-border);
+}
+.docs-chunk:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+.docs-chunk-heading { font-size: 1.1rem; color: var(--clr-text); margin-bottom: .75rem; }
+
+.docs-card { overflow-x: hidden; }
+
+.docs-nav-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
 }
 
 /* ── Prose / Markdown ────────────────────────────────────── */
@@ -368,9 +393,10 @@ p { line-height: 1.7; color: var(--clr-text-2); }
   border-left: 3px solid var(--clr-primary);
   padding-left: 1rem; color: var(--clr-muted); margin-bottom: 1em;
 }
-.prose table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
+/* tables inside .prose scroll horizontally on narrow screens */
+.prose table { display: block; width: 100%; max-width: 100%; border-collapse: collapse; margin-bottom: 1em; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .prose th, .prose td { padding: .5rem .75rem; border: 1px solid var(--clr-border); text-align: left; font-size: .875rem; }
-.prose th { background: var(--clr-surface); font-weight: 600; }
+.prose th { background: var(--clr-surface); font-weight: 600; white-space: nowrap; }
 .prose a { color: var(--clr-primary); }
 
 /* ── Chat (inline assistant page) ───────────────────────── */
@@ -1807,11 +1833,22 @@ h5.wm-heading { font-size: .825rem; }
 }
 .page-hero p { font-size: .95rem; color: var(--lp-text-muted) !important; max-width: 560px; line-height: 1.7; margin: 0; }
 .page-body { background: var(--clr-bg); padding: 2.5rem 0 5rem; }
+@media (max-width: 600px) {
+  .page-body { padding: 1.25rem 0 3rem; }
+  .container { padding: 0 1rem; }
+  .card { padding: 1rem; }
+  .docs-chunk { margin-bottom: 1.5rem; padding-bottom: 1rem; }
+}
 
 /* ── Docs page ─────────────────────────────────────────── */
-.docs-search-form { display: flex; gap: .75rem; margin-bottom: 2rem; }
-.docs-search-form .form-input { flex: 1; }
-.docs-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.docs-search-form { display: flex; gap: .75rem; margin-bottom: 2rem; flex-wrap: wrap; }
+.docs-search-form .form-input { flex: 1; min-width: 0; }
+.docs-search-form .btn { flex-shrink: 0; }
+@media (max-width: 480px) {
+  .docs-search-form { flex-direction: column; }
+  .docs-search-form .btn { width: 100%; }
+}
+.docs-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .docs-page-card {
   display: flex !important; flex-direction: column;
   text-decoration: none; color: var(--clr-text); height: 100%;

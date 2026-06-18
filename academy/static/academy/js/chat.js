@@ -93,9 +93,17 @@
     let orderedList = false;
     let tableRows = [];
     let tableHasHeader = false;
+    let paraLines = [];
+
+    function flushPara() {
+      if (!paraLines.length) return;
+      out.push('<p class="wm-p">' + paraLines.join('<br>') + '</p>');
+      paraLines = [];
+    }
 
     function flushList() {
       if (!listItems.length) return;
+      flushPara();
       const tag = orderedList ? 'ol' : 'ul';
       out.push('<' + tag + ' class="wm-list">');
       listItems.forEach(function(item) { out.push('<li>' + item + '</li>'); });
@@ -124,6 +132,7 @@
 
     function flushTable() {
       if (!tableRows.length) return;
+      flushPara();
       out.push('<div class="wm-table-wrap"><table class="wm-table">');
       tableRows.forEach(function(row, i) {
         if (i === 0 && tableHasHeader) {
@@ -149,6 +158,7 @@
           flushCode();
           inCode = false;
         } else {
+          flushPara();
           flushList();
           flushTable();
           codeLang = line.slice(3).trim();
@@ -163,6 +173,7 @@
         if (isTableSep(line)) {
           tableHasHeader = tableRows.length === 1;
         } else {
+          flushPara();
           flushList();
           tableRows.push(parseTableRow(line));
         }
@@ -173,6 +184,7 @@
       // ── headings ──────────────────────────────────
       var hMatch = line.match(/^(#{1,4}) (.+)/);
       if (hMatch) {
+        flushPara();
         flushList();
         var level = Math.min(hMatch[1].length + 2, 6); // h3..h6
         out.push('<h' + level + ' class="wm-heading">' + inlineFmt(esc(hMatch[2])) + '</h' + level + '>');
@@ -181,6 +193,7 @@
 
       // ── horizontal rule ───────────────────────────
       if (/^-{3,}$/.test(line.trim())) {
+        flushPara();
         flushList();
         out.push('<hr class="wm-hr">');
         return;
@@ -189,6 +202,7 @@
       // ── blockquote ────────────────────────────────
       var bqMatch = line.match(/^> (.+)/);
       if (bqMatch) {
+        flushPara();
         flushList();
         out.push('<blockquote class="wm-bq">' + inlineFmt(esc(bqMatch[1])) + '</blockquote>');
         return;
@@ -197,6 +211,7 @@
       // ── unordered list ────────────────────────────
       var ulMatch = line.match(/^[\-\*\+] (.+)/);
       if (ulMatch) {
+        flushPara();
         if (orderedList) flushList();
         orderedList = false;
         listItems.push(inlineFmt(esc(ulMatch[1])));
@@ -206,24 +221,25 @@
       // ── ordered list ──────────────────────────────
       var olMatch = line.match(/^\d+\. (.+)/);
       if (olMatch) {
+        flushPara();
         if (!orderedList && listItems.length) flushList();
         orderedList = true;
         listItems.push(inlineFmt(esc(olMatch[1])));
         return;
       }
 
-      // ── blank line ────────────────────────────────
+      // ── blank line → flush current paragraph ──────
       if (line.trim() === '') {
+        flushPara();
         flushList();
-        out.push('<div class="wm-gap"></div>');
         return;
       }
 
-      // ── plain text ────────────────────────────────
-      flushList();
-      out.push('<span class="wm-line">' + inlineFmt(esc(line)) + '</span><br>');
+      // ── plain text → accumulate into paragraph ────
+      paraLines.push(inlineFmt(esc(line)));
     });
 
+    flushPara();
     flushList();
     flushTable();
     if (inCode) flushCode(); // unclosed fence

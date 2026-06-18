@@ -480,9 +480,13 @@ p { line-height: 1.7; color: var(--clr-text-2); }
 }
 .wm-user .wm-bubble {
   background: var(--clr-dark-2);
-  color: #F1F5F9;
+  color: #F1F5F9; 
   border-bottom-right-radius: var(--r-sm);
 }
+.wm-user .wm-bubble p { 
+  color: #F1F5F9; 
+}
+
 .wm-assistant .wm-bubble {
   background: var(--clr-white);
   color: var(--clr-text);
@@ -683,8 +687,12 @@ h5.wm-heading { font-size: .825rem; }
   font-size: .85em;
 }
 
-.wm-bubble .wm-gap { height: .75rem; }
-.wm-bubble .wm-line { font-size: .875rem; line-height: 1.65; }
+.wm-bubble .wm-p {
+  font-size: .875rem;
+  line-height: 1.65;
+  margin: 0 0 .65rem;
+}
+.wm-bubble .wm-p:last-child { margin-bottom: 0; }
 
 .wm-bubble .wm-table-wrap {
   overflow-x: auto;

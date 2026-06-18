@@ -87,3 +87,21 @@ The design goal is that a non-expert admin can understand what to create next an
 If a feature only makes sense for one product domain, keep it in the host project or behind a small adapter.
 
 If a feature helps any AI-enabled Django project, it belongs in `ai_hub`.
+
+## This App — AI Hub Academy
+
+AI Hub Academy is the host project that ships with `ai_hub` as a working demonstration and learning platform.
+
+It owns the following academy-specific features on top of the reusable platform:
+
+| Feature | What it does |
+| --- | --- |
+| Documentation browser | Renders Markdown docs imported from `docs_source/` |
+| Documentation assistant | AI chatbot that answers questions using semantic search over imported docs |
+| Tutorials | Interactive step-by-step missions that validate real Admin state |
+| Lab exercises | Coding and concept exercises evaluated by an AI agent |
+| Progress dashboard | Per-user completion tracking across tutorial modules |
+
+These features live in the `academy` app. They use `ai_hub` for all AI execution, but own their own models, views, URLs, and management commands.
+
+See `15_ACADEMY_FEATURES.md` for a full reference of academy models, URLs, services, and management commands.

@@ -184,6 +184,8 @@ python manage.py runserver
 | `python manage.py import_academy_docs` | Import Markdown files from `docs_source/` into the database |
 | `python manage.py seed_ollama_agents` | Set up Ollama provider and GAME agents (requires local Ollama) |
 | `python manage.py run_doc_sync` | Run the Documentation Sync GAME agent once |
+| `python manage.py embed_docs` | Generate semantic embeddings for all documentation chunks (requires Ollama with `bge-m3:latest`) |
+| `python manage.py embed_docs --force` | Re-generate embeddings even for chunks that already have one |
 | `python manage.py test` | Run all 74 tests |
 | `python manage.py createsuperuser` | Create an admin user interactively |
 
@@ -253,15 +255,22 @@ You do not need to delete the Training provider — it is safe to leave it activ
 The fastest path to a real model. Requires [Ollama](https://ollama.ai) installed and running locally.
 
 ```bash
-# Pull a model first (one-time download)
+# Pull the LLM and the embedding model (one-time downloads)
 ollama pull qwen3:8b
+ollama pull bge-m3
 
 # Seed Ollama provider and GAME agents into the database
 python manage.py seed_ollama_agents --base-url http://localhost:11434
 
 # Smoke test — run the Documentation Sync GAME agent once
 python manage.py run_doc_sync
+
+# Generate semantic embeddings for the documentation assistant
+# This enables vector search in the chat — without it the assistant falls back to keyword-only search
+python manage.py embed_docs --model bge-m3:latest
 ```
+
+> **Why `embed_docs` matters:** the documentation assistant supports two search modes. When embeddings exist, it uses semantic (vector) search via cosine similarity — finding relevant content even when the user's words don't match the docs exactly. Without embeddings it falls back to keyword filtering, which misses paraphrased or conceptual questions. Run `embed_docs` once after `import_academy_docs`, and again after any bulk documentation update.
 
 ---
 
@@ -318,3 +327,16 @@ Every AI call creates an `ExecutionSession` with one `ExecutionStepRun` per step
 
 **Ollama configured but provider shows connection error**
 → Confirm Ollama is running (`ollama list` in a terminal). Check that `base_url` in the Provider config matches the Ollama address (default `http://localhost:11434`). If running inside Docker or WSL, `localhost` may not resolve — use the host machine IP instead.
+
+**Documentation assistant gives vague or off-topic answers**
+→ The assistant is likely using keyword-only search because no embeddings have been generated. Run:
+```bash
+python manage.py embed_docs --model bge-m3:latest
+```
+Confirm `bge-m3:latest` is installed in Ollama (`ollama list`). Pull it first if missing: `ollama pull bge-m3`. After the command completes, all 175+ chunks will have vector embeddings and the assistant will use semantic search automatically.
+
+**`embed_docs` skips all chunks and says "All chunks already embedded"**
+→ Embeddings already exist. To force a full refresh (e.g. after updating the documentation source), run:
+```bash
+python manage.py embed_docs --force
+```

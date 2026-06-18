@@ -12,7 +12,8 @@
 # ── Django core ─────────────────────────────────────────────
 SECRET_KEY=your-secret-key-here
 DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
+ALLOWED_HOSTS=localhost,127.0.0.1,192.168.2.116,aihub.dev-bakery.com
+CSRF_TRUSTED_ORIGINS=http://localhost,http://127.0.0.1,https://aihub.dev-bakery.com,http://aihub.dev-bakery.com
 
 # ============================================================
 # AI Provider credentials
@@ -43,7 +44,7 @@ ALLOWED_HOSTS=localhost,127.0.0.1
 # Install Ollama from https://ollama.ai and run a model:
 #   ollama pull qwen3:8b
 # Then set the URL to your Ollama instance:
-# OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_BASE_URL=http://192.168.2.132:11434
 #
 # To seed the Ollama GAME agents after setting this variable:
 #   python manage.py seed_ollama_agents

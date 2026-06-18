@@ -20,6 +20,7 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 12. [`12_TROUBLESHOOTING.md`](12_TROUBLESHOOTING.md) - common failures and fixes.
 13. [`13_ROADMAP.md`](13_ROADMAP.md) - recommended next product and engineering work.
 14. [`14_CHANGELOG.md`](14_CHANGELOG.md) - notable app and documentation changes.
+15. [`15_ACADEMY_FEATURES.md`](15_ACADEMY_FEATURES.md) - academy-specific features: documentation browser, assistant, tutorials, labs, management commands, and URL reference.
 
 ## Current Product Shape
 

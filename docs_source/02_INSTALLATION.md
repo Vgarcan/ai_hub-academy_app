@@ -259,6 +259,58 @@ tests:
 python manage.py test your_host_app ai_hub
 ```
 
+## Academy App Setup
+
+After installing `ai_hub` and running migrations, the Academy app requires additional setup steps to populate its content and enable all features.
+
+Run these commands in order:
+
+```bash
+# 1. Seed tutorial modules, missions, training provider, models, and agents
+python manage.py seed_academy_training_data
+
+# 2. Import Markdown documentation from docs_source/ into the database
+python manage.py import_academy_docs
+
+# 3. Generate semantic embeddings for the documentation assistant
+#    Requires Ollama running with bge-m3:latest
+python manage.py embed_docs --model bge-m3:latest
+
+# 4. (Optional) Seed lab exercises for tutorial modules
+python manage.py seed_lab_exercises
+
+# 5. (Optional) Set up Ollama provider and GAME agents for real AI responses
+#    Skip this if you want to stay on the Training provider stub
+python manage.py seed_ollama_agents --base-url http://localhost:11434
+
+# 6. (Optional) Run the Documentation Sync GAME agent to verify agent connectivity
+python manage.py run_doc_sync
+```
+
+The `setup_dev.py` script runs steps 1 and 2 automatically. Steps 3–6 require Ollama to be running and configured.
+
+### Ollama Models Required
+
+The academy uses two distinct Ollama models:
+
+| Model | Purpose | Pull command |
+| --- | --- | --- |
+| `qwen3:8b` | LLM for the documentation assistant and sync agents | `ollama pull qwen3:8b` |
+| `bge-m3:latest` | Embedding model for semantic search in the chat | `ollama pull bge-m3` |
+
+Both must be available in Ollama before running `seed_ollama_agents` and `embed_docs`. The documentation assistant falls back to keyword search if embeddings are missing or Ollama is unreachable.
+
+### Re-running After Documentation Updates
+
+When the content in `docs_source/` changes, run both commands again to keep the database in sync:
+
+```bash
+python manage.py import_academy_docs
+python manage.py embed_docs --force
+```
+
+`--force` re-generates embeddings even for chunks that already have one.
+
 ## Production Checklist
 
 - `ai_hub` is installed directly in `INSTALLED_APPS`.

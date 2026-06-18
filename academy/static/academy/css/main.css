@@ -686,6 +686,34 @@ h5.wm-heading { font-size: .825rem; }
 .wm-bubble .wm-gap { height: .75rem; }
 .wm-bubble .wm-line { font-size: .875rem; line-height: 1.65; }
 
+.wm-bubble .wm-table-wrap {
+  overflow-x: auto;
+  margin: .5rem 0;
+  border-radius: var(--r-sm);
+}
+.wm-bubble .wm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .8rem;
+  line-height: 1.5;
+}
+.wm-bubble .wm-table th,
+.wm-bubble .wm-table td {
+  padding: .3rem .6rem;
+  border: 1px solid var(--clr-border);
+  text-align: left;
+  vertical-align: top;
+}
+.wm-bubble .wm-table th {
+  background: var(--clr-surface-2, #f1f5f9);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wm-bubble .wm-table tr:nth-child(even) td { background: var(--clr-surface, #f8fafc); }
+.wm-user .wm-bubble .wm-table th { background: rgba(255,255,255,.15); }
+.wm-user .wm-bubble .wm-table td { border-color: rgba(255,255,255,.2); }
+.wm-user .wm-bubble .wm-table tr:nth-child(even) td { background: rgba(255,255,255,.08); }
+
 /* ============================================================
    LANDING PAGE
    ============================================================ */

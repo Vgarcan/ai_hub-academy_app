@@ -91,6 +91,8 @@
     let codeLines = [];
     let listItems = [];
     let orderedList = false;
+    let tableRows = [];
+    let tableHasHeader = false;
 
     function flushList() {
       if (!listItems.length) return;
@@ -110,6 +112,36 @@
       codeLang  = '';
     }
 
+    function isTableSep(line) {
+      return /^\|[\s\-:|]+\|/.test(line.trim());
+    }
+
+    function parseTableRow(line) {
+      return line.trim().replace(/^\||\|$/g, '').split('|').map(function(c) {
+        return inlineFmt(esc(c.trim()));
+      });
+    }
+
+    function flushTable() {
+      if (!tableRows.length) return;
+      out.push('<div class="wm-table-wrap"><table class="wm-table">');
+      tableRows.forEach(function(row, i) {
+        if (i === 0 && tableHasHeader) {
+          out.push('<thead><tr>');
+          row.forEach(function(cell) { out.push('<th>' + cell + '</th>'); });
+          out.push('</tr></thead><tbody>');
+        } else {
+          out.push('<tr>');
+          row.forEach(function(cell) { out.push('<td>' + cell + '</td>'); });
+          out.push('</tr>');
+        }
+      });
+      if (tableHasHeader) out.push('</tbody>');
+      out.push('</table></div>');
+      tableRows = [];
+      tableHasHeader = false;
+    }
+
     lines.forEach(function(line) {
       // ── code fence ────────────────────────────────
       if (/^```/.test(line)) {
@@ -118,12 +150,25 @@
           inCode = false;
         } else {
           flushList();
+          flushTable();
           codeLang = line.slice(3).trim();
           inCode = true;
         }
         return;
       }
       if (inCode) { codeLines.push(line); return; }
+
+      // ── table ─────────────────────────────────────
+      if (/^\|/.test(line.trim())) {
+        if (isTableSep(line)) {
+          tableHasHeader = tableRows.length === 1;
+        } else {
+          flushList();
+          tableRows.push(parseTableRow(line));
+        }
+        return;
+      }
+      if (tableRows.length) flushTable();
 
       // ── headings ──────────────────────────────────
       var hMatch = line.match(/^(#{1,4}) (.+)/);
@@ -180,6 +225,7 @@
     });
 
     flushList();
+    flushTable();
     if (inCode) flushCode(); // unclosed fence
     return out.join('');
   }

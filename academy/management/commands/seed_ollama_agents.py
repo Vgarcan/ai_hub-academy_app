@@ -94,6 +94,14 @@ Rules:
 - Cite sources as [Page Title / Section].
 - If no relevant docs found after searching, say so clearly.
 - Be concise but complete.
+
+Formatting rules for final_answer:
+- Use Markdown. The chat renders: **bold**, *italic*, `code`, headers (##/###), bullet lists (- item), numbered lists, tables, code blocks (```lang).
+- Use a Markdown table (| Col | Col |\n| --- | --- |) when listing items with two or more attributes (e.g. commands with descriptions, URLs with purposes).
+- Use bullet lists for simple enumerations.
+- Use ``` code blocks for commands, file paths, or code snippets.
+- Do NOT output raw monospace-aligned text or ASCII tables — use proper Markdown tables instead.
+- Keep the answer focused. One table or list is better than multiple walls of text.
 """
 
 
@@ -207,20 +215,26 @@ class Command(BaseCommand):
         self.stdout.write(f"{'Created' if created else 'Found'} tool: {search_tool.name}")
 
         # ── Agents ────────────────────────────────────────────────────────────
+        _game_output = {"required": ["action", "message", "complete", "final_answer"]}
+
         sync_agent, created = AgentProfile.objects.get_or_create(
             name="Documentation Sync Agent",
             defaults={
                 "role": "Autonomous documentation database sync agent",
                 "system_prompt": DOC_SYNC_SYSTEM_PROMPT,
                 "model_config": sync_model,
+                "input_contract": {"required": ["goal"]},
+                "output_contract": _game_output,
                 "is_active": True,
             },
         )
         if not created and force:
             sync_agent.system_prompt = DOC_SYNC_SYSTEM_PROMPT
             sync_agent.model_config = sync_model
+            sync_agent.input_contract = {"required": ["goal"]}
+            sync_agent.output_contract = _game_output
             sync_agent.is_active = True
-            sync_agent.save(update_fields=["system_prompt", "model_config", "is_active", "updated_at"])
+            sync_agent.save(update_fields=["system_prompt", "model_config", "input_contract", "output_contract", "is_active", "updated_at"])
         sync_agent.tools.set([sync_tool])
         self.stdout.write(f"{'Created' if created else 'Found'} agent: {sync_agent.name}")
 
@@ -230,14 +244,18 @@ class Command(BaseCommand):
                 "role": "Documentation Q&A assistant",
                 "system_prompt": DOC_ASSISTANT_SYSTEM_PROMPT,
                 "model_config": chat_model,
+                "input_contract": {"required": ["goal_text"]},
+                "output_contract": _game_output,
                 "is_active": True,
             },
         )
         if not created and force:
             assistant_agent.system_prompt = DOC_ASSISTANT_SYSTEM_PROMPT
             assistant_agent.model_config = chat_model
+            assistant_agent.input_contract = {"required": ["goal_text"]}
+            assistant_agent.output_contract = _game_output
             assistant_agent.is_active = True
-            assistant_agent.save(update_fields=["system_prompt", "model_config", "is_active", "updated_at"])
+            assistant_agent.save(update_fields=["system_prompt", "model_config", "input_contract", "output_contract", "is_active", "updated_at"])
         assistant_agent.tools.set([search_tool])
         self.stdout.write(f"{'Created' if created else 'Found'} agent: {assistant_agent.name}")
 

@@ -22,7 +22,7 @@ Use it to learn how AI pipelines work, explore live execution telemetry, and und
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/Vgarcan/ai_hub_academy.git
+git clone https://github.com/Vgarcan/ai_hub-academy_app.git
 cd ai_hub_academy
 ```
 

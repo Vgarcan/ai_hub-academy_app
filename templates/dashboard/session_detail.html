@@ -1,0 +1,217 @@
+{% extends "dashboard/base_dashboard.html" %}
+{% load dashboard_extras %}
+
+{% block title %}Session #{{ session.pk }} — AI Hub Dashboard{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard_sessions' %}">Sessions</a></li>
+    <li class="breadcrumb-item active">Session #{{ session.pk }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-4">
+  <i class="bi bi-clock-history fs-3 text-secondary me-3"></i>
+  <div>
+    <h1 class="h3 mb-0">Session #{{ session.pk }}</h1>
+    <p class="text-muted mb-0 small">
+      <span class="badge {% if session.runtime_kind == 'game' %}bg-info text-dark{% else %}bg-primary{% endif %}">{{ session.runtime_kind }}</span>
+      {% if session.entry_agent %}
+        · <a href="{% url 'dashboard_agent_detail' session.entry_agent.pk %}" class="text-decoration-none">{{ session.entry_agent.name }}</a>
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<!-- Header card -->
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-body">
+    {% if session.goal_text %}
+    <div class="alert alert-light border mb-3">
+      <strong class="d-block mb-1 text-muted small">Goal</strong>
+      <span>{{ session.goal_text }}</span>
+    </div>
+    {% endif %}
+
+    <div class="row g-3 mb-3">
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Status</div>
+        <div>{% include "dashboard/partials/_status_badge.html" with status=session.status %}</div>
+      </div>
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Runtime Kind</div>
+        <div>
+          <span class="badge {% if session.runtime_kind == 'game' %}bg-info text-dark{% else %}bg-primary{% endif %}">
+            {{ session.get_runtime_kind_display }}
+          </span>
+        </div>
+      </div>
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Source</div>
+        <div class="small">{{ session.source_label|default:"—" }}</div>
+      </div>
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Triggered By</div>
+        <div class="small">{{ session.triggered_by|default:"—" }}</div>
+      </div>
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Created</div>
+        <div class="small">{{ session.created_at|date:"d M Y H:i:s" }}</div>
+      </div>
+      {% if session.started_at %}
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Started</div>
+        <div class="small">{{ session.started_at|date:"d M Y H:i:s" }}</div>
+      </div>
+      {% endif %}
+      {% if session.finished_at %}
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Finished</div>
+        <div class="small">{{ session.finished_at|date:"d M Y H:i:s" }}</div>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if session.error_detail %}
+    <div class="alert alert-danger mb-0">
+      <strong><i class="bi bi-exclamation-triangle me-1"></i>Error:</strong>
+      <pre class="mb-0 mt-1 small" style="white-space:pre-wrap;overflow-x:auto;max-height:300px;overflow-y:auto;">{{ session.error_detail }}</pre>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Final answer -->
+{% if final_answer %}
+<div class="alert alert-success d-flex gap-2 mb-4">
+  <i class="bi bi-check-circle-fill fs-5 mt-1"></i>
+  <div>
+    <strong>Final Answer</strong>
+    <div class="mt-1" style="white-space:pre-wrap;line-height:1.7">{{ final_answer }}</div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Initial context collapsible -->
+{% if session.initial_context %}
+<div class="accordion mb-4">
+  {% include "dashboard/partials/_json_block.html" with label="Initial Context" json_str=session.initial_context|pretty_json collapse_id="initial-context" %}
+</div>
+{% endif %}
+
+<!-- GAME Iterations -->
+{% if step_data %}
+<h5 class="mb-3"><i class="bi bi-layers me-2 text-secondary"></i>GAME Iterations ({{ step_data|length }})</h5>
+
+{% for item in step_data %}
+<div class="card border-0 shadow-sm mb-3">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <div class="fw-semibold">
+      Iteration {{ item.step.order }}
+      {% if item.step.agent %}
+        <span class="text-muted fw-normal small ms-2">· {{ item.step.agent.name }}</span>
+      {% endif %}
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+      {% if item.step.latency_ms %}
+        <span class="text-muted small">{{ item.step.latency_ms }}ms</span>
+      {% endif %}
+      {% if item.action %}
+        <span class="badge bg-{{ item.action|action_color }}">{{ item.action }}</span>
+      {% endif %}
+      {% include "dashboard/partials/_status_badge.html" with status=item.step.status %}
+    </div>
+  </div>
+  <div class="card-body">
+
+    <!-- Message from GAME decision -->
+    {% if item.message %}
+    <div class="mb-3 p-3 bg-light rounded border-start border-4 border-info">
+      <strong class="small text-muted">Agent Message:</strong>
+      <p class="mb-0 mt-1" style="white-space:pre-wrap;line-height:1.7">{{ item.message }}</p>
+    </div>
+    {% endif %}
+
+    <!-- Contract errors -->
+    {% if not item.contract_valid %}
+    <div class="alert alert-warning">
+      <strong><i class="bi bi-shield-exclamation me-1"></i>Contract Validation Failed</strong>
+      <ul class="mb-0 mt-2">
+        {% for err in item.contract_errors %}
+          <li>{{ err }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <!-- Accordion for tools / LLM / request -->
+    <div class="accordion" id="iter-accordion-{{ forloop.counter }}">
+
+      <!-- Tool Results -->
+      {% if item.tools_output %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed small py-2" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#tools-{{ forloop.counter }}"
+                  aria-expanded="false">
+            <i class="bi bi-tools me-2 text-warning"></i>Tool Results
+          </button>
+        </h2>
+        <div id="tools-{{ forloop.counter }}" class="accordion-collapse collapse">
+          <div class="accordion-body">
+            {% for tool_name, tool_result in item.tools_output.items %}
+            <div class="mb-2">
+              <div class="small fw-semibold text-muted mb-1">{{ tool_name }}</div>
+              <pre class="bg-dark text-light p-2 rounded small m-0" style="max-height:300px;overflow-y:auto;">{{ tool_result|pretty_json }}</pre>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- LLM Response -->
+      {% if item.llm_content or item.llm_model %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed small py-2" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#llm-{{ forloop.counter }}"
+                  aria-expanded="false">
+            <i class="bi bi-cpu me-2 text-primary"></i>LLM Response
+            {% if item.llm_model %}
+              <span class="badge bg-light text-dark border font-monospace ms-2 fw-normal">{{ item.llm_model }}</span>
+            {% endif %}
+          </button>
+        </h2>
+        <div id="llm-{{ forloop.counter }}" class="accordion-collapse collapse">
+          <div class="accordion-body p-0">
+            <pre class="bg-dark text-light p-3 m-0 small rounded-bottom" style="max-height:400px;overflow-y:auto;">{% if item.llm_content %}{{ item.llm_content|pretty_json }}{% else %}<span class="text-muted">No LLM content</span>{% endif %}</pre>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Request Payload -->
+      {% if item.request_json %}
+      {% include "dashboard/partials/_json_block.html" with label="Request Payload" json_str=item.request_json collapse_id="req-"|add:forloop.counter|stringformat:"s" %}
+      {% endif %}
+
+    </div>
+
+    <!-- Complete flag -->
+    {% if item.complete %}
+    <div class="mt-3 d-flex align-items-center gap-2 text-success fw-semibold">
+      <i class="bi bi-check-circle-fill"></i> Goal completed
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endfor %}
+
+{% else %}
+<div class="alert alert-secondary">No step runs recorded for this session.</div>
+{% endif %}
+
+{% endblock %}

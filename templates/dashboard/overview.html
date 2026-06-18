@@ -1,0 +1,125 @@
+{% extends "dashboard/base_dashboard.html" %}
+{% load dashboard_extras %}
+
+{% block title %}Overview — AI Hub Dashboard{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+  <i class="bi bi-house-door fs-3 text-primary me-3"></i>
+  <div>
+    <h1 class="h3 mb-0">Control Room</h1>
+    <p class="text-muted mb-0 small">A live read-only view of every AI Hub entity in your database.</p>
+  </div>
+</div>
+
+<!-- Stat cards -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card text-center h-100 border-0 shadow-sm">
+      <div class="card-body">
+        <i class="bi bi-cloud fs-2 text-primary mb-2"></i>
+        <div class="display-6 fw-bold">{{ provider_count }}</div>
+        <div class="small text-muted">Providers</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card text-center h-100 border-0 shadow-sm">
+      <div class="card-body">
+        <i class="bi bi-cpu fs-2 text-success mb-2"></i>
+        <div class="display-6 fw-bold">{{ model_count }}</div>
+        <div class="small text-muted">Models</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card text-center h-100 border-0 shadow-sm">
+      <div class="card-body">
+        <i class="bi bi-robot fs-2 text-info mb-2"></i>
+        <div class="display-6 fw-bold">{{ agent_count }}</div>
+        <div class="small text-muted">Agents</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card text-center h-100 border-0 shadow-sm">
+      <div class="card-body">
+        <i class="bi bi-tools fs-2 text-warning mb-2"></i>
+        <div class="display-6 fw-bold">{{ tool_count }}</div>
+        <div class="small text-muted">Tools</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card text-center h-100 border-0 shadow-sm">
+      <div class="card-body">
+        <i class="bi bi-diagram-3 fs-2 text-danger mb-2"></i>
+        <div class="display-6 fw-bold">{{ pipeline_count }}</div>
+        <div class="small text-muted">Pipelines</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-2">
+    <div class="card text-center h-100 border-0 shadow-sm">
+      <div class="card-body">
+        <i class="bi bi-clock-history fs-2 text-secondary mb-2"></i>
+        <div class="display-6 fw-bold">{{ session_count }}</div>
+        <div class="small text-muted">Sessions</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Architecture annotation -->
+{% include "dashboard/partials/_annotation.html" with title="AI Hub Architecture Flow" text="Provider Config → Model Config → Agent Profile → Execution Session. A ProviderConfig connects to an AI service. Each ModelConfig belongs to a provider and specifies a model name with defaults. An AgentProfile picks a ModelConfig and adds a system prompt and optional tools. An ExecutionSession records one full pipeline or GAME run using an AgentProfile." icon="diagram-3" %}
+
+<!-- Recent sessions -->
+<div class="card border-0 shadow-sm">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <span class="fw-semibold"><i class="bi bi-clock-history me-2 text-secondary"></i>Recent Sessions</span>
+    <a href="{% url 'dashboard_sessions' %}" class="btn btn-sm btn-outline-secondary">View all</a>
+  </div>
+  <div class="card-body p-0">
+    {% if recent_sessions %}
+    <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>#</th>
+          <th>Agent</th>
+          <th>Status</th>
+          <th>Source</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in recent_sessions %}
+        <tr>
+          <td>
+            <a href="{% url 'dashboard_session_detail' s.pk %}" class="text-decoration-none fw-semibold">
+              #{{ s.pk }}
+            </a>
+          </td>
+          <td>
+            {% if s.entry_agent %}
+              <a href="{% url 'dashboard_agent_detail' s.entry_agent.pk %}" class="text-decoration-none">
+                {{ s.entry_agent.name }}
+              </a>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>{% include "dashboard/partials/_status_badge.html" with status=s.status %}</td>
+          <td><span class="text-muted small">{{ s.source_label|default:"—" }}</span></td>
+          <td><span class="text-muted small">{{ s.created_at|date:"d M Y H:i" }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div class="p-4 text-center text-muted">No sessions yet. Run a pipeline or GAME agent to see results here.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

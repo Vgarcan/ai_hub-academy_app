@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Documentation — AI Hub Academy{% endblock %}
+
+{% block content %}
+<section class="page-hero">
+  <div class="container">
+    <div class="page-hero-eyebrow">Resources</div>
+    <h1>Documentation</h1>
+    <p>AI Hub official documentation. Imported from Markdown source files and fully searchable.</p>
+  </div>
+</section>
+
+<div class="page-body">
+  <div class="container">
+
+    <form action="{% url 'academy:docs_search' %}" method="get" class="docs-search-form">
+      <input type="text" name="q" placeholder="Search documentation…" class="form-input">
+      <button type="submit" class="btn btn-primary">Search</button>
+    </form>
+
+    {% if pages %}
+      <div class="card-grid docs-grid">
+        {% for page in pages %}
+        <a href="{% url 'academy:docs_detail' page.slug %}" class="card docs-page-card">
+          <div class="docs-page-card-header">
+            <div class="docs-page-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <span class="badge badge-gray">{{ page.chunks.count }} sections</span>
+          </div>
+          <div class="docs-page-title">{{ page.title }}</div>
+          <p class="docs-page-source">{{ page.source.name }}</p>
+          <div class="docs-page-cta">Read article <span>&rarr;</span></div>
+        </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="card">
+        <p>No documentation pages found.</p>
+        <p style="margin-top:.5rem; color:var(--clr-muted);">
+          Run <code>python manage.py import_academy_docs</code> to import the AI Hub docs,
+          or copy Markdown files to <code>docs_source/</code> and run the command.
+        </p>
+      </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}AI Hub Academy{% endblock %}</title>
+  {% load static %}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..900;1,14..32,300..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'academy/css/main.css' %}">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+
+<nav class="nav">
+  <a class="nav-brand" href="{% url 'academy:landing' %}">
+    <span class="nav-brand-dot"></span>AI Hub
+  </a>
+
+  <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation" aria-expanded="false">&#9776;</button>
+
+  <div class="nav-links" id="navLinks">
+    <a href="{% url 'academy:landing' %}"
+       class="nav-link{% if request.resolver_match.url_name == 'landing' %} active{% endif %}">Home</a>
+    <a href="{% url 'academy:docs_list' %}"
+       class="nav-link{% if 'docs' in request.path %} active{% endif %}">Docs</a>
+    <a href="{% url 'academy:tutorial_list' %}"
+       class="nav-link{% if 'tutorials' in request.path %} active{% endif %}">Tutorials</a>
+    <a href="{% url 'dashboard_overview' %}"
+       class="nav-link{% if 'dashboard' in request.path %} active{% endif %}">Dashboard</a>
+
+    <div class="nav-spacer"></div>
+
+    {% if user.is_authenticated %}
+      <a href="{% url 'academy:progress' %}" class="nav-link">My Progress</a>
+    {% endif %}
+    <a href="/admin/ai_hub/" class="nav-link">Admin</a>
+    {% if user.is_staff %}<span class="nav-badge">staff</span>{% endif %}
+
+    <button class="nav-chat-btn" id="chat-toggle-btn"
+            aria-expanded="false" aria-controls="chat-widget" aria-label="Open AI Assistant">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      Ask AI
+    </button>
+  </div>
+</nav>
+
+{% if messages %}
+<div class="container" style="padding-top:1rem;padding-bottom:0">
+  <ul class="messages">
+    {% for msg in messages %}
+      <li class="{{ msg.tags }}">{{ msg }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% block content %}{% endblock %}
+
+{% include "partials/chat_widget.html" %}
+{% csrf_token %}
+
+<script src="{% static 'academy/js/chat.js' %}"></script>
+<script>
+  (function () {
+    var btn  = document.getElementById('navToggle');
+    var menu = document.getElementById('navLinks');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', function () {
+      var open = menu.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }());
+</script>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

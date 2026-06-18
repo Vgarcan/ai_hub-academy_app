@@ -1,0 +1,174 @@
+{% load dashboard_extras %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}AI Hub Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    body { min-height: 100vh; background-color: #f8f9fa; }
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      width: 220px;
+      overflow-y: auto;
+      z-index: 100;
+      transition: left .2s ease;
+    }
+    .main-content {
+      margin-left: 220px;
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+    .sidebar .nav-link {
+      color: #adb5bd;
+      padding: .4rem 1rem;
+      border-radius: 6px;
+      font-size: .875rem;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .sidebar .nav-link:hover { color: #fff; background: rgba(255,255,255,.07); }
+    .sidebar .nav-link.active { color: #fff; background: rgba(255,255,255,.12); font-weight: 600; }
+    .sidebar .nav-link i { font-size: 1rem; }
+    hr.sidebar-divider { border-color: rgba(255,255,255,.15); margin: .5rem 1rem; }
+    /* Mobile: sidebar slides in over content */
+    .mobile-topbar { display: none; }
+    @media (max-width: 767.98px) {
+      .mobile-topbar {
+        display: flex;
+        position: sticky;
+        top: 0;
+        z-index: 200;
+        align-items: center;
+        justify-content: space-between;
+        padding: .6rem 1rem;
+        background: #212529;
+      }
+      .sidebar {
+        left: -240px;
+        width: 240px;
+        z-index: 300;
+        box-shadow: 4px 0 16px rgba(0,0,0,.4);
+      }
+      .sidebar.sidebar-open { left: 0; }
+      .sidebar-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.45);
+        z-index: 299;
+      }
+      .sidebar-overlay.active { display: block; }
+      .main-content { margin-left: 0; padding: 1rem; padding-top: .75rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Mobile top bar (hidden on md+) -->
+<div class="mobile-topbar">
+  <span class="text-white fw-bold">AI Hub <span class="text-warning">Dashboard</span></span>
+  <button class="btn btn-outline-light btn-sm" id="sidebarToggle" aria-label="Open navigation">
+    <i class="bi bi-list fs-5"></i>
+  </button>
+</div>
+
+<!-- Click-outside overlay (mobile) -->
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<!-- Sidebar -->
+<div class="sidebar bg-dark d-flex flex-column py-3" id="sidebar">
+  <div class="px-3 mb-3">
+    <div class="text-white fw-bold fs-5 lh-1">AI Hub</div>
+    <div class="text-warning small mt-1">Dashboard</div>
+  </div>
+
+  <nav class="nav flex-column px-2 flex-grow-1">
+    <a href="{% url 'dashboard_overview' %}"
+       class="nav-link {% if request.resolver_match.url_name == 'dashboard_overview' %}active{% endif %}">
+      <i class="bi bi-house-door"></i> Overview
+    </a>
+    <a href="{% url 'dashboard_providers' %}"
+       class="nav-link {% if 'dashboard_provider' in request.resolver_match.url_name %}active{% endif %}">
+      <i class="bi bi-cloud"></i> Providers
+    </a>
+    <a href="{% url 'dashboard_agents' %}"
+       class="nav-link {% if 'dashboard_agent' in request.resolver_match.url_name %}active{% endif %}">
+      <i class="bi bi-robot"></i> Agents
+    </a>
+    <a href="{% url 'dashboard_pipelines' %}"
+       class="nav-link {% if 'dashboard_pipeline' in request.resolver_match.url_name %}active{% endif %}">
+      <i class="bi bi-diagram-3"></i> Pipelines
+    </a>
+    <a href="{% url 'dashboard_sessions' %}"
+       class="nav-link {% if 'dashboard_session' in request.resolver_match.url_name %}active{% endif %}">
+      <i class="bi bi-clock-history"></i> Sessions
+    </a>
+    <a href="{% url 'dashboard_api_status' %}"
+       class="nav-link {% if request.resolver_match.url_name == 'dashboard_api_status' %}active{% endif %}">
+      <i class="bi bi-wifi"></i> API Status
+    </a>
+
+    <hr class="sidebar-divider">
+
+    <a href="/" class="nav-link">
+      <i class="bi bi-book"></i> Back to Academy
+    </a>
+    <a href="/admin/" class="nav-link">
+      <i class="bi bi-gear"></i> Admin
+    </a>
+  </nav>
+
+  <div class="px-3 mt-auto">
+    <small class="text-muted">Read-only view</small>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="main-content">
+  {% block content %}{% endblock %}
+
+  <footer class="mt-5 pt-3 border-top text-muted small text-center">
+    AI Hub Dashboard | Read-only view
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    // Bootstrap tooltips
+    document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+      new bootstrap.Tooltip(el);
+    });
+    // Mobile sidebar toggle
+    var toggle = document.getElementById('sidebarToggle');
+    var sidebar = document.getElementById('sidebar');
+    var overlay = document.getElementById('sidebarOverlay');
+    function openSidebar() {
+      sidebar.classList.add('sidebar-open');
+      overlay.classList.add('active');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeSidebar() {
+      sidebar.classList.remove('sidebar-open');
+      overlay.classList.remove('active');
+      document.body.style.overflow = '';
+    }
+    if (toggle) toggle.addEventListener('click', openSidebar);
+    if (overlay) overlay.addEventListener('click', closeSidebar);
+    // Close on nav link click (mobile UX)
+    if (sidebar) {
+      sidebar.querySelectorAll('.nav-link').forEach(function (link) {
+        link.addEventListener('click', closeSidebar);
+      });
+    }
+  });
+</script>
+</body>
+</html>

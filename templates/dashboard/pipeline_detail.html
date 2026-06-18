@@ -1,0 +1,122 @@
+{% extends "dashboard/base_dashboard.html" %}
+{% load dashboard_extras %}
+
+{% block title %}{{ pipeline.name }} — AI Hub Dashboard{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard_pipelines' %}">Pipelines</a></li>
+    <li class="breadcrumb-item active">{{ pipeline.name }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-4">
+  <i class="bi bi-diagram-3 fs-3 text-danger me-3"></i>
+  <div>
+    <h1 class="h3 mb-0">{{ pipeline.name }}</h1>
+    {% if pipeline.description %}
+    <p class="text-muted mb-0 small">{{ pipeline.description }}</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Pipeline Info -->
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-header bg-white fw-semibold">Pipeline Details</div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Status</div>
+        <div>
+          {% if pipeline.is_active %}
+            <span class="badge bg-success">active</span>
+          {% else %}
+            <span class="badge bg-danger">inactive</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Steps</div>
+        <div class="fw-semibold">{{ steps.count }}</div>
+      </div>
+      {% if pipeline.entry_agent %}
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Entry Agent</div>
+        <div>
+          <a href="{% url 'dashboard_agent_detail' pipeline.entry_agent.pk %}" class="text-decoration-none small">
+            {{ pipeline.entry_agent.name }}
+          </a>
+        </div>
+      </div>
+      {% endif %}
+      <div class="col-sm-6 col-md-3">
+        <div class="text-muted small">Created</div>
+        <div class="small">{{ pipeline.created_at|date:"d M Y H:i" }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Step-by-step visual -->
+<h5 class="mb-3"><i class="bi bi-list-ol me-2 text-danger"></i>Execution Steps</h5>
+
+{% if steps %}
+  {% for step in steps %}
+  <div class="d-flex mb-3">
+    <!-- Step number bubble -->
+    <div class="d-flex flex-column align-items-center me-3">
+      <div class="rounded-circle bg-danger text-white d-flex align-items-center justify-content-center fw-bold"
+           style="width:36px;height:36px;flex-shrink:0;">
+        {{ step.order }}
+      </div>
+      {% if not forloop.last %}
+        <div class="bg-secondary" style="width:2px;flex:1;margin-top:4px;"></div>
+      {% endif %}
+    </div>
+
+    <!-- Step card -->
+    <div class="card border-0 shadow-sm flex-grow-1 mb-0" style="{% if not forloop.last %}margin-bottom: 0{% endif %}">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <div>
+          <a href="{% url 'dashboard_agent_detail' step.agent.pk %}" class="fw-semibold text-decoration-none">
+            {{ step.agent.name }}
+          </a>
+          <span class="text-muted small ms-2">{{ step.agent.role }}</span>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          {% if step.agent.is_active %}
+            <span class="badge bg-success">active</span>
+          {% else %}
+            <span class="badge bg-danger">inactive</span>
+          {% endif %}
+          <span class="badge bg-light text-dark border font-monospace small">{{ step.agent.model_config.model_name }}</span>
+        </div>
+      </div>
+      <div class="card-body py-2">
+        <div class="row g-2 small">
+          <div class="col-sm-4">
+            <span class="text-muted">Provider:</span>
+            <span class="ms-1">{{ step.agent.model_config.provider.name }}</span>
+          </div>
+          <div class="col-sm-4">
+            <span class="text-muted">On Error:</span>
+            <span class="ms-1">{{ step.get_on_error_display }}</span>
+          </div>
+          {% if step.agent.tools.all %}
+          <div class="col-sm-4">
+            <span class="text-muted">Tools:</span>
+            {% for tool in step.agent.tools.all %}
+              <span class="badge bg-warning text-dark ms-1">{{ tool.name }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="alert alert-secondary">No steps defined for this pipeline.</div>
+{% endif %}
+{% endblock %}

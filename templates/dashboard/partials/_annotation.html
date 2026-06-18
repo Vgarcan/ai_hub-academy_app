@@ -1,0 +1,8 @@
+{% load dashboard_extras %}
+<div class="alert alert-info d-flex gap-3 mb-4" role="alert">
+  <i class="bi bi-{{ icon|default:'lightbulb' }} fs-4 mt-1"></i>
+  <div>
+    <strong>{{ title }}</strong><br>
+    {{ text }}
+  </div>
+</div>

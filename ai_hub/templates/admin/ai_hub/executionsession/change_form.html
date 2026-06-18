@@ -1,0 +1,76 @@
+{% extends "admin/change_form.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block after_field_sets %}
+{{ block.super }}
+{% if timeline_summary %}
+<section class="ai-session-timeline module">
+  <header class="ai-session-timeline__header">
+    <div>
+      <h2>{% translate "Execution timeline" %}</h2>
+      <p>
+        {{ timeline_summary.runtime_kind|upper }} · {{ timeline_summary.status }}
+        {% if timeline_summary.finish_reason %} · {{ timeline_summary.finish_reason }}{% endif %}
+      </p>
+    </div>
+    <strong>{{ timeline_summary.total }}</strong>
+  </header>
+
+  {% if timeline_summary.final_answer %}
+    <article class="ai-session-timeline__answer">
+      <span>{% translate "Final answer" %}</span>
+      <p>{{ timeline_summary.final_answer }}</p>
+    </article>
+  {% endif %}
+
+  <div class="ai-session-timeline__list">
+    {% for step in timeline_steps %}
+      <article class="ai-session-step ai-session-step--{{ step.status }}">
+        <header>
+          <div>
+            <span>#{{ step.order }} · {{ step.action_name|default:"step" }}</span>
+            <h3>
+              {% if step.agent %}{{ step.agent.name }}{% else %}{% translate "No agent" %}{% endif %}
+            </h3>
+          </div>
+          <a class="button" href="{{ step.change_url }}">{% translate "Open" %}</a>
+        </header>
+        <dl>
+          <div>
+            <dt>{% translate "Status" %}</dt>
+            <dd>{{ step.status }}</dd>
+          </div>
+          <div>
+            <dt>{% translate "Action" %}</dt>
+            <dd>{{ step.action|default:"-" }}</dd>
+          </div>
+          <div>
+            <dt>{% translate "Complete" %}</dt>
+            <dd>{% if step.complete %}{% translate "Yes" %}{% else %}{% translate "No" %}{% endif %}</dd>
+          </div>
+          <div>
+            <dt>{% translate "Latency" %}</dt>
+            <dd>{% if step.latency_ms != None %}{{ step.latency_ms }} ms{% else %}-{% endif %}</dd>
+          </div>
+        </dl>
+        {% if step.message %}
+          <p>{{ step.message|truncatechars:420 }}</p>
+        {% endif %}
+        {% if step.error_detail %}
+          <p class="ai-session-step__error">{{ step.error_detail }}</p>
+        {% endif %}
+      </article>
+    {% empty %}
+      <article class="ai-session-timeline__empty">
+        {% translate "No step runs have been recorded yet." %}
+      </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

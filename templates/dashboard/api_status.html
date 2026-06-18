@@ -1,0 +1,189 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block title %}API Status — AI Hub Dashboard{% endblock %}
+
+{% block content %}
+<style>
+  .cap-badge {
+    display: inline-block; font-size: .7rem; font-weight: 700;
+    padding: .2em .55em; border-radius: 999px; margin-right: .2rem;
+  }
+  .cap-completion { background: #0d6efd; color: #fff; }
+  .cap-embedding  { background: #198754; color: #fff; }
+  .cap-tools      { background: #ffc107; color: #000; }
+  .cap-vision     { background: #6f42c1; color: #fff; }
+  .cap-thinking   { background: #6c757d; color: #fff; }
+  .cap-insert     { background: #212529; color: #fff; border: 1px solid #495057; }
+
+  .status-dot {
+    display: inline-block; width: 9px; height: 9px;
+    border-radius: 50%; margin-right: .4rem; flex-shrink: 0;
+  }
+  .dot-connected  { background: #198754; box-shadow: 0 0 6px rgba(25,135,84,.6); }
+  .dot-ready      { background: #198754; }
+  .dot-configured { background: #0dcaf0; }
+  .dot-missing_key{ background: #ffc107; }
+  .dot-error      { background: #dc3545; box-shadow: 0 0 6px rgba(220,53,69,.5); }
+  .dot-unknown    { background: #6c757d; }
+
+  .provider-card { border: 1px solid #dee2e6; border-radius: 10px; margin-bottom: 1.5rem; overflow: hidden; }
+  .provider-header {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .875rem 1.25rem; background: #f8f9fa; border-bottom: 1px solid #dee2e6;
+    flex-wrap: wrap;
+  }
+  .provider-name { font-weight: 700; font-size: 1rem; margin: 0; }
+  .provider-meta { color: #6c757d; font-size: .8rem; }
+  .provider-latency { margin-left: auto; font-size: .78rem; color: #6c757d; }
+  .provider-error { font-size: .8rem; color: #dc3545; margin-left: auto; }
+
+  .model-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .model-table th {
+    background: #f1f3f5; text-transform: uppercase; letter-spacing: .06em;
+    font-size: .68rem; font-weight: 700; color: #6c757d; padding: .5rem .875rem;
+    border-bottom: 1px solid #dee2e6; white-space: nowrap;
+  }
+  .model-table td { padding: .5rem .875rem; border-bottom: 1px solid #f1f3f5; vertical-align: middle; }
+  .model-table tr:last-child td { border-bottom: none; }
+  .model-table tr:hover td { background: #f8f9fa; }
+  .model-name { font-family: monospace; font-size: .83rem; font-weight: 600; }
+  .model-ok { color: #198754; font-size: .78rem; font-weight: 600; }
+  .model-warn { color: #ffc107; font-size: .78rem; }
+
+  .empty-state { padding: 1.5rem; color: #6c757d; text-align: center; font-size: .85rem; }
+  .db-label { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #6c757d; margin-bottom: .375rem; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="h4 mb-0">API Status</h1>
+    <div class="text-muted small mt-1">Live connection check + model listing for all configured providers</div>
+  </div>
+  <a href="{% url 'dashboard_api_status' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+  </a>
+</div>
+
+{% if not provider_data %}
+  <div class="alert alert-info">
+    No providers configured yet. <a href="/admin/ai_hub/providerconfig/add/">Add one in Admin</a>.
+  </div>
+{% endif %}
+
+{% for entry in provider_data %}
+<div class="provider-card">
+  <div class="provider-header">
+    <span class="status-dot dot-{{ entry.status }}"></span>
+    <div>
+      <div class="d-flex align-items-center gap-2">
+        <p class="provider-name">{{ entry.provider.name }}</p>
+        <span class="badge bg-secondary text-uppercase" style="font-size:.65rem; letter-spacing:.06em;">
+          {{ entry.provider.get_provider_type_display }}
+        </span>
+        {% if not entry.provider.is_active %}
+          <span class="badge bg-warning text-dark" style="font-size:.65rem;">Inactive</span>
+        {% endif %}
+      </div>
+      {% if entry.provider.base_url %}
+        <div class="provider-meta">{{ entry.provider.base_url }}</div>
+      {% endif %}
+    </div>
+
+    {% if entry.status == "connected" %}
+      <div class="provider-latency ms-auto">
+        <i class="bi bi-lightning-charge text-success me-1"></i>
+        {{ entry.latency_ms }} ms &nbsp;·&nbsp; {{ entry.live_models|length }} model{{ entry.live_models|length|pluralize }}
+      </div>
+    {% elif entry.status == "ready" %}
+      <span class="badge bg-success ms-auto">Training provider — always ready</span>
+    {% elif entry.status == "configured" %}
+      <span class="badge bg-info text-dark ms-auto">Configured</span>
+    {% elif entry.status == "missing_key" %}
+      <div class="provider-error ms-auto"><i class="bi bi-exclamation-triangle me-1"></i>{{ entry.error }}</div>
+    {% elif entry.status == "error" %}
+      <div class="provider-error ms-auto"><i class="bi bi-x-circle me-1"></i>{{ entry.error }}</div>
+    {% endif %}
+  </div>
+
+  {# ── Live models from Ollama ── #}
+  {% if entry.live_models %}
+    <table class="model-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Size</th>
+          <th>Params</th>
+          <th>Quant</th>
+          <th>Families</th>
+          <th>Capabilities</th>
+          <th>Show</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in entry.live_models %}
+        <tr>
+          <td><span class="model-name">{{ m.name }}</span></td>
+          <td>{{ m.size }}</td>
+          <td>{{ m.params }}</td>
+          <td>{{ m.quant }}</td>
+          <td>{{ m.families }}</td>
+          <td>
+            {% for cap in m.capabilities %}
+              <span class="cap-badge cap-{{ cap }}">{{ cap }}</span>
+            {% endfor %}
+          </td>
+          <td><span class="model-ok">ok</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+  {# ── Non-Ollama: show DB models ── #}
+  {% elif entry.status != "error" and entry.status != "missing_key" %}
+    {% if entry.db_models %}
+      <div style="padding:.75rem 1.25rem;">
+        <div class="db-label">Configured models (from DB)</div>
+        <table class="model-table">
+          <thead>
+            <tr>
+              <th>Model name</th>
+              <th>Temperature</th>
+              <th>Max tokens</th>
+              <th>Tool support</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for mc in entry.db_models %}
+            <tr>
+              <td><span class="model-name">{{ mc.model_name }}</span></td>
+              <td>{{ mc.temperature_default }}</td>
+              <td>{{ mc.max_tokens_default }}</td>
+              <td>
+                {% if mc.supports_tools %}
+                  <span class="cap-badge cap-tools">tools</span>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">No models configured for this provider. <a href="/admin/ai_hub/modelconfig/add/">Add one in Admin</a>.</div>
+    {% endif %}
+
+  {% else %}
+    <div class="empty-state">
+      <i class="bi bi-wifi-off me-1"></i>Cannot reach provider — check the base URL and that Ollama is running.
+    </div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<div class="text-muted small mt-3">
+  <i class="bi bi-info-circle me-1"></i>
+  Ollama providers are pinged live on each page load. Other providers show DB-configured models only (no live ping).
+</div>
+{% endblock %}

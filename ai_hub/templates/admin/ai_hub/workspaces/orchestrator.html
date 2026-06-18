@@ -1,0 +1,103 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate "Home" %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label='ai_hub' %}">AI Hub</a>
+  &rsaquo; {% translate "Orchestrator" %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="ai-control">
+  <header class="ai-control__header">
+    <div>
+      <h1>{% translate "Orchestrator workspace" %}</h1>
+      <p>{% translate "Fixed agent flows for workflows where the steps, order and mappings are known." %}</p>
+    </div>
+    <nav class="ai-control__actions" aria-label="{% translate 'Orchestrator actions' %}">
+      <a class="button" href="{% url 'admin:ai_hub_pipelinedefinition_add' %}">{% translate "New pipeline" %}</a>
+      <a class="button" href="{% url 'admin:ai_hub_pipelinedefinition_changelist' %}">{% translate "View pipelines" %}</a>
+      <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=orchestrator">{% translate "View orchestrator sessions" %}</a>
+    </nav>
+  </header>
+
+  <section class="ai-control__metrics ai-workspace-metrics" aria-label="{% translate 'Orchestrator metrics' %}">
+    <article><span>{% translate "Pipelines" %}</span><strong>{{ metrics.pipelines }}</strong></article>
+    <article><span>{% translate "Active pipelines" %}</span><strong>{{ metrics.active_pipelines }}</strong></article>
+    <article><span>{% translate "Sessions" %}</span><strong>{{ metrics.sessions }}</strong></article>
+    <article><span>{% translate "Running / waiting" %}</span><strong>{{ metrics.active_sessions }}</strong></article>
+    <article><span>{% translate "Failed" %}</span><strong>{{ metrics.failed_sessions }}</strong></article>
+  </section>
+
+  <section class="ai-guide-card ai-guide-card--workspace">
+    <span class="ai-guide-card__eyebrow">{% translate "How Orchestrator works" %}</span>
+    <h2>{% translate "A workflow is a known path through focused agents" %}</h2>
+    <div class="ai-flow-strip" aria-label="{% translate 'Orchestrator flow' %}">
+      <span>{% translate "Input context" %}</span>
+      <span>{% translate "Step 1 agent" %}</span>
+      <span>{% translate "Step 2 agent" %}</span>
+      <span>{% translate "Mappings" %}</span>
+      <span>{% translate "Final output" %}</span>
+    </div>
+    <p>{% translate "Use Orchestrator when the order is predictable and every step has a clear responsibility. The control center graph shows how providers, models, agents, knowledge, tools and pipeline steps connect." %}</p>
+  </section>
+
+  <section class="ai-workspace-board">
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Pipelines" %}</h2>
+        <a href="{% url 'admin:ai_hub_control_center' %}">{% translate "Open graph" %}</a>
+      </div>
+      <div class="ai-run-list">
+        {% for pipeline in pipelines %}
+          <a class="ai-run-card" href="{% url 'admin:ai_hub_pipelinedefinition_change' pipeline.id %}">
+            <header>
+              <strong>{{ pipeline.name }}</strong>
+              <span class="ai-status-pill ai-status-pill--{% if pipeline.is_active %}ok{% else %}inactive{% endif %}">
+                {% if pipeline.is_active %}{% translate "Active" %}{% else %}{% translate "Inactive" %}{% endif %}
+              </span>
+            </header>
+            <small>{{ pipeline.steps.count }} {% translate "step(s)" %}</small>
+          </a>
+        {% empty %}
+          <article class="ai-empty-state">
+            <strong>{% translate "No pipelines yet" %}</strong>
+            <p>{% translate "Create one pipeline, then add steps with focused agents. Keep it inactive until every step is ready." %}</p>
+            <a class="button default" href="{% url 'admin:ai_hub_pipelinedefinition_add' %}">{% translate "Create first pipeline" %}</a>
+          </article>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Recent orchestrator sessions" %}</h2>
+        <a href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=orchestrator">{% translate "View all" %}</a>
+      </div>
+      <div class="ai-run-list">
+        {% for session in recent_sessions %}
+          <a class="ai-run-card ai-run-card--{{ session.status }}" href="{% url 'admin:ai_hub_executionsession_change' session.id %}">
+            <header>
+              <strong>{{ session.source_label|default:"Session" }}</strong>
+              <span class="ai-status-pill">{{ session.status }}</span>
+            </header>
+            <small>{% if session.pipeline %}{{ session.pipeline.name }}{% else %}{% translate "No pipeline" %}{% endif %}</small>
+          </a>
+        {% empty %}
+          <article class="ai-empty-state">
+            <strong>{% translate "No orchestrator sessions yet" %}</strong>
+            <p>{% translate "After a pipeline exists, run a small test and inspect each step in the execution timeline." %}</p>
+          </article>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+</div>
+{% endblock %}

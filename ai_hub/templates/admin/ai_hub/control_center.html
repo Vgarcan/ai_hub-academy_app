@@ -1,0 +1,307 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+{{ graph|json_script:"ai-control-graph-data" }}
+<script defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260606-guided-v8"></script>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate "Home" %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label='ai_hub' %}">AI Hub</a>
+  &rsaquo; {% translate "Control center" %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="ai-control">
+  <header class="ai-control__header">
+    <div>
+      <h1>{% translate "AI Hub Control Center" %}</h1>
+      <p>{% translate "Operational map for providers, models, agents, knowledge, tools, pipelines and execution health." %}</p>
+    </div>
+    <nav class="ai-control__actions" aria-label="{% translate 'Control center actions' %}">
+      <a class="button" href="{% url 'admin:ai_hub_pipelinedefinition_changelist' %}">{% translate "Pipelines" %}</a>
+      <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Sessions" %}</a>
+      <a class="button" href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "Agents" %}</a>
+    </nav>
+  </header>
+
+  <section class="ai-control__metrics" aria-label="{% translate 'System metrics' %}">
+    <article><span>{% translate "Providers" %}</span><strong>{{ metrics.providers }}</strong></article>
+    <article><span>{% translate "Models" %}</span><strong>{{ metrics.models }}</strong></article>
+    <article><span>{% translate "Agents" %}</span><strong>{{ metrics.agents }}</strong></article>
+    <article><span>{% translate "Pipelines" %}</span><strong>{{ metrics.pipelines }}</strong></article>
+    <article><span>{% translate "Orchestrator" %}</span><strong>{{ metrics.orchestrator_sessions }}</strong></article>
+    <article><span>{% translate "Sessions" %}</span><strong>{{ metrics.execution_sessions }}</strong></article>
+    <article><span>{% translate "GAME" %}</span><strong>{{ metrics.game_sessions }}</strong></article>
+    <article><span>{% translate "Success rate" %}</span><strong>{{ metrics.success_rate }}%</strong></article>
+    <article><span>{% translate "Failed" %}</span><strong>{{ metrics.failed_runs }}</strong></article>
+    <article><span>{% translate "Avg latency" %}</span><strong>{{ metrics.avg_latency }} ms</strong></article>
+  </section>
+
+  <section class="ai-control__status-map" aria-label="{% translate 'Status summary' %}">
+    <article class="ai-status-card ai-status-card--ok">
+      <span>{% translate "Healthy" %}</span>
+      <strong>{{ status_summary.ok }}</strong>
+    </article>
+    <article class="ai-status-card ai-status-card--warning">
+      <span>{% translate "Needs review" %}</span>
+      <strong>{{ status_summary.warning }}</strong>
+    </article>
+    <article class="ai-status-card ai-status-card--error">
+      <span>{% translate "Errors" %}</span>
+      <strong>{{ status_summary.error }}</strong>
+    </article>
+    <article class="ai-status-card ai-status-card--inactive">
+      <span>{% translate "Inactive" %}</span>
+      <strong>{{ status_summary.inactive }}</strong>
+    </article>
+  </section>
+
+  <section class="ai-control__toolbar" aria-label="{% translate 'Graph filters' %}">
+    <label class="ai-control__pipeline-filter">
+      <span>{% translate "Pipeline scope" %}</span>
+      <select id="ai-control-pipeline-scope">
+        <option value="all">{% translate "All pipelines" %}</option>
+        {% for pipeline in pipeline_summaries %}
+          <option value="{{ pipeline.id }}">{{ pipeline.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>{% translate "Filter" %}</span>
+      <input id="ai-control-search" type="search" placeholder="{% translate 'Search node name, type or detail' %}">
+    </label>
+    <label class="ai-control__depth">
+      <span>{% translate "Focus depth" %}</span>
+      <select id="ai-control-depth">
+        <option value="1" selected>{% translate "1 hop" %}</option>
+        <option value="2">{% translate "2 hops" %}</option>
+        <option value="3">{% translate "3 hops" %}</option>
+      </select>
+    </label>
+    <label class="ai-control__isolate">
+      <span>{% translate "Mode" %}</span>
+      <span class="ai-toggle">
+        <input id="ai-control-isolate" type="checkbox" checked>
+        <span>{% translate "Isolate focus" %}</span>
+      </span>
+    </label>
+    <div class="ai-control__chips" role="group" aria-label="{% translate 'Node type filters' %}">
+      <button type="button" class="ai-chip is-active" data-kind="all">{% translate "All" %}</button>
+      <button type="button" class="ai-chip" data-kind="provider">{% translate "Providers" %}</button>
+      <button type="button" class="ai-chip" data-kind="model">{% translate "Models" %}</button>
+      <button type="button" class="ai-chip" data-kind="agent">{% translate "Agents" %}</button>
+      <button type="button" class="ai-chip" data-kind="pipeline">{% translate "Pipelines" %}</button>
+      <button type="button" class="ai-chip" data-kind="step">{% translate "Steps" %}</button>
+      <button type="button" class="ai-chip" data-kind="knowledge">{% translate "Knowledge" %}</button>
+      <button type="button" class="ai-chip" data-kind="tool">{% translate "Tools" %}</button>
+      <button type="button" class="ai-chip ai-chip--ghost" id="ai-control-clear-focus">{% translate "Clear focus" %}</button>
+    </div>
+  </section>
+
+  <section class="ai-control__main">
+    <div class="ai-control__graph-panel">
+      <div class="ai-control__panel-heading">
+        <h2>{% translate "Connection graph" %}</h2>
+        <span id="ai-control-node-count"></span>
+      </div>
+      <div class="ai-control__graph-scroll">
+        <svg id="ai-control-graph" role="img" aria-label="{% translate 'AI pipeline connection graph' %}"></svg>
+      </div>
+    </div>
+
+    <aside class="ai-control__side">
+      <section class="ai-control__panel ai-control__legend">
+        <h2>{% translate "Legend" %}</h2>
+        <ul class="ai-control__legend-list">
+          {% for item in legend %}
+            <li>
+              <span class="ai-legend-dot ai-legend-dot--{{ item.kind }}"></span>
+              <strong>{{ item.label }}</strong>
+              <small>{{ item.description }}</small>
+            </li>
+          {% endfor %}
+        </ul>
+        <h3 class="ai-legend-subtitle">{% translate "Relations" %}</h3>
+        <ul class="ai-relation-legend">
+          <li><span style="--edge:#38bdf8"></span>{% translate "serves" %}</li>
+          <li><span style="--edge:#f43f5e"></span>{% translate "runs" %}</li>
+          <li><span style="--edge:#a78bfa"></span>{% translate "informs" %}</li>
+          <li><span style="--edge:#fb923c"></span>{% translate "enables" %}</li>
+          <li><span style="--edge:#34d399"></span>{% translate "contains" %}</li>
+          <li><span style="--edge:#f472b6"></span>{% translate "calls" %}</li>
+          <li><span style="--edge:#94a3b8"></span>{% translate "next" %}</li>
+          <li><span style="--edge:#f59e0b"></span>{% translate "fallback" %}</li>
+        </ul>
+      </section>
+      <section class="ai-control__panel">
+        <h2>{% translate "Warnings" %}</h2>
+        <ul class="ai-control__list">
+          {% for warning in warnings %}
+            <li>{{ warning }}</li>
+          {% empty %}
+            <li>{% translate "No configuration warnings detected." %}</li>
+          {% endfor %}
+        </ul>
+      </section>
+      <section class="ai-control__panel">
+        <h2>{% translate "Top failing steps" %}</h2>
+        <ul class="ai-control__list">
+          {% for row in top_fail_steps %}
+            <li>
+              {{ row.pipeline_step__pipeline__name }} /
+              {% translate "step" %} {{ row.pipeline_step__order }} /
+              {{ row.pipeline_step__agent__name }}:
+              {{ row.total }}
+            </li>
+          {% empty %}
+            <li>{% translate "No failing steps yet." %}</li>
+          {% endfor %}
+        </ul>
+      </section>
+      <section class="ai-control__panel" id="ai-control-selection">
+        <h2>{% translate "Selected node" %}</h2>
+        <p>{% translate "Select a node in the graph to inspect its role and open the admin record." %}</p>
+      </section>
+    </aside>
+  </section>
+
+  <section class="ai-control__lower-grid">
+    <div class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Pipeline trace" %}</h2>
+        <a href="{% url 'admin:ai_hub_pipelinedefinition_changelist' %}">{% translate "Edit pipelines" %}</a>
+      </div>
+      <div class="ai-pipeline-list">
+        {% for pipeline in pipeline_summaries %}
+          <article class="ai-pipeline-card ai-pipeline-card--{{ pipeline.status }}">
+            <header>
+              <div>
+                <h3><a href="{{ pipeline.url }}">{{ pipeline.name }}</a></h3>
+                <p>{{ pipeline.total_runs }} {% translate "runs" %}, {{ pipeline.failed_runs }} {% translate "failed" %}</p>
+              </div>
+              <span class="ai-status-pill ai-status-pill--{{ pipeline.status }}">{{ pipeline.status }}</span>
+            </header>
+            <ol>
+              {% for step in pipeline.steps %}
+                <li>
+                  <a href="{{ step.url }}">{{ step.order }}. {{ step.agent }}</a>
+                  <span>{{ step.model }}</span>
+                  <small>{{ step.provider }} / {{ step.on_error }}{% if step.avg_latency %} / {{ step.avg_latency }} ms{% endif %}</small>
+                </li>
+              {% empty %}
+                <li>{% translate "No steps configured." %}</li>
+              {% endfor %}
+            </ol>
+          </article>
+        {% empty %}
+          <p>{% translate "No pipelines configured yet." %}</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Model catalog" %}</h2>
+        <a href="{% url 'admin:ai_hub_modelconfig_changelist' %}">{% translate "Edit models" %}</a>
+      </div>
+      <div class="ai-model-table-wrap">
+        <table class="ai-model-table">
+          <thead>
+            <tr>
+              <th>{% translate "Model" %}</th>
+              <th>{% translate "Provider" %}</th>
+              <th>{% translate "Status" %}</th>
+              <th>{% translate "Defaults" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for model in model_catalog %}
+              <tr>
+                <td><a href="{{ model.url }}">{{ model.name }}</a></td>
+                <td>{{ model.provider }} <span>{{ model.provider_type }}</span></td>
+                <td><span class="ai-status-pill ai-status-pill--{{ model.status }}">{{ model.detail }}</span></td>
+                <td>{{ model.temperature }} temp / {{ model.max_tokens }} tokens{% if model.supports_tools %} / tools{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4">{% translate "No models configured yet." %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="ai-control__analytics-grid">
+    <div class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Operational checklist" %}</h2>
+      </div>
+      <div class="ai-checklist">
+        {% for item in health_checklist %}
+          <article class="ai-checklist__item ai-checklist__item--{{ item.status }}">
+            <strong>{{ item.label }}</strong>
+            <span>{{ item.detail }}</span>
+            {% if item.status != "ok" %}
+              <small>{{ item.action }}</small>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Critical nodes" %}</h2>
+      </div>
+      <ol class="ai-critical-list">
+        {% for node in critical_nodes %}
+          <li>
+            <a href="{{ node.url }}">{{ node.label }}</a>
+            <span class="ai-status-pill ai-status-pill--{{ node.status }}">{{ node.kind }}</span>
+            <small>{{ node.incoming }} in / {{ node.outgoing }} out / {{ node.total }} total</small>
+          </li>
+        {% empty %}
+          <li>{% translate "No connected nodes yet." %}</li>
+        {% endfor %}
+      </ol>
+    </div>
+
+    <div class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Recent sessions" %}</h2>
+        <a href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "View all" %}</a>
+      </div>
+      <div class="ai-run-list">
+        {% for session in recent_sessions %}
+          <article class="ai-run-card ai-run-card--{{ session.status }}">
+            <header>
+              <a href="{{ session.url }}">
+                #{{ session.id }}
+                {% if session.pipeline__name %}{{ session.pipeline__name }}{% else %}{{ session.entry_agent__name|default:"Session" }}{% endif %}
+              </a>
+              <span class="ai-status-pill ai-status-pill--{{ session.status }}">{{ session.status }}</span>
+            </header>
+            <p>{{ session.source_label|default:"No source" }}</p>
+            <small>{{ session.runtime_kind }} / {{ session.runtime_mode }} / {{ session.created_at }}</small>
+            {% if session.error_detail %}
+              <small>{{ session.error_detail|truncatechars:120 }}</small>
+            {% endif %}
+          </article>
+        {% empty %}
+          <p>{% translate "No sessions yet." %}</p>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

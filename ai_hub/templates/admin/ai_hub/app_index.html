@@ -1,0 +1,150 @@
+{% extends "admin/app_index.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block content %}
+<div class="ai-control ai-hub-home">
+  <section class="ai-app-hero ai-app-hero--home">
+    <div>
+      <span>{% translate "AI Hub" %}</span>
+      <h1>{% translate "Build AI workflows without touching code" %}</h1>
+      <p>{% translate "Start with a provider, choose a model, create focused agents, then run either fixed Orchestrator workflows or autonomous GAME sessions." %}</p>
+    </div>
+    <nav class="ai-control__actions" aria-label="{% translate 'Primary AI Hub actions' %}">
+      <a class="button default" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Build Orchestrator" %}</a>
+      <a class="button" href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "Open GAME" %}</a>
+      <a class="button" href="{% url 'admin:ai_hub_control_center' %}">{% translate "Control center" %}</a>
+    </nav>
+  </section>
+
+  <section class="ai-home-metrics" aria-label="{% translate 'AI Hub snapshot' %}">
+    <article class="ai-home-metric ai-home-metric--providers"><span>{% translate "Providers" %}</span><strong>{{ ai_hub_home.metrics.providers }}</strong></article>
+    <article class="ai-home-metric ai-home-metric--models"><span>{% translate "Models" %}</span><strong>{{ ai_hub_home.metrics.models }}</strong></article>
+    <article class="ai-home-metric ai-home-metric--agents"><span>{% translate "Agents" %}</span><strong>{{ ai_hub_home.metrics.agents }}</strong></article>
+    <article class="ai-home-metric ai-home-metric--pipelines"><span>{% translate "Pipelines" %}</span><strong>{{ ai_hub_home.metrics.pipelines }}</strong></article>
+    <article class="ai-home-metric ai-home-metric--sessions"><span>{% translate "Sessions" %}</span><strong>{{ ai_hub_home.metrics.sessions }}</strong></article>
+  </section>
+
+  <section class="ai-home-layout">
+    <article class="ai-guide-card ai-guide-card--next">
+      <span class="ai-guide-card__eyebrow">{% translate "Recommended next action" %}</span>
+      <h2>{{ ai_hub_home.recommended_action.label }}</h2>
+      <p>{{ ai_hub_home.recommended_action.detail }}</p>
+      <a class="button default" href="{{ ai_hub_home.recommended_action.url }}">{{ ai_hub_home.recommended_action.button }}</a>
+    </article>
+
+    <article class="ai-guide-card ai-guide-card--mental">
+      <span class="ai-guide-card__eyebrow">{% translate "Simple mental model" %}</span>
+      <h2>{% translate "Two workspaces, one shared foundation" %}</h2>
+      <div class="ai-flow-strip" aria-label="{% translate 'AI Hub mental model' %}">
+        <span>{% translate "Providers" %}</span>
+        <span>{% translate "Models" %}</span>
+        <span>{% translate "Agents" %}</span>
+        <span>{% translate "Orchestrator or GAME" %}</span>
+        <span>{% translate "Execution sessions" %}</span>
+      </div>
+      <p>{% translate "Orchestrator is best when the steps are known. GAME is best when one agent must decide the next action from a goal." %}</p>
+    </article>
+  </section>
+
+  <section class="ai-workspace-grid" aria-label="{% translate 'AI Hub workspaces' %}">
+    <article class="ai-workspace-card ai-workspace-card--large">
+      <span>{% translate "ORCHESTRATOR" %}</span>
+      <h2>{% translate "Fixed agent workflows" %}</h2>
+      <p>{% translate "Use this for predictable recipes: ordered agents, explicit mappings, clear contracts and step-by-step debugging." %}</p>
+      <ol class="ai-mini-steps">
+        <li>{% translate "Create a pipeline." %}</li>
+        <li>{% translate "Add ordered steps." %}</li>
+        <li>{% translate "Run and inspect the timeline." %}</li>
+      </ol>
+      <div>
+        <a class="button default" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Open Orchestrator" %}</a>
+        <a class="button" href="{% url 'admin:ai_hub_pipelinedefinition_add' %}">{% translate "New pipeline" %}</a>
+      </div>
+    </article>
+    <article class="ai-workspace-card ai-workspace-card--game ai-workspace-card--large">
+      <span>{% translate "GAME" %}</span>
+      <h2>{% translate "Autonomous goal sessions" %}</h2>
+      <p>{% translate "Use this when the agent should loop: read the goal, choose an action, observe, remember and decide when to finish." %}</p>
+      <ol class="ai-mini-steps">
+        <li>{% translate "Choose one entry agent." %}</li>
+        <li>{% translate "Write a clear goal." %}</li>
+        <li>{% translate "Review each decision." %}</li>
+      </ol>
+      <div>
+        <a class="button default" href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "Open GAME" %}</a>
+        <a class="button" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Create GAME session" %}</a>
+      </div>
+    </article>
+  </section>
+
+  <section class="ai-home-layout ai-home-layout--wide">
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Setup checklist" %}</h2>
+        <span>{% translate "Follow this order for the first successful run." %}</span>
+      </div>
+      <div class="ai-checklist ai-checklist--guided">
+        {% for item in ai_hub_home.checklist %}
+          <article class="ai-checklist__item ai-checklist__item--{{ item.status }}">
+            <strong>{{ item.label }}</strong>
+            <span>{{ item.detail }}</span>
+            {% if item.status != "ok" %}
+              <small>{{ item.action }}</small>
+            {% endif %}
+            <a href="{{ item.url }}">{{ item.button }}</a>
+          </article>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Example blueprints" %}</h2>
+        <span>{% translate "Use these as patterns when naming agents and workflows." %}</span>
+      </div>
+      <div class="ai-example-grid">
+        {% for example in ai_hub_home.examples %}
+          <article class="ai-example-card ai-example-card--{{ example.workspace|lower }}">
+            <span>{{ example.workspace }}</span>
+            <h3>{{ example.title }}</h3>
+            <p>{{ example.description }}</p>
+            <small>{{ example.steps }}</small>
+          </article>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+
+  <section class="ai-shared-resources ai-shared-resources--cards">
+    <div>
+      <h2>{% translate "Shared resources" %}</h2>
+      <p>{% translate "Both workspaces use the same providers, models, agents, knowledge and tools." %}</p>
+    </div>
+    <div class="ai-resource-grid">
+      {% for resource in ai_hub_home.resources %}
+        <article class="ai-resource-card ai-resource-card--{{ resource.label|lower }}">
+          <header>
+            <h3><a href="{{ resource.url }}">{{ resource.label }}</a></h3>
+            <strong>{{ resource.count }}</strong>
+          </header>
+          <p>{{ resource.description }}</p>
+          <a href="{{ resource.add_url }}">{% translate "Add new" %}</a>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="ai-control__panel ai-advanced-records">
+    <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+      <h2>{% translate "Advanced Django records" %}</h2>
+      <span>{% translate "Use these lists when you need the raw admin tables." %}</span>
+    </div>
+    {{ block.super }}
+  </section>
+</div>
+{% endblock %}

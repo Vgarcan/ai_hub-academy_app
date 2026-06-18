@@ -1,0 +1,320 @@
+# AI Hub Academy
+
+A demonstration and training platform built on top of **AI Hub** — a reusable Django app for building, running, and auditing AI workflows.
+
+Use it to learn how AI pipelines work, explore live execution telemetry, and understand how to integrate LLMs into any Django project.
+
+---
+
+## Quick start
+
+### Prerequisites
+
+| Requirement | Minimum | Notes |
+|---|---|---|
+| Python | 3.10+ | [python.org/downloads](https://www.python.org/downloads/) |
+| Git | any | to clone the repo |
+
+> **No API keys needed.** The project ships with a Training provider that returns deterministic responses — everything works out of the box.
+
+---
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/Vgarcan/ai_hub_academy.git
+cd ai_hub_academy
+```
+
+---
+
+### 2. Run the setup script
+
+```bash
+python setup_dev.py
+```
+
+That's it. The script will:
+- create a virtual environment (`venv/`)
+- install all packages
+- create `.env` with a generated secret key
+- run database migrations
+- seed tutorial and training data
+- import documentation from `docs_source/`
+- create an admin superuser (`admin` / `admin1234`)
+
+---
+
+### 3. Activate the venv and start the server
+
+**Windows**
+```cmd
+venv\Scripts\activate
+python manage.py runserver
+```
+
+**macOS / Linux**
+```bash
+source venv/bin/activate
+python manage.py runserver
+```
+
+Open **http://localhost:8000/** in your browser.
+
+---
+
+## Where to go first
+
+| URL | What you'll find |
+|---|---|
+| `http://localhost:8000/` | Academy home — docs, tutorials, assistant |
+| `http://localhost:8000/docs/` | Documentation browser |
+| `http://localhost:8000/tutorials/` | Interactive tutorial missions |
+| `http://localhost:8000/assistant/` | AI documentation chatbot |
+| `http://localhost:8000/dashboard/` | Visual dashboard — all AI Hub entities |
+| `http://localhost:8000/admin/` | Django admin (`admin` / `admin1234`) |
+| `http://localhost:8000/admin/ai_hub/` | AI Hub control panel |
+
+---
+
+## Project structure
+
+```
+manage.py              Entry point
+setup_dev.py           One-command dev setup (run once after cloning)
+requirements.txt       Python dependencies
+.env.example           Environment variable template
+docs_source/           Markdown documentation source files
+
+_core/                 Django project settings, URLs, WSGI
+ai_hub/                Reusable AI orchestration app  ← the core
+academy/               Documentation, tutorials, chatbot
+support_demo/          Demo scenario: support ticket triage
+dashboard/             Visual Bootstrap dashboard
+templates/             Shared HTML templates
+static/                Static files
+```
+
+---
+
+## The apps
+
+### `ai_hub` — the reusable core
+
+Plug-and-play Django app. Copy the folder, add it to `INSTALLED_APPS`, run `migrate`.
+
+![HUB-dahs](assets/readme-pics/hub_dash.png)
+
+Provides:
+- **ProviderConfig** — connection to an AI service (OpenAI, Ollama, Anthropic, or Training stub)
+- **ModelConfig** — a specific model with temperature and token defaults
+- **AgentProfile** — a system prompt + model + optional tools
+- **PipelineDefinition** — fixed sequence of agent calls (Orchestrator mode)
+- **ExecutionSession** — one full pipeline run, fully audited
+- **GAME runtime** — autonomous agent loop that runs until `complete: true`
+
+![HUB-Graph](assets/readme-pics/hub-graph.png)
+
+### `academy` — the learning layer
+
+- Documentation browser (Markdown → database, full-text search)
+- Interactive tutorials: 8 modules, 13 missions — each validates real Admin state
+- AI Documentation Assistant powered by an ExecutionSession for auditability
+- Progress tracking per user
+
+![HUB-tut1](assets/readme-pics/tutorials.png)
+
+### `support_demo` — a realistic demo
+
+- `SupportTicket` model linked to `ExecutionSession`
+- Two-step triage pipeline: Input Normalizer → Ticket Classifier
+- Shows governance: every AI decision is logged with full request/response telemetry
+
+![HUB-tut2](assets/readme-pics/tutorials-2.png)
+
+### `dashboard` — visual exploration
+
+Bootstrap 5 read-only dashboard showing every AI Hub entity with educational annotations.
+- Providers, Models, Agents, Pipelines, Sessions
+- GAME audit trail: per-iteration tool results + LLM decisions
+
+![HUB-front dashboard](assets/readme-pics/dashboard.png)
+
+![HUB-tut3](assets/readme-pics/tutorials-3.png)
+---
+
+## Manual setup (if you prefer not to use setup_dev.py)
+
+```bash
+# 1. Create and activate venv
+python -m venv venv
+source venv/bin/activate        # macOS/Linux
+# venv\Scripts\activate         # Windows
+
+# 2. Install packages
+pip install -r requirements.txt
+
+# 3. Create .env
+cp .env.example .env            # macOS/Linux
+# copy .env.example .env        # Windows
+# Edit SECRET_KEY in .env
+
+# 4. Migrate
+python manage.py migrate
+
+# 5. Seed data
+python manage.py seed_academy_training_data
+python manage.py import_academy_docs
+
+# 6. Create admin user
+python manage.py createsuperuser
+
+# 7. Start server
+python manage.py runserver
+```
+
+---
+
+## Management commands
+
+| Command | What it does |
+|---|---|
+| `python manage.py migrate` | Apply all database migrations |
+| `python manage.py seed_academy_training_data` | Create training provider, agents, tutorial modules and missions |
+| `python manage.py import_academy_docs` | Import Markdown files from `docs_source/` into the database |
+| `python manage.py seed_ollama_agents` | Set up Ollama provider and GAME agents (requires local Ollama) |
+| `python manage.py run_doc_sync` | Run the Documentation Sync GAME agent once |
+| `python manage.py test` | Run all 74 tests |
+| `python manage.py createsuperuser` | Create an admin user interactively |
+
+---
+
+## Using a real AI provider
+
+The Training provider works without any API key and is active by default. When you're ready to use a real LLM, you have two paths depending on where you are in the setup.
+
+### Before installation — add your key to `.env` first
+
+1. Copy the environment template before running `setup_dev.py`:
+
+   **Windows**
+   ```cmd
+   copy .one-env.example .env
+   ```
+   **macOS / Linux**
+   ```bash
+   cp .one-env.example .env
+   ```
+
+2. Open `.env` and uncomment the relevant line:
+
+   ```env
+   # OpenAI
+   OPENAI_API_KEY=sk-...
+
+   # Anthropic
+   ANTHROPIC_API_KEY=sk-ant-...
+
+   # Ollama (local, no key needed — just set the URL)
+   OLLAMA_BASE_URL=http://localhost:11434
+   ```
+
+3. Run `python setup_dev.py` as normal. The key will be available to Django from the first start.
+
+4. After setup, go to **Admin → AI Hub → Provider configs → Add** and create a provider pointing to your key's environment variable name.
+
+---
+
+### After installation — add your key once the server is running
+
+1. Open `.env` in the project root and add your key:
+
+   ```env
+   OPENAI_API_KEY=sk-...
+   ```
+
+2. **Restart the server** — Django reads `.env` at startup, so the new key only takes effect after restart.
+
+3. Go to **Admin → AI Hub → Provider configs → Add** and fill in:
+   - `provider_type`: `openai`, `anthropic`, or `ollama`
+   - `api_key_env_var`: the exact variable name you added to `.env` (e.g. `OPENAI_API_KEY`)
+   - `base_url`: only needed for Ollama or custom endpoints
+
+4. Go to **Admin → AI Hub → Model configs → Add** and create a model linked to the new provider.
+
+5. Edit each **Agent profile** and switch its model config to the new one.
+
+You do not need to delete the Training provider — it is safe to leave it active alongside a real one.
+
+---
+
+### Ollama — local LLM, no API key, no cost
+
+The fastest path to a real model. Requires [Ollama](https://ollama.ai) installed and running locally.
+
+```bash
+# Pull a model first (one-time download)
+ollama pull qwen3:8b
+
+# Seed Ollama provider and GAME agents into the database
+python manage.py seed_ollama_agents --base-url http://localhost:11434
+
+# Smoke test — run the Documentation Sync GAME agent once
+python manage.py run_doc_sync
+```
+
+---
+
+## Running tests
+
+```bash
+python manage.py test
+# 74 tests, all should pass
+```
+
+---
+
+## Architecture at a glance
+
+```
+ProviderConfig
+    └── ModelConfig
+            └── AgentProfile  ──(tools)──  ToolDefinition
+                    └── PipelineDefinition
+                                └── PipelineStep
+                                        └── ExecutionSession
+                                                └── ExecutionStepRun
+```
+
+Every AI call creates an `ExecutionSession` with one `ExecutionStepRun` per step (or per GAME iteration). You can inspect the full request payload, response payload, and latency for every call in the admin or the dashboard.
+
+---
+
+## Troubleshooting
+
+**`ModuleNotFoundError: No module named 'django'`**
+→ Activate the virtual environment first: `venv\Scripts\activate` (Windows) or `source venv/bin/activate` (macOS/Linux)
+
+**`OperationalError: no such table`**
+→ Run `python manage.py migrate`
+
+**`TemplateDoesNotExist`**
+→ Make sure you're running from the project root (the folder with `manage.py`)
+
+**Tutorials show no data**
+→ Run `python manage.py seed_academy_training_data`
+
+**Documentation pages missing**
+→ Run `python manage.py import_academy_docs`
+
+**Port already in use**
+→ `python manage.py runserver 8001` to use a different port
+
+**API key added to `.env` but provider still fails**
+→ Restart the server — Django reads `.env` once at startup, changes are not hot-reloaded. Also confirm the `api_key_env_var` field in the Provider config matches the variable name in `.env` exactly (case-sensitive).
+
+**Provider is active but every session fails immediately**
+→ Run `python manage.py shell -c "import os; print(repr(os.getenv('YOUR_VAR_NAME')))"` to confirm the key is actually loaded. If it prints `None`, check that `.env` is in the project root (same folder as `manage.py`).
+
+**Ollama configured but provider shows connection error**
+→ Confirm Ollama is running (`ollama list` in a terminal). Check that `base_url` in the Provider config matches the Ollama address (default `http://localhost:11434`). If running inside Docker or WSL, `localhost` may not resolve — use the host machine IP instead.

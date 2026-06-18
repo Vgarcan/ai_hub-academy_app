@@ -1,0 +1,30 @@
+{% extends "admin/change_list.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block content_title %}
+{{ block.super }}
+{% if ai_hub_section %}
+  <section class="ai-list-intro ai-list-intro--{{ ai_hub_section.accent }}">
+    <div class="ai-list-intro__body">
+      <span class="ai-list-intro__eyebrow">{{ ai_hub_section.eyebrow }}</span>
+      <h2>{{ ai_hub_section.title }}</h2>
+      <p>{{ ai_hub_section.description }}</p>
+      {% if ai_hub_section.note %}
+        <small>{{ ai_hub_section.note }}</small>
+      {% endif %}
+    </div>
+    {% if ai_hub_section.actions %}
+      <nav class="ai-list-intro__actions" aria-label="{% translate 'Quick actions' %}">
+        {% for action in ai_hub_section.actions %}
+          <a class="button{% if action.default %} default{% endif %}" href="{{ action.url }}">{{ action.label }}</a>
+        {% endfor %}
+      </nav>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

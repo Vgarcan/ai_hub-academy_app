@@ -1,0 +1,485 @@
+{% extends "base.html" %}
+{% load markdownify %}
+
+{% block title %}AI Assistant — AI Hub Academy{% endblock %}
+
+{% block content %}
+<style>
+  /* Dark theme for assistant page - ChatGPT-style layout */
+  .ast-wrapper {
+    background: var(--lp-dark);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+
+  .ast-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    max-width: 100%;
+    width: 100%;
+    padding: 0;
+  }
+
+  /* Header - minimal, top of page */
+  .ast-header {
+    display: none;
+  }
+
+  .ast-mission-banner {
+    background: rgba(0, 201, 177, .1);
+    border: 1px solid rgba(0, 201, 177, .25);
+    border-radius: 12px;
+    padding: 1rem 1.5rem;
+    margin: 1rem auto;
+    max-width: 900px;
+    width: 90%;
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  .ast-mission-banner strong {
+    color: var(--lp-teal);
+  }
+
+  .ast-mission-banner span {
+    color: var(--lp-text-muted);
+    font-size: .95rem;
+  }
+
+  /* Chat area - full height, centered */
+  .ast-chat-area {
+    background: var(--lp-dark);
+    border: none;
+    border-radius: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    max-height: none;
+    height: auto;
+  }
+
+  .ast-chat-header {
+    background: var(--lp-dark);
+    border-bottom: none;
+    padding: 1.5rem;
+    text-align: center;
+    display: none;
+  }
+
+  /* Welcome state - centered, full height */
+  .ast-welcome {
+    padding: 2rem;
+    text-align: center;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .ast-welcome-icon {
+    font-size: 3.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .ast-welcome h3 {
+    color: var(--lp-text-light);
+    font-size: 2rem;
+    margin-bottom: 0.75rem;
+    font-weight: 700;
+  }
+
+  .ast-welcome p {
+    color: var(--lp-text-muted);
+    margin: 0 0 2rem 0;
+    font-size: 1rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* Quick questions grid - 2x2 responsive */
+  .ast-questions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+    width: 100%;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+
+  .ast-question-btn {
+    background: rgba(0,201,177,.08);
+    border: 1px solid rgba(0,201,177,.2);
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    cursor: pointer;
+    transition: all .2s ease;
+    color: var(--lp-text-light);
+    font-size: .95rem;
+    font-weight: 500;
+    text-align: left;
+    line-height: 1.5;
+  }
+
+  .ast-question-btn:hover {
+    background: rgba(0,201,177,.15);
+    border-color: rgba(0,201,177,.4);
+    transform: translateY(-2px);
+  }
+
+  /* Chat messages - centered, full height */
+  .ast-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    align-items: center;
+    justify-content: flex-start;
+  }
+
+  .ast-message {
+    display: flex;
+    gap: 1rem;
+    animation: slideIn .3s ease forwards;
+    width: 100%;
+    max-width: 900px;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .ast-message.user {
+    justify-content: flex-end;
+    max-width: 90%;
+    margin-left: auto;
+  }
+
+  .ast-message.assistant {
+    justify-content: flex-start;
+  }
+
+  .ast-message-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    font-size: 1.1rem;
+  }
+
+  .ast-message.user .ast-message-avatar {
+    background: rgba(255,107,53,.2);
+    color: var(--lp-orange);
+  }
+
+  .ast-message.assistant .ast-message-avatar {
+    background: rgba(0,201,177,.2);
+    color: var(--lp-teal);
+  }
+
+  .ast-message-bubble {
+    max-width: 100%;
+    padding: 1.25rem 1.5rem;
+    border-radius: 12px;
+    font-size: .95rem;
+    line-height: 1.7;
+  }
+
+  .ast-message.user .ast-message-bubble {
+    background: rgba(0,201,177,.15);
+    color: #fff;
+    border: 1px solid rgba(0,201,177,.2);
+  }
+
+  .ast-message.assistant .ast-message-bubble {
+    background: rgba(255,255,255,.04);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.08);
+  }
+
+  /* Markdown in messages */
+  .ast-message-bubble strong { color: #fff; font-weight: 700; }
+  .ast-message-bubble em { color: #fff; font-style: italic; }
+  .ast-message-bubble p { margin: .75rem 0; color: #fff; }
+  .ast-message-bubble ul, .ast-message-bubble ol { margin: 1rem 0; color: #fff; padding-left: 2rem; }
+  .ast-message-bubble li { margin: .5rem 0; color: #fff; }
+  .ast-message-bubble code {
+    background: rgba(0,201,177,.2);
+    color: #00e5cb;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: .85rem;
+  }
+
+  .ast-message-bubble a {
+    color: #00e5cb;
+    text-decoration: underline;
+    font-weight: 500;
+  }
+
+  .ast-message-bubble a:hover {
+    color: #fff;
+  }
+
+  .ast-message-sources {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(255,255,255,.08);
+    font-size: .8rem;
+    color: var(--lp-text-muted);
+  }
+
+  .ast-message-sources strong {
+    color: #fff;
+  }
+
+  .ast-message-sources a {
+    color: var(--lp-teal);
+    text-decoration: none;
+  }
+
+  .ast-message-sources a:hover {
+    text-decoration: underline;
+  }
+
+  /* Input area - sticky bottom, full width */
+  .ast-input-area {
+    background: var(--lp-dark);
+    border-top: 1px solid rgba(255,255,255,.07);
+    padding: 1.5rem;
+    display: flex;
+    gap: .75rem;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .ast-input-wrapper {
+    width: 100%;
+    max-width: 900px;
+    display: flex;
+    gap: .75rem;
+  }
+
+  .ast-input-field {
+    flex: 1;
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    color: var(--lp-text-light);
+    font-size: .95rem;
+    font-family: var(--font);
+    transition: all .2s ease;
+    resize: none;
+    max-height: 120px;
+    min-height: 48px;
+  }
+
+  .ast-input-field::placeholder {
+    color: rgba(255,255,255,.3);
+  }
+
+  .ast-input-field:focus {
+    outline: none;
+    border-color: rgba(0,201,177,.4);
+    background: rgba(255,255,255,.06);
+    box-shadow: 0 0 12px rgba(0,201,177,.1);
+  }
+
+  .ast-submit-btn {
+    background: var(--lp-teal);
+    color: #050810;
+    border: none;
+    padding: 1rem 1.5rem;
+    border-radius: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all .2s ease;
+    font-size: .9rem;
+    flex-shrink: 0;
+    min-width: 100px;
+  }
+
+  .ast-submit-btn:hover {
+    background: #00e5cb;
+    transform: translateY(-2px);
+  }
+
+  .ast-submit-btn:active {
+    transform: translateY(0);
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .ast-welcome h3 { font-size: 1.5rem; }
+    .ast-message-bubble { padding: 1rem; }
+    .ast-questions-grid { grid-template-columns: 1fr; }
+    .ast-message.user { max-width: 100%; }
+    .ast-input-wrapper { flex-direction: column; }
+    .ast-submit-btn { width: 100%; min-width: auto; }
+  }
+</style>
+
+<section class="page-hero">
+  <div class="container">
+    <div class="page-hero-eyebrow">AI-Powered</div>
+    <h1>Documentation Assistant</h1>
+    <p>Ask anything about AI Hub. Answers are grounded in the official documentation and every call is fully audited.</p>
+  </div>
+</section>
+
+<div class="ast-wrapper" style="min-height:70vh;">
+  <div class="ast-container">
+
+    {% if current_mission %}
+    <div class="ast-mission-banner">
+      <span>📋</span>
+      <div>
+        <strong>Mission context:</strong>
+        <span>{{ current_mission.title }} — {{ current_mission.goal }}</span>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="ast-chat-area">
+      <div class="ast-chat-header">
+        <h2>💬 Conversation</h2>
+      </div>
+
+      <!-- Messages area -->
+      <div class="ast-messages" id="messagesArea">
+        {% if chat_messages %}
+          {% for msg in chat_messages %}
+            <div class="ast-message {% if msg.role == 'user' %}user{% else %}assistant{% endif %}">
+              <div class="ast-message-avatar">
+                {% if msg.role == 'user' %}👤{% else %}🤖{% endif %}
+              </div>
+              <div class="ast-message-bubble">
+                {% if msg.role == 'assistant' %}
+                  {{ msg.content|markdownify }}
+                  {% with chunks=msg.retrieved_chunks.all %}
+                  {% if chunks %}
+                  <div class="ast-message-sources">
+                    <strong>📌 Sources:</strong>
+                    {% for chunk in chunks %}
+                      <a href="{% url 'academy:docs_detail' chunk.page.slug %}#{{ chunk.anchor }}">{{ chunk.page.title }}</a>{% if not forloop.last %}, {% endif %}
+                    {% endfor %}
+                    {% if user.is_staff and msg.ai_execution_session %}
+                      · <a href="/admin/ai_hub/executionsession/{{ msg.ai_execution_session.pk }}/change/">Session #{{ msg.ai_execution_session.pk }}</a>
+                    {% endif %}
+                  </div>
+                  {% endif %}
+                  {% endwith %}
+                {% else %}
+                  {{ msg.content }}
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="ast-welcome">
+            <div class="ast-welcome-icon">🚀</div>
+            <h3>AI Hub Assistant</h3>
+            <p>Ask me anything about AI Hub. I'll search the documentation and provide sourced answers.</p>
+            <div class="ast-questions-grid">
+              {% for q in "What is AI Hub?,What is an ExecutionSession?,How does the GAME workspace work?,What is the difference between Orchestrator and GAME?" %}
+              <button type="button" class="ast-question-btn" onclick="setQuestion('{{ q }}')">
+                {{ q }}
+              </button>
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- Input form -->
+      <form method="post" action="{% url 'academy:assistant_ask' %}" class="ast-input-area" id="questionForm">
+        {% csrf_token %}
+        {% if current_mission %}
+          <input type="hidden" name="mission_slug" value="{{ current_mission.slug }}">
+        {% endif %}
+        <div class="ast-input-wrapper">
+          <input type="text" name="question" id="question" placeholder="Ask a question about AI Hub…"
+                 class="ast-input-field" required autofocus>
+          <button type="submit" class="ast-submit-btn">Send</button>
+        </div>
+      </form>
+    </div>
+
+    {% if not user.is_authenticated %}
+    <div style="text-align: center; margin-top: 2rem;">
+      <p style="color: var(--lp-text-muted); font-size: .95rem;">
+        🔐 <a href="/admin/login/?next=/assistant/" style="color: var(--lp-teal);">Log in</a> to save your conversation history and see audit links.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  function setQuestion(q) {
+    document.getElementById('question').value = q;
+    document.getElementById('question').focus();
+  }
+
+  // Auto-scroll to bottom of messages
+  const messagesArea = document.getElementById('messagesArea');
+  if (messagesArea) {
+    messagesArea.scrollTop = messagesArea.scrollHeight;
+  }
+
+  // Auto-grow textarea
+  const textField = document.getElementById('question');
+  if (textField) {
+    textField.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+  }
+
+  // Handle form submission with AJAX
+  const form = document.getElementById('questionForm');
+  if (form) {
+    form.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const question = document.getElementById('question').value.trim();
+      if (!question) return;
+
+      // Clear input
+      document.getElementById('question').value = '';
+      textField.style.height = 'auto';
+
+      // Submit via AJAX
+      const formData = new FormData(this);
+      try {
+        const response = await fetch(this.action, {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+          }
+        });
+        const data = await response.json();
+        window.location.reload(); // Reload to show new message
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    });
+  }
+</script>
+{% endblock %}

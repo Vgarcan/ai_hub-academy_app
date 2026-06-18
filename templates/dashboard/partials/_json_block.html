@@ -1,0 +1,15 @@
+{% load dashboard_extras %}
+<div class="accordion-item">
+  <h2 class="accordion-header">
+    <button class="accordion-button collapsed small py-2" type="button"
+            data-bs-toggle="collapse" data-bs-target="#{{ collapse_id }}"
+            aria-expanded="false" aria-controls="{{ collapse_id }}">
+      {{ label }}
+    </button>
+  </h2>
+  <div id="{{ collapse_id }}" class="accordion-collapse collapse">
+    <div class="accordion-body p-0">
+      <pre class="bg-dark text-light p-3 m-0 small rounded-bottom" style="max-height:400px;overflow-y:auto">{{ json_str }}</pre>
+    </div>
+  </div>
+</div>

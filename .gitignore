@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.python-version
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+.ENV/
+
+# Django
+*.log
+*.pot
+*.pyc
+*.pyo
+*.pyd
+local_settings.py
+db.sqlite3
+media/
+staticfiles/
+
+# Environment variables
+.env
+.env.*
+
+# IDE/editor
+.vscode/
+.claude/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Coverage reports
+coverage.xml
+htmlcov/
+
+# Distribution / packaging
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Node modules (if any frontend assets)
+node_modules/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*~

@@ -1,0 +1,6 @@
+{% load dashboard_extras %}
+{% with color=status|status_color %}
+<span class="badge bg-{{ color }}{% if color == 'light' %} text-dark{% elif color == 'warning' %} text-dark{% endif %}">
+  {{ status }}
+</span>
+{% endwith %}

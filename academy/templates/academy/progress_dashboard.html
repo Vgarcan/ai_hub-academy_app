@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% load markdownify %}
+
+{% block title %}My Progress — AI Hub Academy{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="page-header">
+    <h1>My Progress</h1>
+    <p>Track your AI Hub Academy tutorial progress.</p>
+  </div>
+
+  <!-- Overall progress -->
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+      <div>
+        <strong style="font-size:1.25rem;">{{ completed }} / {{ total_missions }} missions completed</strong>
+        <p style="color:#64748b; margin-top:.25rem; font-size:.875rem;">{{ pct }}% complete</p>
+      </div>
+      {% if pct == 100 %}
+        <span class="badge badge-green" style="font-size:1rem; padding:.5rem 1rem;">🏆 Complete!</span>
+      {% endif %}
+    </div>
+    <div class="progress-bar">
+      <div class="progress-bar-fill" style="width:{{ pct }}%;"></div>
+    </div>
+  </div>
+
+  <!-- Per-module breakdown -->
+  {% for module in modules %}
+  <div class="card" style="margin-bottom:1rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:.75rem;">
+      <h2>Module {{ module.order }}: {{ module.title }}</h2>
+      <a href="{% url 'academy:tutorial_module' module.slug %}" class="btn btn-secondary">Open</a>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:.5rem;">
+      {% for mission in module.missions.all %}
+        {% if mission.is_active %}
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:.5rem .75rem; background:#f8fafc; border-radius:6px;">
+          <div style="display:flex; align-items:center; gap:.75rem;">
+            {% if mission.pk in progress_map %}
+              {% with p=progress_map|get_item:mission.pk %}
+                {% if p.status == 'completed' %}
+                  <span>✅</span>
+                {% elif p.status == 'in_progress' %}
+                  <span>🔄</span>
+                {% elif p.status == 'failed' %}
+                  <span>❌</span>
+                {% else %}
+                  <span>⬜</span>
+                {% endif %}
+              {% endwith %}
+            {% else %}
+              <span>⬜</span>
+            {% endif %}
+            <a href="{% url 'academy:tutorial_mission' module.slug mission.slug %}">{{ mission.title }}</a>
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

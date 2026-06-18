@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% load markdownify %}
+
+{% block title %}{{ page.title }} — Docs{% endblock %}
+
+{% block extra_head %}
+<style>
+  .toc a { color: #475569; font-size: .8rem; display: block; padding: .2rem .5rem; }
+  .toc a:hover { color: #0f172a; text-decoration: none; background: #f1f5f9; border-radius: 3px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="breadcrumb">
+    <a href="{% url 'academy:docs_list' %}">Docs</a>
+    <span>›</span>
+    {{ page.title }}
+  </div>
+
+  <div class="layout-sidebar">
+    <!-- Sidebar: all pages + TOC -->
+    <div>
+      <div class="sidebar">
+        <h3>All Pages</h3>
+        {% for p in all_pages %}
+          <a href="{% url 'academy:docs_detail' p.slug %}" {% if p.pk == page.pk %}class="active"{% endif %}>
+            {{ p.title }}
+          </a>
+        {% endfor %}
+      </div>
+
+      {% if chunks %}
+      <div class="sidebar" style="margin-top:1rem;" id="toc">
+        <h3>On This Page</h3>
+        <div class="toc">
+          {% for chunk in chunks %}
+            <a href="#{{ chunk.anchor }}">{{ chunk.heading }}</a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Main content -->
+    <div>
+      <div class="card">
+        <h1 style="font-size:1.5rem; margin-bottom:1.5rem;">{{ page.title }}</h1>
+        {% for chunk in chunks %}
+          <section id="{{ chunk.anchor }}" style="margin-bottom:2rem; padding-bottom:1.5rem; border-bottom:1px solid #f1f5f9;">
+            <h2 style="font-size:1.15rem; color:#1e293b; margin-bottom:.75rem;">{{ chunk.heading }}</h2>
+            <div class="prose">
+              {{ chunk.body_markdown|markdownify }}
+            </div>
+          </section>
+        {% empty %}
+          <div class="prose">{{ page.body_markdown|markdownify }}</div>
+        {% endfor %}
+      </div>
+
+      <!-- Navigation between pages -->
+      <div style="display:flex; justify-content:space-between; margin-top:1rem;">
+        <div>
+          {% for p in all_pages %}
+            {% if p.order == page.order|add:"-1" %}
+              <a href="{% url 'academy:docs_detail' p.slug %}" class="btn btn-secondary">← {{ p.title }}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <div>
+          {% for p in all_pages %}
+            {% if p.order == page.order|add:"1" %}
+              <a href="{% url 'academy:docs_detail' p.slug %}" class="btn btn-secondary">{{ p.title }} →</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

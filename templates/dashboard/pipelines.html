@@ -1,0 +1,74 @@
+{% extends "dashboard/base_dashboard.html" %}
+{% load dashboard_extras %}
+
+{% block title %}Pipeline Definitions — AI Hub Dashboard{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+  <i class="bi bi-diagram-3 fs-3 text-danger me-3"></i>
+  <div>
+    <h1 class="h3 mb-0">Pipeline Definitions</h1>
+    <p class="text-muted mb-0 small">Fixed ordered sequences of agent calls (Orchestrator mode).</p>
+  </div>
+</div>
+
+{% include "dashboard/partials/_annotation.html" with title="What is a Pipeline?" text="A PipelineDefinition is a fixed sequence of agent calls (Orchestrator mode). Each step runs one AgentProfile. Unlike GAME mode, steps always run in order — no autonomous looping." icon="diagram-3" %}
+
+{% if pipeline_list %}
+  {% for pipeline in pipeline_list %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white d-flex justify-content-between align-items-start">
+      <div>
+        <h5 class="mb-1">
+          <a href="{% url 'dashboard_pipeline_detail' pipeline.pk %}" class="text-decoration-none">
+            {{ pipeline.name }}
+          </a>
+        </h5>
+        <div class="d-flex gap-2 align-items-center">
+          {% if pipeline.is_active %}
+            <span class="badge bg-success">active</span>
+          {% else %}
+            <span class="badge bg-danger">inactive</span>
+          {% endif %}
+          <span class="text-muted small">{{ pipeline.steps.count }} step{{ pipeline.steps.count|pluralize }}</span>
+          {% if pipeline.entry_agent %}
+            <span class="text-muted small">· Entry: <a href="{% url 'dashboard_agent_detail' pipeline.entry_agent.pk %}" class="text-decoration-none">{{ pipeline.entry_agent.name }}</a></span>
+          {% endif %}
+        </div>
+      </div>
+      <a href="{% url 'dashboard_pipeline_detail' pipeline.pk %}" class="btn btn-sm btn-outline-danger">
+        Details <i class="bi bi-arrow-right"></i>
+      </a>
+    </div>
+
+    {% if pipeline.description %}
+    <div class="px-3 pt-2 pb-0 text-muted small">{{ pipeline.description }}</div>
+    {% endif %}
+
+    {% if pipeline.steps.all %}
+    <div class="card-body pt-2 pb-2">
+      <ol class="list-group list-group-numbered list-group-flush">
+        {% for step in pipeline.steps.all %}
+        <li class="list-group-item d-flex justify-content-between align-items-center border-0 py-1 px-0">
+          <div>
+            <a href="{% url 'dashboard_agent_detail' step.agent.pk %}" class="text-decoration-none fw-semibold">
+              {{ step.agent.name }}
+            </a>
+            <span class="text-muted small ms-2">{{ step.agent.role }}</span>
+          </div>
+          <span class="badge bg-light text-dark border font-monospace small">
+            {{ step.agent.model_config.model_name }}
+          </span>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% else %}
+      <div class="px-3 py-2 text-muted small">No steps defined yet.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="alert alert-secondary">No pipeline definitions configured yet.</div>
+{% endif %}
+{% endblock %}

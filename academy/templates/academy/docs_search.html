@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load markdownify %}
+
+{% block title %}Search Docs — AI Hub Academy{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="page-header">
+    <h1>Search Documentation</h1>
+  </div>
+
+  <form action="{% url 'academy:docs_search' %}" method="get" style="margin-bottom:1.5rem; display:flex; gap:.75rem;">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search for concepts…"
+           style="flex:1; padding:.625rem 1rem; border:1px solid #e2e8f0; border-radius:6px; font-size:.9rem;" autofocus>
+    <button type="submit" class="btn btn-primary">Search</button>
+    <a href="{% url 'academy:docs_list' %}" class="btn btn-secondary">Browse All</a>
+  </form>
+
+  {% if query %}
+    <p style="color:#64748b; margin-bottom:1.5rem;">
+      {% if results %}{{ results|length }} result(s) for "{{ query }}"{% else %}No results for "{{ query }}"{% endif %}
+    </p>
+
+    {% for chunk in results %}
+    <div class="card" style="margin-bottom:1rem;">
+      <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:.75rem;">
+        <div>
+          <a href="{% url 'academy:docs_detail' chunk.page.slug %}#{{ chunk.anchor }}"
+             style="font-weight:600;">{{ chunk.heading }}</a>
+          <span style="color:#94a3b8; margin: 0 .5rem;">—</span>
+          <a href="{% url 'academy:docs_detail' chunk.page.slug %}" style="color:#64748b; font-size:.875rem;">
+            {{ chunk.page.title }}
+          </a>
+        </div>
+        <span class="badge badge-blue">{{ chunk.token_estimate }} tokens</span>
+      </div>
+      <div class="prose" style="font-size:.875rem; color:#475569; max-height:120px; overflow:hidden;">
+        {{ chunk.body_markdown|markdownify }}
+      </div>
+      <div style="margin-top:.75rem;">
+        <a href="{% url 'academy:docs_detail' chunk.page.slug %}#{{ chunk.anchor %}"
+           class="btn btn-secondary" style="font-size:.8rem;">Read section →</a>
+      </div>
+    </div>
+    {% empty %}
+      <div class="card">
+        <p>No documentation found for "{{ query }}".</p>
+        <p style="color:#64748b; margin-top:.5rem;">Try searching for: provider, model, agent, pipeline, execution, GAME, orchestrator, contract.</p>
+      </div>
+    {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

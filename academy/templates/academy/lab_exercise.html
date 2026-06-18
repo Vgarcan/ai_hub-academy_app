@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block title %}{{ exercise.title }} — Lab — {{ module.title }}{% endblock %}
+
+{% block content %}
+
+<!-- Page Hero -->
+<div class="page-hero">
+  <div class="container">
+    <p class="page-hero-eyebrow">
+      <a href="{% url 'academy:tutorial_list' %}">Tutorials</a>
+      <span>›</span>
+      <a href="{% url 'academy:tutorial_module' module.slug %}">{{ module.title }}</a>
+      <span>›</span>
+      Lab
+    </p>
+    <h1 class="page-hero-title" style="font-size:1.875rem;">{{ exercise.title }}</h1>
+    <div style="display:flex;align-items:center;gap:.75rem;margin-top:.875rem;flex-wrap:wrap;">
+      <span class="difficulty-badge difficulty-{{ exercise.difficulty }}">{{ exercise.get_difficulty_display }}</span>
+      {% if exercise.requires_api %}
+        <span class="lab-meta-badge lab-meta-ai">AI Evaluated</span>
+      {% else %}
+        <span class="lab-meta-badge lab-meta-free">Works Offline</span>
+      {% endif %}
+      {% if best_score and best_score != 'pending' %}
+        <span class="lab-score-badge lab-score-{{ best_score }}">Best: {{ best_score|title }}</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Page Body -->
+<div class="page-body">
+  <div class="container" style="max-width:860px;">
+
+    <!-- Context block -->
+    {% if exercise.context %}
+    <div class="lab-context-block">
+      <div class="lab-context-header">Context</div>
+      <div class="lab-context-body">{{ exercise.context }}</div>
+    </div>
+    {% endif %}
+
+    <!-- Challenge prompt -->
+    <div class="lab-prompt-block">
+      <h2 style="font-size:1.125rem;font-weight:700;color:#e2e8f0;margin:0 0 .875rem 0;letter-spacing:-.01em;">
+        Your Challenge
+      </h2>
+      <div style="color:#cbd5e1;font-size:.9375rem;line-height:1.75;white-space:pre-wrap;">{{ exercise.prompt }}</div>
+    </div>
+
+    <!-- Hint (collapsible) -->
+    {% if exercise.hint %}
+    <details class="lab-hint-block">
+      <summary>Need a hint?</summary>
+      <p style="margin:.625rem 0 0 0;">{{ exercise.hint }}</p>
+    </details>
+    {% endif %}
+
+    <!-- Submission form -->
+    {% if not request.user.is_authenticated %}
+    <div class="lab-prompt-block" style="border-color:#7c3aed;text-align:center;">
+      <p style="color:#94a3b8;margin:0;">
+        <a href="/admin/login/?next={{ request.path }}" style="color:#a78bfa;font-weight:600;">Log in</a>
+        to submit your answer and receive AI feedback.
+      </p>
+    </div>
+    {% else %}
+    <form id="lab-form" method="post" action="{% url 'academy:lab_submit' module.slug exercise.slug %}">
+      {% csrf_token %}
+      <div class="lab-form-block">
+        <label class="lab-form-label" for="user_input">Your Answer</label>
+        <textarea
+          id="user_input"
+          name="user_input"
+          class="lab-textarea"
+          rows="10"
+          placeholder="Write your answer here. Be as detailed as you like — the AI evaluator reads the full text."
+          required
+        >{% if last_attempt %}{{ last_attempt.user_input }}{% endif %}</textarea>
+        <div style="display:flex;align-items:center;gap:1rem;margin-top:1rem;flex-wrap:wrap;">
+          <button type="submit" class="btn btn-primary" id="lab-submit-btn">
+            Submit for Evaluation
+          </button>
+          <span id="lab-submit-status" style="color:#64748b;font-size:.8125rem;display:none;">
+            Evaluating your answer…
+          </span>
+          {% if exercise.requires_api %}
+            <span style="color:#475569;font-size:.8125rem;">This exercise uses AI evaluation.</span>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+    {% endif %}
+
+    <!-- Feedback area (populated by JS or from last_attempt) -->
+    <div id="lab-feedback-area">
+      {% if last_attempt and last_attempt.ai_score != 'pending' %}
+      <div class="lab-feedback-block lab-feedback-{{ last_attempt.ai_score }}">
+        <div class="lab-feedback-header">
+          <span class="lab-score-badge lab-score-{{ last_attempt.ai_score }}">
+            {{ last_attempt.get_ai_score_display }}
+          </span>
+          <span class="lab-feedback-meta">Attempt {{ last_attempt.attempt_number }}</span>
+        </div>
+        <div class="lab-feedback-body">{{ last_attempt.ai_feedback }}</div>
+        {% if last_attempt.follow_up_question %}
+        <div class="lab-followup">
+          <strong>Think about this:</strong> {{ last_attempt.follow_up_question }}
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Past attempts (collapsed if more than one) -->
+    {% if past_attempts|length > 1 %}
+    <details style="margin-top:1.5rem;">
+      <summary style="cursor:pointer;color:#64748b;font-size:.875rem;user-select:none;">
+        Previous attempts ({{ past_attempts|length }})
+      </summary>
+      <div style="margin-top:1rem;display:flex;flex-direction:column;gap:.875rem;">
+        {% for attempt in past_attempts %}
+        {% if not forloop.first %}
+        <div class="lab-attempt-card">
+          <div class="lab-attempt-header">
+            <span class="lab-score-badge lab-score-{{ attempt.ai_score }}">
+              {{ attempt.get_ai_score_display }}
+            </span>
+            <span class="lab-attempt-meta">
+              Attempt {{ attempt.attempt_number }} &nbsp;·&nbsp; {{ attempt.created_at|date:"M d, Y H:i" }}
+            </span>
+          </div>
+          <div class="lab-attempt-answer">{{ attempt.user_input|truncatechars:400 }}</div>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+
+    <!-- Navigation -->
+    <div style="margin-top:3rem;padding-top:1.5rem;border-top:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem;">
+      <a href="{% url 'academy:tutorial_module' module.slug %}" class="btn btn-ghost">
+        ← Back to Module
+      </a>
+      {% if next_exercise %}
+      <a href="{% url 'academy:lab_exercise' module.slug next_exercise.slug %}" class="btn btn-ghost">
+        Next Exercise →
+      </a>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('lab-form');
+  if (!form) return;
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+
+    var submitBtn = document.getElementById('lab-submit-btn');
+    var statusEl = document.getElementById('lab-submit-status');
+    var feedbackArea = document.getElementById('lab-feedback-area');
+    var textarea = document.getElementById('user_input');
+
+    if (!textarea.value.trim()) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Evaluating…';
+    statusEl.style.display = 'inline';
+
+    var formData = new FormData(form);
+
+    fetch(form.action, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: formData,
+    })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.error) {
+          feedbackArea.innerHTML = '<div class="lab-feedback-block lab-feedback-fail"><div class="lab-feedback-body">' + escapeHtml(data.error) + '</div></div>';
+          return;
+        }
+
+        var score = data.score || 'pending';
+        var scoreDisplay = data.score_display || score;
+        var feedback = data.feedback || '';
+        var followUp = data.follow_up_question || '';
+        var attemptNum = data.attempt_number || '';
+
+        var html = '<div class="lab-feedback-block lab-feedback-' + score + '">';
+        html += '<div class="lab-feedback-header">';
+        html += '<span class="lab-score-badge lab-score-' + score + '">' + escapeHtml(scoreDisplay) + '</span>';
+        if (attemptNum) html += '<span class="lab-feedback-meta">Attempt ' + attemptNum + '</span>';
+        html += '</div>';
+        html += '<div class="lab-feedback-body">' + escapeHtml(feedback) + '</div>';
+        if (followUp) {
+          html += '<div class="lab-followup"><strong>Think about this:</strong> ' + escapeHtml(followUp) + '</div>';
+        }
+        html += '</div>';
+
+        feedbackArea.innerHTML = html;
+        feedbackArea.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      })
+      .catch(function (err) {
+        feedbackArea.innerHTML = '<div class="lab-feedback-block lab-feedback-fail"><div class="lab-feedback-body">Submission failed. Please try again.</div></div>';
+        console.error(err);
+      })
+      .finally(function () {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit for Evaluation';
+        statusEl.style.display = 'none';
+      });
+  });
+
+  function escapeHtml(text) {
+    var d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML.replace(/\n/g, '<br>');
+  }
+})();
+</script>
+
+{% endblock %}

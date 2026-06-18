@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Module {{ module.order }}: {{ module.title }} — Tutorials{% endblock %}
+
+{% block content %}
+
+<div class="page-hero">
+  <div class="container">
+    <p class="page-hero-eyebrow">
+      <a href="{% url 'academy:tutorial_list' %}">Tutorials</a>
+      <span>›</span>
+      Module {{ module.order }}
+    </p>
+    <h1 class="page-hero-title">{{ module.title }}</h1>
+    {% if module.description %}
+    <p style="color:#94a3b8;font-size:1rem;margin-top:.625rem;max-width:640px;">{{ module.description }}</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="page-body">
+  <div class="container">
+
+    <h2 style="font-size:1rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:1rem;">Missions</h2>
+
+    <div style="display:flex;flex-direction:column;gap:.625rem;">
+      {% for mission in missions %}
+      <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+        <div style="display:flex;align-items:center;gap:.875rem;flex:1;min-width:0;">
+
+          {% if mission.pk in completed_missions %}
+          <div style="flex-shrink:0;width:2rem;height:2rem;border-radius:50%;background:#052e16;border:2px solid #166534;display:flex;align-items:center;justify-content:center;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          {% elif mission.pk in started_missions %}
+          <div style="flex-shrink:0;width:2rem;height:2rem;border-radius:50%;background:#1e293b;border:2px solid #7c3aed;display:flex;align-items:center;justify-content:center;">
+            <span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;"></span>
+          </div>
+          {% else %}
+          <div style="flex-shrink:0;width:2rem;height:2rem;border-radius:50%;background:#0f172a;border:2px solid #1e293b;display:flex;align-items:center;justify-content:center;">
+            <span style="width:8px;height:8px;border-radius:50%;background:#334155;"></span>
+          </div>
+          {% endif %}
+
+          <div style="min-width:0;">
+            <div style="font-weight:600;color:#e2e8f0;">{{ mission.order }}. {{ mission.title }}</div>
+            <p style="color:#64748b;font-size:.875rem;margin-top:.25rem;margin-bottom:0;">{{ mission.goal }}</p>
+          </div>
+        </div>
+
+        <a href="{% url 'academy:tutorial_mission' module.slug mission.slug %}" class="btn btn-primary" style="flex-shrink:0;">
+          {% if mission.pk in completed_missions %}Review{% else %}Start{% endif %}
+        </a>
+      </div>
+      {% empty %}
+      <div class="card" style="color:#64748b;">No missions yet in this module.</div>
+      {% endfor %}
+    </div>
+
+    {% if lab_exercise_data %}
+    <div style="margin-top:3rem;">
+      <h2 style="font-size:1rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:.5rem;">Lab Exercises</h2>
+      <p style="color:#475569;font-size:.875rem;margin-bottom:1.25rem;">
+        Practice exercises with AI evaluation — submit your answer and get personalised feedback.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:.625rem;">
+        {% for item in lab_exercise_data %}
+        <div class="lab-card">
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:.625rem;margin-bottom:.375rem;flex-wrap:wrap;">
+              <span class="lab-card-title">{{ item.exercise.order }}. {{ item.exercise.title }}</span>
+              <span class="difficulty-badge difficulty-{{ item.exercise.difficulty }}">{{ item.exercise.get_difficulty_display }}</span>
+              {% if item.attempted %}
+              <span class="lab-score-badge lab-score-{{ item.score }}">{{ item.score|title }}</span>
+              {% endif %}
+            </div>
+            <p class="lab-card-excerpt">{{ item.exercise.prompt|truncatechars:160 }}</p>
+          </div>
+          <a href="{% url 'academy:lab_exercise' module.slug item.exercise.slug %}" class="btn btn-primary" style="flex-shrink:0;">
+            {% if item.attempted %}Retry{% else %}Start{% endif %}
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div style="margin-top:3rem;padding-top:1.5rem;border-top:1px solid #1e293b;">
+      <a href="{% url 'academy:tutorial_list' %}" class="btn btn-ghost">← All Modules</a>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

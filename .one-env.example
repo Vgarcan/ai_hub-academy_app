@@ -1,0 +1,50 @@
+# ============================================================
+# AI Hub Academy — Environment Configuration
+# ============================================================
+# Copy this file to .env and fill in your values.
+#   cp .env.example .env          (macOS / Linux)
+#   copy .env.example .env        (Windows)
+#
+# The setup script (python setup_dev.py) does this automatically
+# and generates a secure SECRET_KEY for you.
+# ============================================================
+
+# ── Django core ─────────────────────────────────────────────
+SECRET_KEY=your-secret-key-here
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+
+# ============================================================
+# AI Provider credentials
+# ============================================================
+# Uncomment and fill in the provider(s) you want to use.
+# You do NOT need any of these to run the project — the built-in
+# Training provider works without any API key.
+#
+# After adding a key here, go to:
+#   Admin → AI Hub → Provider configs → add a new provider
+# and set api_key_env_var to the variable name below
+# (e.g. OPENAI_API_KEY).
+# ============================================================
+
+# ── OpenAI ──────────────────────────────────────────────────
+# Get your key at https://platform.openai.com/api-keys
+# OPENAI_API_KEY=sk-...
+
+# ── Anthropic ───────────────────────────────────────────────
+# Get your key at https://console.anthropic.com/
+# ANTHROPIC_API_KEY=sk-ant-...
+
+# ── Azure OpenAI ────────────────────────────────────────────
+# AZURE_OPENAI_API_KEY=...
+# AZURE_OPENAI_BASE_URL=https://YOUR-RESOURCE.openai.azure.com/
+
+# ── Ollama (local LLM — no API key required) ─────────────────
+# Install Ollama from https://ollama.ai and run a model:
+#   ollama pull qwen3:8b
+# Then set the URL to your Ollama instance:
+# OLLAMA_BASE_URL=http://localhost:11434
+#
+# To seed the Ollama GAME agents after setting this variable:
+#   python manage.py seed_ollama_agents
+#   python manage.py run_doc_sync

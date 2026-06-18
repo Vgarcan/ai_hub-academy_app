@@ -1,0 +1,42 @@
+{% extends "admin/change_list.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="{% url 'admin:ai_hub_executionsession_game_new' %}" class="addlink">
+      {% translate "New GAME session" %}
+    </a>
+  </li>
+  <li>
+    <a href="{% url 'admin:ai_hub_workspace_game' %}" class="historylink">
+      {% translate "GAME workspace" %}
+    </a>
+  </li>
+  {{ block.super }}
+{% endblock %}
+
+{% block content_title %}
+{{ block.super }}
+<div class="module" style="padding:12px; margin:12px 0;">
+  <strong>{% translate "Executions by workspace" %}</strong>
+  <p style="margin:6px 0 0;">
+    {% translate "Use filters to inspect autonomous GAME sessions or fixed orchestrator sessions without mixing the two workflows." %}
+  </p>
+  <p style="margin:10px 0 0;">
+    <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=game">
+      {% translate "View GAME sessions" %}
+    </a>
+    <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=orchestrator">
+      {% translate "View orchestrator sessions" %}
+    </a>
+    <a class="button" href="{% url 'admin:ai_hub_executionsession_game_new' %}">
+      {% translate "Create GAME session" %}
+    </a>
+  </p>
+</div>
+{% endblock %}

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% load markdownify %}
+
+{% block title %}{{ mission.title }} — Tutorials{% endblock %}
+
+{% block extra_head %}
+<style>
+  .check-result { display:none; padding:1rem; border-radius:8px; margin-top:1rem; }
+  .check-result.pass { background:#d1fae5; color:#065f46; border:1px solid #a7f3d0; }
+  .check-result.fail { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="breadcrumb">
+    <a href="{% url 'academy:tutorial_list' %}">Tutorials</a>
+    <span>›</span>
+    <a href="{% url 'academy:tutorial_module' module.slug %}">{{ module.title }}</a>
+    <span>›</span>
+    {{ mission.title }}
+  </div>
+
+  <div class="layout-sidebar">
+    <!-- Sidebar -->
+    <div>
+      <div class="sidebar">
+        <h3>Status</h3>
+        {% if progress %}
+          {% if progress.status == 'completed' %}
+            <p style="color:#059669; font-weight:600;">✅ Completed</p>
+          {% elif progress.status == 'in_progress' %}
+            <p style="color:#d97706; font-weight:600;">🔄 In Progress</p>
+          {% else %}
+            <p style="color:#64748b;">⬜ Not started</p>
+          {% endif %}
+          {% if progress.attempts %}
+            <p style="font-size:.8rem; color:#94a3b8; margin-top:.25rem;">{{ progress.attempts }} attempt(s)</p>
+          {% endif %}
+        {% else %}
+          <p style="color:#64748b;">Log in to track progress</p>
+        {% endif %}
+      </div>
+
+      {% if related_docs %}
+      <div class="sidebar" style="margin-top:1rem;">
+        <h3>Related Docs</h3>
+        {% for doc in related_docs %}
+          <a href="{% url 'academy:docs_detail' doc.slug %}">{{ doc.title }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="sidebar" style="margin-top:1rem;">
+        <h3>Ask Assistant</h3>
+        {% for q in suggested_questions %}
+        <a href="{% url 'academy:assistant' %}?mission={{ mission.slug }}&q={{ q|urlencode }}">
+          {{ q }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Main content -->
+    <div>
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:1.5rem;">
+          <div>
+            <h1 style="font-size:1.4rem;">{{ mission.title }}</h1>
+            <p style="color:#64748b; margin-top:.25rem; font-size:.9rem;">{{ module.title }}</p>
+          </div>
+          {% if progress and progress.status == 'completed' %}
+            <span class="badge badge-green">✅ Complete</span>
+          {% endif %}
+        </div>
+
+        <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:1rem; margin-bottom:1.5rem;">
+          <strong style="color:#065f46;">🎯 Goal</strong>
+          <p style="color:#065f46; margin-top:.25rem;">{{ mission.goal }}</p>
+        </div>
+
+        <div class="prose">
+          {{ mission.instructions_markdown|markdownify }}
+        </div>
+      </div>
+
+      <!-- Check Mission -->
+      {% if user.is_authenticated %}
+      <div class="card" style="margin-top:1rem;">
+        <h2>Check Mission</h2>
+        {% if progress and progress.last_feedback %}
+        <div style="padding:.75rem 1rem; background:#f8fafc; border-radius:6px; margin-bottom:1rem; font-size:.875rem;">
+          <strong>Last feedback:</strong> {{ progress.last_feedback }}
+        </div>
+        {% endif %}
+
+        <div id="check-result" class="check-result"></div>
+
+        <form id="check-form" method="post"
+              action="{% url 'academy:check_mission' module.slug mission.slug %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-success" id="check-btn">
+            ✓ Check Mission
+          </button>
+        </form>
+      </div>
+      {% else %}
+      <div class="card" style="margin-top:1rem;">
+        <p>🔐 <a href="/admin/login/?next={{ request.path }}">Log in</a> to check your mission progress.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('check-form')?.addEventListener('submit', function(e) {
+  e.preventDefault();
+  const btn = document.getElementById('check-btn');
+  btn.textContent = 'Checking…';
+  btn.disabled = true;
+
+  const formData = new FormData(this);
+  fetch(this.action, {
+    method: 'POST',
+    headers: {'X-Requested-With': 'XMLHttpRequest'},
+    body: formData,
+  })
+  .then(r => r.json())
+  .then(data => {
+    const el = document.getElementById('check-result');
+    el.style.display = 'block';
+    el.className = 'check-result ' + (data.passed ? 'pass' : 'fail');
+    el.textContent = data.feedback;
+    btn.textContent = '✓ Check Mission';
+    btn.disabled = false;
+    if (data.passed) {
+      setTimeout(() => location.reload(), 1500);
+    }
+  })
+  .catch(() => {
+    btn.textContent = '✓ Check Mission';
+    btn.disabled = false;
+  });
+});
+</script>
+{% endblock %}

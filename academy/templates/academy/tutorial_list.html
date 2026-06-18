@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% load markdownify %}
+
+{% block title %}Tutorials — AI Hub Academy{% endblock %}
+
+{% block content %}
+<section class="page-hero">
+  <div class="container">
+    <div class="page-hero-eyebrow">Hands-on Learning</div>
+    <h1>Tutorials</h1>
+    <p>Complete missions to learn AI Hub hands-on. Each mission validates real configuration in Django Admin.</p>
+  </div>
+</section>
+
+<div class="page-body">
+  <div class="container">
+
+    {% if not user.is_authenticated %}
+    <div class="alert-banner alert-warning">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <span><a href="/admin/login/?next=/tutorials/">Log in</a> to track your mission progress.</span>
+    </div>
+    {% else %}
+    <div style="margin-bottom:1.5rem;">
+      <a href="{% url 'academy:progress' %}" class="btn btn-secondary">View My Progress</a>
+    </div>
+    {% endif %}
+
+    {% for module in modules %}
+    <div class="module-card">
+      <div class="module-card-header">
+        <div class="module-order">{{ module.order }}</div>
+        <div class="module-info">
+          <div class="module-title">{{ module.title }}</div>
+          {% if module.description %}
+            <p class="module-desc">{{ module.description }}</p>
+          {% endif %}
+        </div>
+        <a href="{% url 'academy:tutorial_module' module.slug %}" class="btn btn-primary" style="flex-shrink:0;">Open Module</a>
+      </div>
+      <div class="module-missions">
+        {% for mission in module.missions.all %}
+          {% if mission.is_active %}
+            {% with p=progress_map|get_item:mission.pk %}
+            <a href="{% url 'academy:tutorial_mission' module.slug mission.slug %}"
+               class="mission-chip {% if p %}mission-chip-{{ p.status }}{% endif %}">
+              {% if p %}
+                {% if p.status == 'completed' %}
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                {% elif p.status == 'in_progress' %}
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                {% else %}
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+                {% endif %}
+              {% else %}
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+              {% endif %}
+              {{ mission.title }}
+            </a>
+            {% endwith %}
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% empty %}
+    <div class="card">
+      <p>No tutorial modules found.</p>
+      <p style="color:var(--clr-muted); margin-top:.5rem;">
+        Run <code>python manage.py seed_academy_training_data</code> to create starter content.
+      </p>
+    </div>
+    {% endfor %}
+
+  </div>
+</div>
+{% endblock %}

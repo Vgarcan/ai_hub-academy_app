@@ -1,0 +1,123 @@
+{% extends "dashboard/base_dashboard.html" %}
+{% load dashboard_extras %}
+
+{% block title %}{{ provider.name }} — AI Hub Dashboard{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'dashboard_providers' %}">Providers</a></li>
+    <li class="breadcrumb-item active">{{ provider.name }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex align-items-center mb-4">
+  <i class="bi bi-cloud fs-3 text-primary me-3"></i>
+  <div>
+    <h1 class="h3 mb-0">{{ provider.name }}</h1>
+    <p class="text-muted mb-0 small">Provider configuration detail</p>
+  </div>
+</div>
+
+<!-- Provider Info Card -->
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-header bg-white fw-semibold">Provider Details</div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-sm-6 col-md-4">
+        <div class="text-muted small">Type</div>
+        <div>
+          {% if provider.provider_type == "ollama" %}
+            <span class="badge bg-info text-dark fs-6">{{ provider.get_provider_type_display }}</span>
+          {% elif provider.provider_type == "openai" %}
+            <span class="badge bg-primary fs-6">{{ provider.get_provider_type_display }}</span>
+          {% elif provider.provider_type == "training" %}
+            <span class="badge bg-secondary fs-6">{{ provider.get_provider_type_display }}</span>
+          {% elif provider.provider_type == "anthropic" %}
+            <span class="badge bg-warning text-dark fs-6">{{ provider.get_provider_type_display }}</span>
+          {% else %}
+            <span class="badge bg-dark fs-6">{{ provider.get_provider_type_display }}</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-sm-6 col-md-4">
+        <div class="text-muted small">Status</div>
+        <div>{% include "dashboard/partials/_status_badge.html" with status=provider.is_active|yesno:"active,inactive" %}</div>
+      </div>
+      <div class="col-sm-6 col-md-4">
+        <div class="text-muted small">Timeout</div>
+        <div>{{ provider.default_timeout }}s</div>
+      </div>
+      {% if provider.base_url %}
+      <div class="col-sm-6 col-md-8">
+        <div class="text-muted small">Base URL</div>
+        <div class="font-monospace small">{{ provider.base_url }}</div>
+      </div>
+      {% endif %}
+      {% if provider.api_key_env_var %}
+      <div class="col-sm-6 col-md-4">
+        <div class="text-muted small">API Key Env Var</div>
+        <div class="font-monospace small">{{ provider.api_key_env_var }}</div>
+      </div>
+      {% endif %}
+      <div class="col-sm-6 col-md-4">
+        <div class="text-muted small">Created</div>
+        <div class="small">{{ provider.created_at|date:"d M Y H:i" }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Models -->
+<h5 class="mb-3"><i class="bi bi-cpu me-2 text-success"></i>Models ({{ models_qs.count }})</h5>
+{% for model in models_qs %}
+<div class="card border-0 shadow-sm mb-3">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <span class="fw-semibold font-monospace">{{ model.model_name }}</span>
+    {% if model.is_active %}
+      <span class="badge bg-success">active</span>
+    {% else %}
+      <span class="badge bg-danger">inactive</span>
+    {% endif %}
+  </div>
+  <div class="card-body">
+    <div class="row g-2 mb-3">
+      <div class="col-auto">
+        <span class="text-muted small">Temperature:</span>
+        <strong class="ms-1">{{ model.temperature_default }}</strong>
+      </div>
+      <div class="col-auto">
+        <span class="text-muted small">Max Tokens:</span>
+        <strong class="ms-1">{{ model.max_tokens_default }}</strong>
+      </div>
+      <div class="col-auto">
+        <span class="text-muted small">Supports Tools:</span>
+        {% if model.supports_tools %}
+          <i class="bi bi-check-circle-fill text-success ms-1"></i>
+        {% else %}
+          <i class="bi bi-x-circle text-muted ms-1"></i>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if model.agents.all %}
+    <div>
+      <div class="text-muted small mb-1">Agents using this model:</div>
+      <div class="d-flex flex-wrap gap-2">
+        {% for agent in model.agents.all %}
+          <a href="{% url 'dashboard_agent_detail' agent.pk %}"
+             class="badge bg-light text-dark border text-decoration-none">
+            <i class="bi bi-robot me-1"></i>{{ agent.name }}
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+      <div class="text-muted small">No agents use this model yet.</div>
+    {% endif %}
+  </div>
+</div>
+{% empty %}
+<div class="alert alert-secondary">No models configured for this provider.</div>
+{% endfor %}
+{% endblock %}

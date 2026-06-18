@@ -1,0 +1,88 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate "Home" %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label='ai_hub' %}">AI Hub</a>
+  &rsaquo; <a href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Execution sessions" %}</a>
+  &rsaquo; {% translate "Create GAME session" %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="ai-control">
+  <header class="ai-control__header">
+    <div>
+      <h1>{% translate "Create GAME session" %}</h1>
+      <p>{% translate "Start an autonomous goal-driven run from one active entry agent. Keep the first goal small, inspect the timeline, then expand." %}</p>
+    </div>
+    <nav class="ai-control__actions" aria-label="{% translate 'GAME actions' %}">
+      <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}">
+        {% translate "Sessions" %}
+      </a>
+      <a class="button" href="{% url 'admin:ai_hub_agentprofile_changelist' %}">
+        {% translate "Agents" %}
+      </a>
+    </nav>
+  </header>
+
+  <form method="post" class="ai-game-form" novalidate>
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+
+    <section class="ai-guide-card ai-guide-card--workspace ai-guide-card--game ai-game-form__guide">
+      <span class="ai-guide-card__eyebrow">{% translate "Before you create the session" %}</span>
+      <h2>{% translate "A good GAME goal is specific, testable and bounded" %}</h2>
+      <div class="ai-example-grid ai-example-grid--compact">
+        {% for example in game_goal_examples %}
+          <article class="ai-example-card ai-example-card--game">
+            <span>{% translate "Goal example" %}</span>
+            <p>{{ example }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="ai-control__panel ai-game-form__panel">
+      <div class="ai-game-form__heading">
+        <span>{% translate "Session setup" %}</span>
+        <h2>{% translate "Configure the first autonomous run" %}</h2>
+      </div>
+      {% for field in form %}
+        <div class="ai-game-form__field ai-game-form__field--{{ field.field.widget.input_type|default:'textarea' }}{% if field.errors %} ai-game-form__field--error{% endif %}">
+          {% if field.field.widget.input_type == "checkbox" %}
+            <label class="ai-checkbox-line">
+              {{ field }}
+              <span>{{ field.label }}</span>
+            </label>
+          {% else %}
+            {{ field.label_tag }}
+            {{ field }}
+          {% endif %}
+          {% if field.help_text %}
+            <p>{{ field.help_text }}</p>
+          {% endif %}
+          {{ field.errors }}
+        </div>
+      {% endfor %}
+    </section>
+
+    <aside class="ai-control__panel ai-form-tip">
+      <h2>{% translate "Initial context example" %}</h2>
+      <p>{% translate "Use an object, not a list. Keep it small until the agent behaves correctly." %}</p>
+      <pre>{{ initial_context_example }}</pre>
+    </aside>
+
+    <div class="ai-game-form__submit">
+      <button type="submit" class="button default">{% translate "Create session" %}</button>
+      <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Cancel" %}</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

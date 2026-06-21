@@ -84,6 +84,26 @@ Contracts are one of the strongest defenses against confusing AI failures.
 
 Test:
 
+- explicit GAME execution and goal outcomes,
+- incomplete goals at the iteration cap,
+- GAME Hybrid rejection without affecting Orchestrator Hybrid,
+- context-tool execution and action-tool blocking in GAME,
+- legacy Orchestrator tool behavior,
+- deterministic GAME priority for a fixed time,
+- scheduler eligibility and dependency blocking,
+- transactional goal claims on a database with row-lock support,
+- goal-bound session creation and duplicate-active-session prevention,
+- central session-outcome mapping without changing legacy GAME sessions,
+- idempotent outcome replay and reconciliation after interrupted finalisation,
+- selected-action dispatch, failed-attempt audit, and controlled idempotency states,
+- immediate approval pause with exactly one pending continuation,
+- approval/rejection observation delivery after resume,
+- closed configured action/agent allow-lists and safe external-write defaults,
+- scoped-memory workspace/goal/session isolation and runner injection,
+- PostgreSQL-only concurrent approval and scheduler claim serialization,
+- staff-only access to dashboards containing execution payloads,
+- Django 5.2 LTS and current-Django migration/system-check compatibility,
+
 - Missing required keys.
 - Invalid primitive types.
 - Invalid nested objects.
@@ -280,11 +300,41 @@ After deployment:
 10. Confirm execution sessions and step runs are visible.
 11. Confirm host-specific output is stored by the host app.
 
+## GAME Feature Flag Tests
+
+Each GAME subsystem has an env-var kill switch. Test that:
+
+- `create_goal` raises when `AI_HUB_GAME_GOALS_ENABLED=False`.
+- `claim_next_goal` raises when `AI_HUB_GAME_SCHEDULER_ENABLED=False`.
+- `execute_game_action` raises when `AI_HUB_GAME_ACTION_DISPATCH_ENABLED=False`.
+- `record_memory` raises when `AI_HUB_GAME_MEMORY_ENABLED=False`.
+- `resume_goal_execution` raises when `AI_HUB_GAME_RESUME_ENABLED=False`.
+- `run_delegated_agent` raises when `AI_HUB_GAME_DELEGATION_ENABLED=False`.
+- All functions behave normally when flags are True.
+
+Use `@override_settings(FLAG_NAME=False)` in the test. All flags default to True in `_core/settings.py`.
+
+## Release Gates
+
+Before enabling a GAME phase in a non-development environment, confirm all of these:
+
+```text
+Migrations apply cleanly against the target database.
+Focused phase tests are green.
+Full ai_hub suite is green (python manage.py test ai_hub).
+Admin screens load for a staff user.
+Legacy GAME sessions continue to execute.
+A manual vertical-slice test succeeds (create workspace → goal → session → finish).
+Logs show no unhandled exceptions during the smoke test.
+Rollback path is confirmed: the feature flag can be set to False without a deploy.
+```
+
 ## Test Data Rules
 
 - Use small prompts and small payloads.
 - Do not require real API keys for unit tests.
 - Do not depend on local Ollama models in CI.
+- Run the concurrent GAME claim test against PostgreSQL; SQLite intentionally skips it because it cannot prove row-lock semantics.
 - Use factories or fixtures for provider/model/agent setup.
 - Keep host-specific fixtures outside AI Hub.
 

@@ -1,0 +1,165 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate "Home" %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label='ai_hub' %}">AI Hub</a>
+  &rsaquo; <a href="{% url 'admin:ai_hub_gameworkspace_changelist' %}">{% translate "GAME workspaces" %}</a>
+  &rsaquo; {{ workspace.name }}
+  &rsaquo; {% translate "Dashboard" %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="ai-control">
+  <header class="ai-control__header">
+    <div>
+      <h1>{{ workspace.name }} — {% translate "Dashboard" %}</h1>
+      <p>{% translate "Operational view scoped to this workspace." %}</p>
+    </div>
+    <nav class="ai-control__actions">
+      <a class="button" href="{% url 'admin:ai_hub_gameworkspace_change' workspace.pk %}">{% translate "Edit workspace" %}</a>
+      <a class="button" href="{% url 'admin:ai_hub_gamegoal_changelist' %}?workspace__id__exact={{ workspace.pk }}">{% translate "View all goals" %}</a>
+    </nav>
+  </header>
+
+  {% if status_counts %}
+  <section class="ai-control__metrics ai-workspace-metrics" aria-label="{% translate 'Goal status counts' %}">
+    {% for status, count in status_counts.items %}
+    <article><span>{{ status }}</span><strong>{{ count }}</strong></article>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <div class="ai-workspace-board">
+
+    {% if top_eligible %}
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Top eligible goals" %}</h2>
+      </div>
+      <div class="ai-run-list">
+        {% for item in top_eligible %}
+        <a class="ai-run-card" href="{% url 'admin:ai_hub_gamegoal_change' item.goal.pk %}">
+          <header>
+            <strong>{{ item.goal.title }}</strong>
+            <span class="ai-status-pill">{{ item.goal.status }}</span>
+          </header>
+          <small>
+            {% translate "Base" %}: {{ item.explanation.base_priority }}
+            {% for bonus in item.explanation.bonuses %} · {{ bonus.reason }} +{{ bonus.value }}{% endfor %}
+            → {% translate "Total" %}: {{ item.explanation.total }}
+          </small>
+        </a>
+        {% endfor %}
+      </div>
+    </article>
+    {% endif %}
+
+    {% if pending_approvals %}
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Pending approvals" %}</h2>
+        <a href="{% url 'admin:ai_hub_gameactionapprovalrequest_changelist' %}?status__exact=pending">{% translate "View all" %}</a>
+      </div>
+      <div class="ai-run-list">
+        {% for approval in pending_approvals %}
+        <a class="ai-run-card ai-run-card--waiting_async" href="{% url 'admin:ai_hub_gameactionapprovalrequest_change' approval.pk %}">
+          <header>
+            <strong>{{ approval.action_run.action_name }}</strong>
+            <span class="ai-status-pill">{% translate "Pending" %}</span>
+          </header>
+          <small>{% translate "Goal" %}: {{ approval.goal.title }}</small>
+        </a>
+        {% endfor %}
+      </div>
+    </article>
+    {% endif %}
+
+    {% if blocked_goals %}
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Blocked goals" %}</h2>
+      </div>
+      <div class="ai-run-list">
+        {% for goal in blocked_goals %}
+        <a class="ai-run-card ai-run-card--blocked" href="{% url 'admin:ai_hub_gamegoal_change' goal.pk %}">
+          <header>
+            <strong>{{ goal.title }}</strong>
+            <span class="ai-status-pill">{% translate "Blocked" %}</span>
+          </header>
+          <small>{% translate "Unresolved required dependencies" %}</small>
+        </a>
+        {% endfor %}
+      </div>
+    </article>
+    {% endif %}
+
+    {% if recent_sessions %}
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Recent sessions" %}</h2>
+      </div>
+      <div class="ai-run-list">
+        {% for session in recent_sessions %}
+        <a class="ai-run-card ai-run-card--{{ session.status }}" href="{% url 'admin:ai_hub_executionsession_change' session.pk %}">
+          <header>
+            <strong>{{ session.source_label|default:"Session" }}</strong>
+            <span class="ai-status-pill">{{ session.status }}</span>
+          </header>
+          <small>{% if session.entry_agent %}{{ session.entry_agent.name }}{% endif %} · {{ session.created_at|date:"Y-m-d H:i" }}</small>
+        </a>
+        {% endfor %}
+      </div>
+    </article>
+    {% endif %}
+
+    {% if recent_action_runs %}
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Recent action runs" %}</h2>
+      </div>
+      <div class="ai-run-list">
+        {% for run in recent_action_runs %}
+        <a class="ai-run-card ai-run-card--{{ run.status }}" href="{% url 'admin:ai_hub_gameactionrun_change' run.pk %}">
+          <header>
+            <strong>{{ run.action_name }}</strong>
+            <span class="ai-status-pill">{{ run.status }}</span>
+          </header>
+          <small>{% translate "Iteration" %} {{ run.iteration }} · {{ run.started_at|date:"Y-m-d H:i" }}</small>
+        </a>
+        {% endfor %}
+      </div>
+    </article>
+    {% endif %}
+
+    {% if enabled_agents or enabled_actions %}
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Workspace policy" %}</h2>
+      </div>
+      {% if enabled_agents %}
+      <p><strong>{% translate "Enabled agents" %}:</strong>
+        {% for wa in enabled_agents %}{{ wa.agent.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+      </p>
+      {% endif %}
+      {% if enabled_actions %}
+      <p><strong>{% translate "Enabled actions" %}:</strong>
+        {% for wac in enabled_actions %}{{ wac.action.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+      </p>
+      {% endif %}
+      {% if budget %}
+      <p><strong>{% translate "Budget" %}:</strong> {{ budget }}</p>
+      {% endif %}
+    </article>
+    {% endif %}
+
+  </div>
+</div>
+{% endblock %}

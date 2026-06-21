@@ -1,0 +1,93 @@
+{% extends "admin/ai_hub/styled_change_form.html" %}
+{% load i18n %}
+
+{% block after_field_sets %}
+{{ block.super }}
+
+{% if scheduler_explanation %}
+<section class="module ai-goal-detail">
+  <h2>{% translate "Scheduler explanation" %}</h2>
+  <dl>
+    <div><dt>{% translate "Base priority" %}</dt><dd>{{ scheduler_explanation.base_priority }}</dd></div>
+    {% for bonus in scheduler_explanation.bonuses %}
+    <div><dt>{{ bonus.reason }}</dt><dd>+{{ bonus.value }}</dd></div>
+    {% endfor %}
+    <div><dt><strong>{% translate "Total" %}</strong></dt><dd><strong>{{ scheduler_explanation.total }}</strong></dd></div>
+  </dl>
+</section>
+{% endif %}
+
+{% if is_resumable %}
+<section class="module ai-goal-detail">
+  <h2>{% translate "Resume" %}</h2>
+  <p>{% translate "This goal has a waiting session that can be resumed." %}</p>
+  <p>
+    <a class="button" href="{% url 'admin:ai_hub_gamegoal_changelist' %}?status__exact=waiting_approval">
+      {% translate "View waiting approvals" %}
+    </a>
+  </p>
+</section>
+{% endif %}
+
+{% if session_history %}
+<section class="module ai-goal-detail">
+  <h2>{% translate "Session history" %}</h2>
+  <div class="ai-run-list">
+    {% for session in session_history %}
+    <a class="ai-run-card ai-run-card--{{ session.status }}" href="{% url 'admin:ai_hub_executionsession_change' session.pk %}">
+      <header>
+        <strong>{% if session.source_label %}{{ session.source_label }}{% else %}{% translate "Session" %} #{{ session.pk }}{% endif %}</strong>
+        <span class="ai-status-pill">{{ session.status }}</span>
+      </header>
+      <small>{% if session.entry_agent %}{{ session.entry_agent.name }}{% endif %} · {{ session.created_at|date:"Y-m-d H:i" }}</small>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if action_runs %}
+<section class="module ai-goal-detail">
+  <h2>{% translate "Action runs" %}</h2>
+  <div class="ai-run-list">
+    {% for run in action_runs %}
+    <a class="ai-run-card ai-run-card--{{ run.status }}" href="{% url 'admin:ai_hub_gameactionrun_change' run.pk %}">
+      <header>
+        <strong>{{ run.action_name }}</strong>
+        <span class="ai-status-pill">{{ run.status }}</span>
+      </header>
+      <small>{% translate "Iteration" %} {{ run.iteration }} · {{ run.started_at|date:"Y-m-d H:i" }}</small>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if plan %}
+<section class="module ai-goal-detail">
+  <h2>{% translate "Goal plan" %} (v{{ plan.version }})</h2>
+  {% if plan.summary %}<p>{{ plan.summary }}</p>{% endif %}
+  {% with steps=plan.steps.all %}
+  {% if steps %}
+  <ul>
+    {% for step in steps %}
+    <li>{{ step.order }}. {{ step.title }} — <em>{{ step.status }}</em></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endwith %}
+</section>
+{% endif %}
+
+{% if memory_entries %}
+<section class="module ai-goal-detail">
+  <h2>{% translate "Memory entries" %} ({{ memory_entries|length }})</h2>
+  <ul>
+    {% for entry in memory_entries %}
+    <li><strong>{{ entry.scope_type }}</strong> · importance {{ entry.importance_score }} — {{ entry.content|truncatechars:120 }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% endblock %}

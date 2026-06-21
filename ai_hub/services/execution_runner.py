@@ -6,9 +6,10 @@ from django.core.exceptions import ValidationError
 from django.db import close_old_connections, transaction
 from django.utils import timezone
 
-from ai_hub.models import ExecutionSession, ExecutionStepRun
+from ai_hub.models import ExecutionSession, ExecutionStepRun, GameActionRun
 from ai_hub.services.agent_runtime import apply_mapping, execute_agent, prepare_agent_payload
 from ai_hub.services.contracts import validate_payload
+from ai_hub.services.tools_runtime import TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY
 
 
 DEFAULT_GAME_FINISH_ACTIONS = ["finish", "final", "complete", "stop"]
@@ -19,6 +20,7 @@ GAME_RESERVED_PAYLOAD_KEYS = (
     "iteration",
     "max_iterations",
     "memory",
+    "scoped_memory",
     "observations",
     "previous_response",
     "available_actions",
@@ -49,6 +51,14 @@ def _create_game_step_run(session: ExecutionSession, agent, order: int) -> Execu
 
 
 def _mark_session_failed(session: ExecutionSession, context: dict, error: Exception) -> None:
+    if session.runtime_kind == ExecutionSession.RuntimeKind.GAME:
+        context.update(
+            {
+                "execution_outcome": "failed",
+                "goal_outcome": "unknown",
+                "finish_reason": "failed",
+            }
+        )
     session.status = ExecutionSession.Status.FAILED
     session.error_detail = str(error)
     session.final_context = context
@@ -59,12 +69,10 @@ def _mark_session_failed(session: ExecutionSession, context: dict, error: Except
 def _claim_session_for_run(session_id: int) -> None:
     with transaction.atomic():
         session = ExecutionSession.objects.select_for_update().get(pk=session_id)
-        if session.status == ExecutionSession.Status.RUNNING:
-            raise ValidationError("Execution session is already running.")
-        if session.status == ExecutionSession.Status.WAITING_ASYNC:
-            raise ValidationError("Execution session is waiting for async continuation.")
-        if session.status == ExecutionSession.Status.SUCCESS:
-            raise ValidationError("Execution session has already completed.")
+        if session.status != ExecutionSession.Status.PENDING:
+            raise ValidationError(
+                f"Execution session must be pending before it can run; current status is '{session.status}'."
+            )
         if session.step_runs.exists():
             raise ValidationError("Execution session already has step runs.")
 
@@ -109,21 +117,25 @@ def _game_response_contract(runtime_config: dict) -> dict:
     return {
         "format": "Return only one JSON object. Do not wrap it in Markdown or add prose outside JSON.",
         "required_keys": ["action", "message", "complete", "final_answer"],
+        "optional_keys": ["action_input"],
         "actions": _available_action_names(runtime_config),
         "schema": {
             "action": "string; one of actions. Use 'think' to continue or 'finish' to complete.",
+            "action_input": "object; arguments for the selected action. Required when the action needs input.",
             "message": "string; short explanation of the decision or observation.",
             "complete": "boolean; true only when the goal is done.",
             "final_answer": "string; empty until complete, then the final answer/result.",
         },
         "example_continue": {
-            "action": "think",
-            "message": "I need one more iteration to compare the available context.",
+            "action": "search_knowledge",
+            "action_input": {"query": "relevant context"},
+            "message": "I need more context before deciding.",
             "complete": False,
             "final_answer": "",
         },
         "example_finish": {
             "action": "finish",
+            "action_input": {},
             "message": "The goal is complete.",
             "complete": True,
             "final_answer": "Concise final result for the user or calling workflow.",
@@ -296,14 +308,70 @@ def _resolve_game_entry_agent(session: ExecutionSession):
     return None
 
 
-def _run_game_session(session: ExecutionSession, context: dict) -> None:
+def _dispatch_observation_action(
+    session: ExecutionSession,
+    observation: dict,
+    entry_agent,
+    iteration: int,
+    step_run=None,
+) -> GameActionRun | None:
+    from ai_hub.services.game_action_dispatcher import execute_game_action
+
+    action = observation.get("action") or ""
+    if not action or action == "think":
+        return None
+    decision = observation.get("decision") or {}
+    action_input = decision.get("action_input") if isinstance(decision.get("action_input"), dict) else {}
+    try:
+        action_run = execute_game_action(
+            session=session,
+            step_run=step_run,
+            action_name=action,
+            action_input=action_input,
+        )
+        action_output = dict(action_run.output_payload or {})
+        observation["action_run_id"] = action_run.pk
+        observation["action_output"] = action_output
+        if action_output.get("complete", False):
+            observation["complete"] = True
+            if action_output.get("final_answer"):
+                observation["final_answer"] = action_output["final_answer"]
+        if action_run.status == GameActionRun.Status.WAITING_APPROVAL:
+            observation["waiting_reason"] = "needs_approval"
+            observation["action_status"] = action_run.status
+        return action_run
+    except ValidationError as exc:
+        observation["action_error"] = str(exc)
+        return None
+
+
+def _run_game_session(
+    session: ExecutionSession,
+    context: dict,
+    *,
+    allow_legacy_game_action_tools: bool = False,
+    use_action_dispatcher: bool = False,
+    start_order: int = 1,
+) -> None:
     runtime_config = dict(session.runtime_config or {})
+    use_dispatcher = (
+        use_action_dispatcher
+        or bool(runtime_config.get("use_action_dispatcher"))
+        or bool(runtime_config.get("game_action_dispatch_enabled"))
+        or bool(context.get("game_action_dispatch_enabled"))
+    )
+    if session.runtime_mode == ExecutionSession.RuntimeMode.HYBRID:
+        raise ValidationError("GAME Hybrid continuation is not enabled yet. Use sync or async mode.")
     entry_agent = _resolve_game_entry_agent(session)
     if not entry_agent:
         raise ValidationError("GAME sessions require an entry agent or a pipeline with at least one step.")
     if not entry_agent.is_active:
         raise ValidationError("GAME entry agent must be active before it can run.")
-    if session.step_runs.exists():
+    if session.goal_id:
+        from ai_hub.services.game_policy import validate_goal_execution_policy
+
+        validate_goal_execution_policy(session.goal.workspace, session.goal, session)
+    if start_order == 1 and session.step_runs.exists():
         raise ValidationError("Execution session already has step runs.")
 
     max_iterations = _bounded_iteration_count(runtime_config)
@@ -315,8 +383,23 @@ def _run_game_session(session: ExecutionSession, context: dict) -> None:
     session.final_context = context
     session.save(update_fields=["status", "started_at", "final_context", "updated_at"])
 
-    memory = list(context.get("memory") or runtime_config.get("memory") or [])
-    observations = []
+    if start_order > 1:
+        # Resume: preserve memory and observations from prior run
+        memory = list(context.get("memory") or [])
+        observations = list(context.get("observations") or [])
+    else:
+        memory = list(context.get("memory") or runtime_config.get("memory") or [])
+        observations = []
+    scoped_memory = dict(context.get("scoped_memory") or {})
+    if session.goal_id:
+        from ai_hub.services.game_memory import build_goal_memory_context
+
+        scoped_memory = build_goal_memory_context(
+            workspace=session.goal.workspace,
+            goal=session.goal,
+            session=session,
+            max_chars=runtime_config.get("game_memory_max_chars", 4000),
+        )
     previous_response = {}
     final_answer = ""
     finish_reason = ""
@@ -326,10 +409,20 @@ def _run_game_session(session: ExecutionSession, context: dict) -> None:
         goal_text=goal_text,
         memory=memory,
         observations=observations,
+        scoped_memory=scoped_memory,
+        game_action_dispatch_enabled=use_dispatcher,
         response_contract=response_contract,
     )
 
-    for iteration in range(1, max_iterations + 1):
+    from ai_hub.services.game_policy import check_budget_before_iteration, BudgetExhaustedError
+
+    for iteration in range(start_order, start_order + max_iterations):
+        try:
+            check_budget_before_iteration(session)
+        except BudgetExhaustedError:
+            finish_reason = "budget_exhausted"
+            break
+
         step_run = _create_game_step_run(session, entry_agent, iteration)
         started = time.perf_counter()
         payload = {
@@ -339,6 +432,7 @@ def _run_game_session(session: ExecutionSession, context: dict) -> None:
             "iteration": iteration,
             "max_iterations": max_iterations,
             "memory": memory,
+            "scoped_memory": scoped_memory,
             "observations": observations,
             "previous_response": previous_response,
             "available_actions": runtime_config.get("available_actions", []),
@@ -350,23 +444,37 @@ def _run_game_session(session: ExecutionSession, context: dict) -> None:
             prepared_payload = prepare_agent_payload(entry_agent, payload, runtime_config.get("input_mapping") or {})
             prepared_payload = _restore_game_reserved_payload(prepared_payload, payload)
             request_payload = copy.deepcopy(prepared_payload)
-            output_payload = execute_agent(entry_agent, prepared_payload)
+            tool_policy = TOOL_POLICY_ALL if allow_legacy_game_action_tools else TOOL_POLICY_GAME_CONTEXT_ONLY
+            output_payload = execute_agent(entry_agent, prepared_payload, tool_policy=tool_policy)
             observation = _game_observation(output_payload, runtime_config)
+            action_run = None
+            if use_dispatcher and not observation["complete"]:
+                action_run = _dispatch_observation_action(
+                    session, observation, entry_agent, iteration, step_run
+                )
             observations.append(observation)
-            memory.append(
-                {
-                    "iteration": iteration,
-                    "action": observation.get("action"),
-                    "status": observation.get("status"),
-                    "summary": observation.get("final_answer") or observation.get("decision", {}).get("message", ""),
-                }
-            )
+            memory_entry = {
+                "iteration": iteration,
+                "action": observation.get("action"),
+                "status": observation.get("status"),
+                "summary": observation.get("final_answer") or observation.get("decision", {}).get("message", ""),
+            }
+            if "action_output" in observation:
+                action_out = observation["action_output"]
+                memory_entry["action_output_summary"] = str(
+                    action_out.get("knowledge_context")
+                    or action_out.get("content")
+                    or action_out.get("final_answer")
+                    or ""
+                )[:500]
+            memory.append(memory_entry)
             previous_response = output_payload
             _update_game_context(
                 context,
                 goal_text=goal_text,
                 memory=memory,
                 observations=observations,
+                scoped_memory=scoped_memory,
                 final_answer=observation.get("final_answer", ""),
                 finish_reason="agent_finished" if observation["complete"] else "",
                 response_contract=response_contract,
@@ -380,6 +488,9 @@ def _run_game_session(session: ExecutionSession, context: dict) -> None:
                 final_answer = observation.get("final_answer", "")
                 finish_reason = "agent_finished"
                 break
+            if action_run and action_run.status == GameActionRun.Status.WAITING_APPROVAL:
+                finish_reason = "needs_approval"
+                break
             if session.runtime_mode == ExecutionSession.RuntimeMode.HYBRID:
                 finish_reason = "waiting_async_continuation"
                 break
@@ -392,6 +503,7 @@ def _run_game_session(session: ExecutionSession, context: dict) -> None:
                 goal_text=goal_text,
                 memory=memory,
                 observations=observations,
+                scoped_memory=scoped_memory,
                 final_answer=final_answer,
                 finish_reason="failed",
                 failed_iteration=iteration,
@@ -412,27 +524,84 @@ def _run_game_session(session: ExecutionSession, context: dict) -> None:
                 ]
             )
 
-    if finish_reason == "waiting_async_continuation":
+    if finish_reason in {"waiting_async_continuation", "needs_approval", "needs_information"}:
         session.status = ExecutionSession.Status.WAITING_ASYNC
         session.finished_at = None
+        execution_outcome = "waiting"
+        goal_outcome = "unknown"
     else:
         session.status = ExecutionSession.Status.SUCCESS
         session.finished_at = timezone.now()
         if not finish_reason:
             finish_reason = "max_iterations"
+        execution_outcome = "completed"
+        goal_outcome = "achieved" if finish_reason == "agent_finished" else "incomplete"
 
     _update_game_context(
         context,
         goal_text=goal_text,
         memory=memory,
         observations=observations,
+        scoped_memory=scoped_memory,
         final_answer=final_answer,
         finish_reason=finish_reason,
+        execution_outcome=execution_outcome,
+        goal_outcome=goal_outcome,
+        waiting_reason=(
+            finish_reason
+            if finish_reason in {"needs_approval", "needs_information"}
+            else ""
+        ),
         response_contract=response_contract,
     )
     session.final_context = context
     session.error_detail = ""
     session.save(update_fields=["status", "final_context", "error_detail", "finished_at", "updated_at"])
+
+
+def run_game_session_resume(
+    session_id: int,
+    *,
+    next_order: int,
+    use_action_dispatcher: bool = False,
+) -> int:
+    """Re-enter a GAME session that was paused. Session must already be in RUNNING state."""
+    close_old_connections()
+    try:
+        session = (
+            ExecutionSession.objects.select_related("pipeline", "entry_agent", "goal", "goal__workspace")
+            .prefetch_related(
+                "pipeline__steps__agent__tools",
+                "pipeline__steps__agent__knowledge_collections__documents",
+            )
+            .get(pk=session_id)
+        )
+        if session.status != ExecutionSession.Status.RUNNING:
+            raise ValidationError(
+                f"Session #{session_id} must be RUNNING before resume "
+                f"(current: '{session.status}')."
+            )
+        context = dict(session.final_context or {})
+        try:
+            if session.runtime_kind == ExecutionSession.RuntimeKind.GAME:
+                _run_game_session(
+                    session,
+                    context,
+                    start_order=next_order,
+                    use_action_dispatcher=use_action_dispatcher,
+                )
+            else:
+                raise ValidationError("Only GAME sessions can be resumed.")
+        except Exception as exc:
+            _mark_session_failed(session, context, exc)
+
+        if session.goal_id:
+            from ai_hub.services.game_goal_outcomes import apply_session_outcome_to_goal
+            apply_session_outcome_to_goal(session)
+
+        return session.id
+    finally:
+        close_old_connections()
 
 
 def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
@@ -515,12 +684,17 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
     session.save(update_fields=["status", "final_context", "error_detail", "finished_at", "updated_at"])
 
 
-def run_execution_session(session_id: int) -> int:
+def run_execution_session(
+    session_id: int,
+    *,
+    allow_legacy_game_action_tools: bool = False,
+    use_action_dispatcher: bool = False,
+) -> int:
     close_old_connections()
     try:
         _claim_session_for_run(session_id)
         session = (
-            ExecutionSession.objects.select_related("pipeline", "entry_agent")
+            ExecutionSession.objects.select_related("pipeline", "entry_agent", "goal", "goal__workspace")
             .prefetch_related(
                 "pipeline__steps__agent__tools",
                 "pipeline__steps__agent__knowledge_collections__documents",
@@ -531,11 +705,21 @@ def run_execution_session(session_id: int) -> int:
 
         try:
             if session.runtime_kind == ExecutionSession.RuntimeKind.GAME:
-                _run_game_session(session, context)
+                _run_game_session(
+                    session,
+                    context,
+                    allow_legacy_game_action_tools=allow_legacy_game_action_tools,
+                    use_action_dispatcher=use_action_dispatcher,
+                )
             else:
                 _run_orchestrator_session(session, context)
         except Exception as exc:
             _mark_session_failed(session, context, exc)
+
+        if session.goal_id:
+            from ai_hub.services.game_goal_outcomes import apply_session_outcome_to_goal
+
+            apply_session_outcome_to_goal(session)
 
         return session.id
     finally:

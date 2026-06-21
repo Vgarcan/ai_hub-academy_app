@@ -56,7 +56,7 @@ class Command(BaseCommand):
         )
 
         self.stdout.write(f"Session pk={session.pk} created. Running GAME loop …")
-        run_execution_session(session.pk)
+        run_execution_session(session.pk, allow_legacy_game_action_tools=True)
 
         session.refresh_from_db()
         self.stdout.write(f"Status: {session.status}")

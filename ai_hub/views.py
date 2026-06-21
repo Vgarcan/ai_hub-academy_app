@@ -1,4 +1,5 @@
 from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.decorators import permission_required
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
@@ -8,6 +9,7 @@ from ai_hub.services.execution_runner import run_execution_session
 
 
 @staff_member_required
+@permission_required("ai_hub.change_executionsession", raise_exception=True)
 @require_POST
 def run_execution_session_endpoint(request):
     try:

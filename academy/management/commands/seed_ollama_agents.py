@@ -191,12 +191,16 @@ class Command(BaseCommand):
                 "config": {
                     "callable": "academy.tools.doc_sync.sync_all_docs",
                     "source_name": "AI Hub Official Docs",
+                    "game_tool_category": "action_tool",
                 },
                 "input_schema": {},
                 "output_schema": {},
                 "is_active": True,
             },
         )
+        if sync_tool.config.get("game_tool_category") != "action_tool":
+            sync_tool.config = {**sync_tool.config, "game_tool_category": "action_tool"}
+            sync_tool.save(update_fields=["config", "updated_at"])
         self.stdout.write(f"{'Created' if created else 'Found'} tool: {sync_tool.name}")
 
         search_tool, created = ToolDefinition.objects.get_or_create(
@@ -206,16 +210,30 @@ class Command(BaseCommand):
                 "config": {
                     "callable": "academy.tools.doc_search.search_docs",
                     "limit": 6,
+                    "game_tool_category": "context_tool",
+                    "read_only": True,
                 },
                 "input_schema": {},
                 "output_schema": {},
                 "is_active": True,
             },
         )
+        if (
+            search_tool.config.get("game_tool_category") != "context_tool"
+            or search_tool.config.get("read_only") is not True
+        ):
+            search_tool.config = {
+                **search_tool.config,
+                "game_tool_category": "context_tool",
+                "read_only": True,
+            }
+            search_tool.save(update_fields=["config", "updated_at"])
         self.stdout.write(f"{'Created' if created else 'Found'} tool: {search_tool.name}")
 
         # ── Agents ────────────────────────────────────────────────────────────
-        _game_output = {"required": ["action", "message", "complete", "final_answer"]}
+        # AgentProfile validates the runtime envelope. The GAME decision inside
+        # llm.content is validated separately by the GAME response contract.
+        _game_output = {"required": ["agent", "llm", "tools"]}
 
         sync_agent, created = AgentProfile.objects.get_or_create(
             name="Documentation Sync Agent",
@@ -235,6 +253,9 @@ class Command(BaseCommand):
             sync_agent.output_contract = _game_output
             sync_agent.is_active = True
             sync_agent.save(update_fields=["system_prompt", "model_config", "input_contract", "output_contract", "is_active", "updated_at"])
+        elif sync_agent.output_contract != _game_output:
+            sync_agent.output_contract = _game_output
+            sync_agent.save(update_fields=["output_contract", "updated_at"])
         sync_agent.tools.set([sync_tool])
         self.stdout.write(f"{'Created' if created else 'Found'} agent: {sync_agent.name}")
 
@@ -256,6 +277,9 @@ class Command(BaseCommand):
             assistant_agent.output_contract = _game_output
             assistant_agent.is_active = True
             assistant_agent.save(update_fields=["system_prompt", "model_config", "input_contract", "output_contract", "is_active", "updated_at"])
+        elif assistant_agent.output_contract != _game_output:
+            assistant_agent.output_contract = _game_output
+            assistant_agent.save(update_fields=["output_contract", "updated_at"])
         assistant_agent.tools.set([search_tool])
         self.stdout.write(f"{'Created' if created else 'Found'} agent: {assistant_agent.name}")
 

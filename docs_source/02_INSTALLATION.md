@@ -10,7 +10,7 @@ domain-specific workflows through a thin adapter.
 ## Requirements
 
 - Python 3.12 or newer.
-- Django 5 or newer.
+- Django 5.2 LTS or newer, below Django 7.
 - SQLite for local development, or PostgreSQL for production.
 - A Django admin user.
 - Static files configured for Django Admin.

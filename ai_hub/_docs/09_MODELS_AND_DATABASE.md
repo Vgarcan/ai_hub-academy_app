@@ -13,7 +13,7 @@ The host project owns business records and final domain persistence.
 
 ## Model Groups
 
-AI Hub models fall into five groups.
+AI Hub models fall into six groups.
 
 | Group | Purpose |
 | --- | --- |
@@ -21,6 +21,7 @@ AI Hub models fall into five groups.
 | Agents | Define reusable AI workers. |
 | Knowledge and tools | Give agents context and capabilities. |
 | Orchestrator | Run fixed multi-agent workflows. |
+| GAME domain | Store workspaces, goals and dependency rules. |
 | Execution and GAME | Record sessions, steps and autonomous loops. |
 
 ## `ProviderConfig`
@@ -179,6 +180,65 @@ Rules:
 - Mappings should be explicit.
 - Fallback agents should have compatible contracts.
 
+## `GameWorkspace`
+
+Defines the persistent environment in which GAME goals exist.
+
+Important fields:
+
+- `name`: unique workspace name.
+- `description`: human-readable purpose.
+- `is_active`: whether the workspace may later participate in scheduling.
+- `default_policy`: reserved workspace policy configuration.
+- `default_runtime_config`: defaults for future goal-bound sessions.
+
+A workspace owns goals but does not schedule or execute them by itself.
+
+## `GameGoal`
+
+Defines durable work independently from any execution session.
+
+Important fields:
+
+- `workspace`: owning GAME environment.
+- `title` and `description`: the work to achieve.
+- `status`: explicit lifecycle state.
+- `base_priority` and `calculated_priority`: stored priority inputs and output.
+- `due_at`: optional deadline.
+- `queued_at`: start of the current queue wait, reset on retry or reopen.
+- `success_criteria`, `context`, and `result`: portable structured data.
+- `transition_metadata`: latest controlled lifecycle transition, kept outside agent context.
+
+Status changes must use `transition_goal_status()` or `reopen_goal()`. Completed and cancelled goals require explicit reopening. Priority calculation and claiming remain service-layer responsibilities rather than model behavior.
+
+The deterministic scheduler now calculates and persists `calculated_priority` when priorities are refreshed or a goal is claimed. The stored value is explanatory telemetry; eligibility is checked separately and never inferred from score alone.
+
+## `GameGoalDependency`
+
+Defines a directed relationship from one goal to a prerequisite goal.
+
+Rules:
+
+- Both goals must belong to the same workspace.
+- A goal cannot depend on itself.
+- Duplicate and circular dependencies are rejected.
+- Incomplete required dependencies are reported as blockers.
+- Optional dependencies do not block a goal.
+
+Deleting a workspace intentionally cascades to its goals and their dependency records.
+
+## GAME actions, memory, and policy records
+
+`GameActionDefinition` is the allow-listed action registry. It stores action type, contracts, adapter configuration, risk level, approval requirement, and active state. Executable Python remains registered in code rather than stored as arbitrary database source.
+
+`GameActionRun` is one durable selected-action attempt. Its unique idempotency key includes session, step, action, and canonical input. Status, payloads, observation, error, latency, and timestamps form the action audit trail. Known contract, policy, budget, and handler failures are retained as failed runs.
+
+`GameMemoryEntry` stores bounded workspace, goal, session, or action-result memory. The database enforces the basic scope shape; service validation additionally checks relationships that span tables, including workspace and goal ownership. Importance is constrained to `0.00`–`1.00`.
+
+`GameContinuationRequest` records why a session paused and permits only one pending continuation per session. `GameActionApprovalRequest` links an approval decision to exactly one action run and records reviewer, note, expiry, and status.
+
+`GameWorkspaceAction` and `GameWorkspaceAgent` configure per-workspace permissions. Once at least one mapping of a type exists, that mapping set is treated as a closed allow-list. Policy services—not model output—decide permissions, approvals, external-write safety, and budgets.
+
 ## `ExecutionSession`
 
 Defines one runtime execution.
@@ -190,15 +250,19 @@ Important fields:
 - `status`: pending, running, success, failed, waiting or stopped.
 - `pipeline`: pipeline used by Orchestrator sessions.
 - `entry_agent`: entry agent used by GAME sessions.
+- `goal`: optional durable GAME goal; null for legacy GAME and Orchestrator sessions.
 - `goal_text`: GAME goal or user-readable objective.
 - `runtime_config`: session runtime options.
 - `initial_context`: original execution context.
 - `final_context`: final session state.
+- `goal_outcome_fingerprint`: idempotency marker for session-to-goal outcome application.
 - `error_detail`: failure details.
 - `started_at`: run start time.
 - `finished_at`: run finish time.
 
 Host projects should link their own records to this model.
+
+The goal relation uses `PROTECT`, so a goal with execution history cannot be deleted accidentally. One goal may have multiple historical sessions, while a conditional database constraint permits only one pending, running, or waiting session for a goal.
 
 Example host relation:
 

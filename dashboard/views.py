@@ -5,6 +5,7 @@ import urllib.error
 import urllib.request
 
 from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.decorators import permission_required
 from django.core.cache import cache
 from django.shortcuts import get_object_or_404, render
 
@@ -20,6 +21,8 @@ from ai_hub.models import (
 )
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def overview(request):
     """Control room: counts + recent sessions."""
     context = {
@@ -37,12 +40,16 @@ def overview(request):
     return render(request, "dashboard/overview.html", context)
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def providers(request):
     """List all ProviderConfigs with their ModelConfigs."""
     provider_list = ProviderConfig.objects.prefetch_related("models").order_by("name")
     return render(request, "dashboard/providers.html", {"provider_list": provider_list})
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def provider_detail(request, pk):
     """One provider + its models + agents that use those models."""
     provider = get_object_or_404(ProviderConfig, pk=pk)
@@ -54,6 +61,8 @@ def provider_detail(request, pk):
     )
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def agents(request):
     """All AgentProfiles with related model/provider/tools."""
     agent_list = (
@@ -64,6 +73,8 @@ def agents(request):
     return render(request, "dashboard/agents.html", {"agent_list": agent_list})
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def agent_detail(request, pk):
     """Full agent config + recent 5 sessions."""
     agent = get_object_or_404(
@@ -81,6 +92,8 @@ def agent_detail(request, pk):
     )
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def pipelines(request):
     """All PipelineDefinitions with their steps."""
     pipeline_list = (
@@ -91,6 +104,8 @@ def pipelines(request):
     return render(request, "dashboard/pipelines.html", {"pipeline_list": pipeline_list})
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def pipeline_detail(request, pk):
     """One pipeline + ordered steps."""
     pipeline = get_object_or_404(PipelineDefinition, pk=pk)
@@ -105,6 +120,8 @@ def pipeline_detail(request, pk):
     )
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def sessions(request):
     """All sessions ordered by -created_at, optional ?status= filter, limited 50."""
     valid_statuses = {c[0] for c in ExecutionSession.Status.choices}
@@ -125,6 +142,8 @@ def sessions(request):
     )
 
 
+@staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def session_detail(request, pk):
     """Session + step_runs with parsed GAME payloads."""
     session = get_object_or_404(
@@ -176,6 +195,7 @@ def session_detail(request, pk):
 
 
 @staff_member_required
+@permission_required("ai_hub.view_executionsession", raise_exception=True)
 def api_status(request):
     """Live provider status: ping Ollama, list models + capabilities. Cached 30 s."""
     cached = cache.get("dashboard_api_status")

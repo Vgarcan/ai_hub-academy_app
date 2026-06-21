@@ -10,7 +10,7 @@ domain-specific workflows through a thin adapter.
 ## Requirements
 
 - Python 3.12 or newer.
-- Django 5 or newer.
+- Django 5.2 LTS or newer, below Django 7.
 - SQLite for local development, or PostgreSQL for production.
 - A Django admin user.
 - Static files configured for Django Admin.
@@ -91,6 +91,10 @@ After migrating, the database should contain reusable AI tables such as:
 ```bash
 python manage.py createsuperuser
 ```
+
+The bundled development setup generates the initial admin password instead of using a shared default. Set `DJANGO_SUPERUSER_PASSWORD` before running setup only when automation needs a predetermined value.
+
+For `DEBUG=False`, provide a strong `SECRET_KEY`. Secure redirect and cookie settings default to enabled in production mode. Configure `SECURE_HSTS_SECONDS` only after confirming the complete deployment is permanently HTTPS.
 
 Then open:
 

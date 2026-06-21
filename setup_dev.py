@@ -8,14 +8,14 @@ Run once after cloning to get a fully working local environment:
     python setup_dev.py
 
 What this script does (all automatic):
-  1. Checks Python version (3.10+ required)
+  1. Checks Python version (3.12+ required)
   2. Creates a virtual environment in ./venv/
   3. Installs all packages from requirements.txt
-  4. Creates .env from .env.example (generates a real SECRET_KEY)
+  4. Creates .env from .one-env.example (generates a real SECRET_KEY)
   5. Runs database migrations
   6. Seeds tutorial and training data
   7. Imports documentation from docs_source/
-  8. Creates an admin superuser (admin / admin1234)
+  8. Creates an admin superuser with a generated password
 
 After it finishes, activate the venv and run the server:
     Windows  :  venv\\Scripts\\activate  &&  python manage.py runserver
@@ -33,13 +33,13 @@ from pathlib import Path
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-REQUIRED_PYTHON = (3, 10)
+REQUIRED_PYTHON = (3, 12)
 VENV_DIR = Path("venv")
 ENV_FILE = Path(".env")
 ENV_EXAMPLE = Path(".one-env.example")
 ADMIN_USERNAME = "admin"
 ADMIN_EMAIL = "admin@example.com"
-ADMIN_PASSWORD = "admin1234"
+ADMIN_PASSWORD = os.environ.get("DJANGO_SUPERUSER_PASSWORD") or secrets.token_urlsafe(18)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

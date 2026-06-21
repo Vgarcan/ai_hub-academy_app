@@ -52,6 +52,8 @@ python manage.py embed_docs --force
 
 An AI chatbot at `/assistant/` that answers questions about the imported documentation.
 
+Submitting AI questions requires authentication by default, and questions are limited to 4,000 characters. Anonymous execution can be enabled with `ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=True` only when deployment-level rate limiting and provider-cost controls are in place.
+
 **How it works:**
 
 1. User submits a question via `/assistant/ask/`.

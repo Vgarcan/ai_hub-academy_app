@@ -1,5 +1,11 @@
+from pathlib import Path
+from io import StringIO
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.core.management import call_command
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from academy.models import (
@@ -12,8 +18,76 @@ from academy.models import (
     UserMissionProgress,
 )
 from academy.services.documentation_search import search_documentation
+from academy.tools.doc_sync import sync_all_docs
+from ai_hub.models import AgentProfile, ExecutionSession, ModelConfig, ProviderConfig
 
 User = get_user_model()
+
+
+class DocumentationSyncBoundaryTests(TestCase):
+    def _sync_from(self, source_root: Path):
+        with override_settings(ACADEMY_DOCS_SOURCE=source_root):
+            return sync_all_docs({}, {"source_name": "Boundary Test Docs"})
+
+    def test_document_sync_uses_docs_source_as_its_allowed_root(self):
+        with TemporaryDirectory() as temp_dir:
+            docs_source = Path(temp_dir) / "docs_source"
+            docs_source.mkdir()
+            (docs_source / "official.md").write_text("# Official\n", encoding="utf-8")
+
+            result = self._sync_from(docs_source)
+
+        self.assertEqual(result["checked"], 1)
+        self.assertTrue(DocumentationPage.objects.filter(slug="official").exists())
+
+    def test_document_sync_does_not_read_myideas(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            docs_source = root / "docs_source"
+            private_source = root / ".myideas"
+            docs_source.mkdir()
+            private_source.mkdir()
+            (docs_source / "public.md").write_text("# Public\n", encoding="utf-8")
+            (private_source / "private.md").write_text("# Private\n", encoding="utf-8")
+
+            result = self._sync_from(docs_source)
+
+        self.assertEqual(result["checked"], 1)
+        self.assertTrue(DocumentationPage.objects.filter(slug="public").exists())
+        self.assertFalse(DocumentationPage.objects.filter(slug="private").exists())
+
+    def test_document_sync_does_not_import_gitignored_private_markdown(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            docs_source = root / "docs_source"
+            private_source = root / ".myideas" / "GAME_IMPLEMENTATION"
+            docs_source.mkdir()
+            private_source.mkdir(parents=True)
+            (private_source / "CURRENT_STATUS.md").write_text("# Private status\n", encoding="utf-8")
+
+            result = self._sync_from(docs_source)
+
+        self.assertEqual(result["checked"], 0)
+        self.assertFalse(DocumentationPage.objects.filter(slug="current-status").exists())
+
+
+class DocumentationSyncCommandTests(TestCase):
+    @patch("academy.management.commands.run_doc_sync.run_execution_session")
+    def test_run_doc_sync_explicitly_opts_in_to_legacy_action_tool(self, mocked_run):
+        provider = ProviderConfig.objects.create(name="docs-provider", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="docs-model")
+        AgentProfile.objects.create(
+            name="Documentation Sync Agent",
+            role="Documentation sync",
+            model_config=model,
+            input_contract={"required": ["goal"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+
+        call_command("run_doc_sync", stdout=StringIO())
+
+        session = ExecutionSession.objects.get(source_label="run_doc_sync management command")
+        mocked_run.assert_called_once_with(session.pk, allow_legacy_game_action_tools=True)
 
 
 class DocumentationImportTest(TestCase):
@@ -226,3 +300,24 @@ class LandingViewTest(TestCase):
     def test_assistant_200(self):
         response = self.client.get(reverse("academy:assistant"))
         self.assertEqual(response.status_code, 200)
+
+    def test_anonymous_assistant_execution_is_disabled_by_default(self):
+        response = self.client.post(
+            reverse("academy:assistant_ask"),
+            {"question": "Explain GAME"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_assistant_rejects_oversized_question(self):
+        user = User.objects.create_user("assistant-user", password="testpass")
+        self.client.force_login(user)
+
+        response = self.client.post(
+            reverse("academy:assistant_ask"),
+            {"question": "x" * 4001},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 400)

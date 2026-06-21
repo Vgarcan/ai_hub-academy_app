@@ -1,6 +1,8 @@
 from pathlib import Path
 import os
 
+from django.core.exceptions import ImproperlyConfigured
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -9,12 +11,18 @@ except ImportError:
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY",
-    "django-insecure-ai-hub-academy-dev-key-change-in-production",
-)
+DEV_SECRET_KEY = "django-insecure-ai-hub-academy-dev-key-change-in-production"
+SECRET_KEY = os.environ.get("SECRET_KEY", DEV_SECRET_KEY)
 
 DEBUG = os.environ.get("DEBUG", "True") == "True"
+
+if not DEBUG and SECRET_KEY == DEV_SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY must be set to a strong environment value when DEBUG=False.")
+
+SECURE_SSL_REDIRECT = os.environ.get("SECURE_SSL_REDIRECT", str(not DEBUG)) == "True"
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", str(not DEBUG)) == "True"
+CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", str(not DEBUG)) == "True"
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
 
 ALLOWED_HOSTS = os.environ.get(
     "ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
@@ -90,7 +98,8 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "/static/"
-STATICFILES_DIRS = [BASE_DIR / "static"]
+# Static assets live in each installed app and are discovered automatically.
+STATICFILES_DIRS = []
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
@@ -104,3 +113,27 @@ LOGIN_REDIRECT_URL = "/"
 
 # Directory containing Markdown source docs to import into the DB
 ACADEMY_DOCS_SOURCE = BASE_DIR / "docs_source"
+
+# Python-callable tools are code execution capabilities. Keep the allow-list explicit.
+AI_HUB_ALLOWED_TOOL_CALLABLES = tuple(
+    item.strip()
+    for item in os.environ.get(
+        "AI_HUB_ALLOWED_TOOL_CALLABLES",
+        "academy.tools.doc_sync.sync_all_docs,academy.tools.doc_search.search_docs",
+    ).split(",")
+    if item.strip()
+)
+
+# Anonymous AI requests can create provider cost. Enable only with external rate limiting.
+ACADEMY_ASSISTANT_ALLOW_ANONYMOUS = (
+    os.environ.get("ACADEMY_ASSISTANT_ALLOW_ANONYMOUS", "False") == "True"
+)
+
+# GAME feature flags — each defaults to True (all phases tested).
+# Set to False in an environment variable to disable a specific subsystem.
+AI_HUB_GAME_GOALS_ENABLED = os.environ.get("AI_HUB_GAME_GOALS_ENABLED", "True") == "True"
+AI_HUB_GAME_SCHEDULER_ENABLED = os.environ.get("AI_HUB_GAME_SCHEDULER_ENABLED", "True") == "True"
+AI_HUB_GAME_ACTION_DISPATCH_ENABLED = os.environ.get("AI_HUB_GAME_ACTION_DISPATCH_ENABLED", "True") == "True"
+AI_HUB_GAME_MEMORY_ENABLED = os.environ.get("AI_HUB_GAME_MEMORY_ENABLED", "True") == "True"
+AI_HUB_GAME_RESUME_ENABLED = os.environ.get("AI_HUB_GAME_RESUME_ENABLED", "True") == "True"
+AI_HUB_GAME_DELEGATION_ENABLED = os.environ.get("AI_HUB_GAME_DELEGATION_ENABLED", "True") == "True"

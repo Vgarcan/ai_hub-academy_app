@@ -6,7 +6,7 @@ from ai_hub.models import AgentProfile
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.litellm_client import completion_call
 from ai_hub.services.provider_registry import resolve_model_config
-from ai_hub.services.tools_runtime import execute_tools
+from ai_hub.services.tools_runtime import TOOL_POLICY_ALL, execute_tools
 
 
 def get_mapped_value(source: dict, source_key: str):
@@ -86,9 +86,9 @@ def prepare_agent_payload(agent: AgentProfile, context: dict, mapping: dict) -> 
     return payload
 
 
-def execute_agent(agent: AgentProfile, payload: dict) -> dict:
+def execute_agent(agent: AgentProfile, payload: dict, *, tool_policy: str = TOOL_POLICY_ALL) -> dict:
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
-    tools_data = execute_tools(agent.tools.filter(is_active=True), payload)
+    tools_data = execute_tools(agent.tools.filter(is_active=True), payload, policy=tool_policy)
     model_cfg = resolve_model_config(agent.model_config)
 
     # Include tool results in the same LLM call so the agent can reason about them immediately.

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db.models import Count, F, Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -366,9 +367,18 @@ def assistant_ask(request):
     question = request.POST.get("question", "").strip()
     mission_slug = request.POST.get("mission_slug", "")
 
+    if not request.user.is_authenticated and not settings.ACADEMY_ASSISTANT_ALLOW_ANONYMOUS:
+        if is_ajax:
+            return JsonResponse({"error": "login required"}, status=403)
+        return redirect(f"/admin/login/?next={request.path}")
+
     if not question:
         if is_ajax:
             return JsonResponse({"error": "empty question"}, status=400)
+        return redirect("academy:assistant")
+    if len(question) > 4000:
+        if is_ajax:
+            return JsonResponse({"error": "question is too long"}, status=400)
         return redirect("academy:assistant")
 
     if request.user.is_authenticated:

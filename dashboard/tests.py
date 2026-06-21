@@ -63,10 +63,37 @@ def _make_session(agent):
 
 class DashboardViewTests(TestCase):
     def setUp(self):
+        self.staff_user = User.objects.create_user(
+            username="dashboard-staff",
+            password="testpass123",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.staff_user)
         self.provider = _make_provider()
         self.model = _make_model(self.provider)
         self.agent = _make_agent(self.model)
         self.session = _make_session(self.agent)
+
+    def test_anonymous_user_cannot_view_session_payloads(self):
+        self.client.logout()
+
+        response = self.client.get(reverse("dashboard_session_detail", args=[self.session.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login/", response.url)
+
+    def test_staff_without_view_permission_cannot_view_session_payloads(self):
+        restricted_staff = User.objects.create_user(
+            username="restricted-dashboard-staff",
+            password="testpass123",
+            is_staff=True,
+        )
+        self.client.force_login(restricted_staff)
+
+        response = self.client.get(reverse("dashboard_session_detail", args=[self.session.pk]))
+
+        self.assertEqual(response.status_code, 403)
 
     # ── List views ────────────────────────────────────────────────────────────
 

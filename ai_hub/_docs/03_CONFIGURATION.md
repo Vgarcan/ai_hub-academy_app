@@ -205,11 +205,14 @@ Example config:
 {
   "url": "https://api.example.com/customers/{customer_id}",
   "method": "GET",
+  "allowed_hosts": ["api.example.com"],
   "timeout": 10
 }
 ```
 
 Do not store secrets in tool config. Use environment variables or host-project adapters.
+
+Python-callable tools are code-execution capabilities. Their dotted callable path must also appear in the host setting `AI_HUB_ALLOWED_TOOL_CALLABLES`. A Python callable classified as a GAME `context_tool` additionally requires `config.read_only=true`; HTTP context tools must use GET or HEAD and an explicitly allowed host.
 
 ## Runtime Modes
 

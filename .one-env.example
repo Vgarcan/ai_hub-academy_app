@@ -2,8 +2,8 @@
 # AI Hub Academy — Environment Configuration
 # ============================================================
 # Copy this file to .env and fill in your values.
-#   cp .env.example .env          (macOS / Linux)
-#   copy .env.example .env        (Windows)
+#   cp .one-env.example .env          (macOS / Linux)
+#   copy .one-env.example .env        (Windows)
 #
 # The setup script (python setup_dev.py) does this automatically
 # and generates a secure SECRET_KEY for you.
@@ -14,6 +14,11 @@ SECRET_KEY=your-secret-key-here
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1,192.168.2.116,aihub.dev-bakery.com
 CSRF_TRUSTED_ORIGINS=http://localhost,http://127.0.0.1,https://aihub.dev-bakery.com,http://aihub.dev-bakery.com
+# Production defaults become secure automatically when DEBUG=False. Set HSTS
+# only after confirming the entire deployment is permanently HTTPS.
+SECURE_HSTS_SECONDS=0
+# Anonymous assistant calls may incur provider cost. Enable only behind rate limiting.
+ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=False
 
 # ============================================================
 # AI Provider credentials
@@ -40,11 +45,25 @@ CSRF_TRUSTED_ORIGINS=http://localhost,http://127.0.0.1,https://aihub.dev-bakery.
 # AZURE_OPENAI_API_KEY=...
 # AZURE_OPENAI_BASE_URL=https://YOUR-RESOURCE.openai.azure.com/
 
+# ============================================================
+# GAME feature flags
+# ============================================================
+# Each flag defaults to True (all phases are tested and production-ready).
+# Set a flag to False to disable that subsystem without a code deploy.
+# Useful as a kill switch when rolling out to a new environment.
+#
+# AI_HUB_GAME_GOALS_ENABLED=True
+# AI_HUB_GAME_SCHEDULER_ENABLED=True
+# AI_HUB_GAME_ACTION_DISPATCH_ENABLED=True
+# AI_HUB_GAME_MEMORY_ENABLED=True
+# AI_HUB_GAME_RESUME_ENABLED=True
+# AI_HUB_GAME_DELEGATION_ENABLED=True
+
 # ── Ollama (local LLM — no API key required) ─────────────────
 # Install Ollama from https://ollama.ai and run a model:
 #   ollama pull qwen3:8b
 # Then set the URL to your Ollama instance:
-OLLAMA_BASE_URL=http://192.168.2.132:11434
+# OLLAMA_BASE_URL=http://192.168.2.132:11434
 #
 # To seed the Ollama GAME agents after setting this variable:
 #   python manage.py seed_ollama_agents

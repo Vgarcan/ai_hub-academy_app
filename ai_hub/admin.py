@@ -15,6 +15,19 @@ from .models import (
     AgentProfile,
     ExecutionSession,
     ExecutionStepRun,
+    GameActionApprovalRequest,
+    GameActionDefinition,
+    GameActionRun,
+    GameContinuationRequest,
+    GameDelegationRun,
+    GameGoal,
+    GameGoalDependency,
+    GameGoalPlan,
+    GameGoalPlanStep,
+    GameMemoryEntry,
+    GameWorkspace,
+    GameWorkspaceAction,
+    GameWorkspaceAgent,
     KnowledgeCollection,
     KnowledgeDocument,
     ModelConfig,
@@ -29,6 +42,8 @@ from .services.admin_control_center import (
     build_game_graph_context,
 )
 from .services.execution_runner import run_execution_session
+from .services.game_operational_ux import redact_payload
+from .services.game_resume import approve_action_run, reject_action_run
 
 
 ACTIVE_EXECUTION_STATUSES = (
@@ -44,6 +59,23 @@ GAME_INPUT_HINTS = {
     "observations",
     "game_response_contract",
 }
+
+
+class GoalPriorityRangeFilter(admin.SimpleListFilter):
+    title = _("calculated priority")
+    parameter_name = "priority_range"
+
+    def lookups(self, request, model_admin):
+        return (("low", _("Low (< 50)")), ("medium", _("Medium (50–99)")), ("high", _("High (100+)")))
+
+    def queryset(self, request, queryset):
+        if self.value() == "low":
+            return queryset.filter(calculated_priority__lt=50)
+        if self.value() == "medium":
+            return queryset.filter(calculated_priority__gte=50, calculated_priority__lt=100)
+        if self.value() == "high":
+            return queryset.filter(calculated_priority__gte=100)
+        return queryset
 
 
 class AIHubFormHelpMixin:
@@ -129,7 +161,10 @@ def _agent_looks_game_ready(agent):
 
 def _workspace_pipeline_admin(request):
     model_admin = admin.site._registry[PipelineDefinition]
-    if not model_admin.has_view_or_change_permission(request):
+    if (
+        not model_admin.has_view_or_change_permission(request)
+        or not request.user.has_perm("ai_hub.view_executionsession")
+    ):
         raise PermissionDenied
     return model_admin
 
@@ -177,7 +212,10 @@ class GameSessionCreateForm(forms.Form):
     )
     runtime_mode = forms.ChoiceField(
         label=_("Runtime mode"),
-        choices=ExecutionSession.RuntimeMode.choices,
+        choices=(
+            (ExecutionSession.RuntimeMode.SYNC, _("Sync")),
+            (ExecutionSession.RuntimeMode.ASYNC, _("Async")),
+        ),
         initial=ExecutionSession.RuntimeMode.ASYNC,
         help_text=_("Async is recommended for long AI runs. Sync is useful only for quick local tests."),
     )
@@ -1027,10 +1065,190 @@ class ExecutionStepRunInline(admin.TabularInline):
     model = ExecutionStepRun
     extra = 0
     fields = ("order", "pipeline_step", "agent", "action_name", "status", "latency_ms", "created_at")
-    readonly_fields = ("created_at",)
+    readonly_fields = ("order", "pipeline_step", "agent", "action_name", "status", "latency_ms", "created_at")
     show_change_link = True
     verbose_name = "Execution step run"
     verbose_name_plural = "5.1 Execution step runs - session timeline"
+
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(GameWorkspace)
+class GameWorkspaceAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME workspaces")
+    ai_hub_section_description = _("Define the environments that own GAME goals, defaults and policy boundaries.")
+    list_display = ("name", "is_active", "goal_count", "dashboard_link", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("name", "description")
+    readonly_fields = ("created_at", "updated_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(_goal_count=Count("goals"))
+
+    @admin.display(description=_("Goals"), ordering="_goal_count")
+    def goal_count(self, obj):
+        return obj._goal_count
+
+    @admin.display(description=_("Dashboard"))
+    def dashboard_link(self, obj):
+        url = reverse("admin:ai_hub_gameworkspace_dashboard", args=[obj.pk])
+        return format_html('<a href="{}">View dashboard</a>', url)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "<int:workspace_id>/dashboard/",
+                self.admin_site.admin_view(self.workspace_dashboard_view),
+                name="ai_hub_gameworkspace_dashboard",
+            ),
+        ]
+        return custom_urls + urls
+
+    def workspace_dashboard_view(self, request, workspace_id):
+        from .services.game_operational_ux import build_workspace_dashboard_context
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        if not request.user.has_perm("ai_hub.view_executionsession"):
+            raise PermissionDenied
+        workspace = self.get_object(request, workspace_id)
+        if workspace is None:
+            from django.http import Http404
+            raise Http404
+        context = {
+            **self.admin_site.each_context(request),
+            "title": f"Dashboard — {workspace.name}",
+            "opts": self.model._meta,
+            **build_workspace_dashboard_context(workspace),
+        }
+        return TemplateResponse(request, "admin/ai_hub/gameworkspace/dashboard.html", context)
+
+
+@admin.register(GameGoal)
+class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME goals")
+    ai_hub_section_description = _("Manage durable work items independently from their execution sessions.")
+    change_form_template = "admin/ai_hub/gamegoal/change_form.html"
+    list_display = (
+        "title",
+        "workspace",
+        "status",
+        "base_priority",
+        "calculated_priority",
+        "due_at",
+        "updated_at",
+    )
+    list_filter = ("workspace", "status", "due_at", GoalPriorityRangeFilter)
+    search_fields = ("title", "description", "workspace__name")
+    autocomplete_fields = ("workspace",)
+    readonly_fields = (
+        "status",
+        "calculated_priority",
+        "queued_at",
+        "result",
+        "transition_metadata",
+        "created_at",
+        "updated_at",
+    )
+    actions = (
+        "queue_selected_goals",
+        "cancel_selected_goals",
+        "reopen_selected_goals",
+        "resume_selected_goals",
+    )
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        from .services.game_operational_ux import build_goal_detail_context
+        extra_context = extra_context or {}
+        goal = self.get_object(request, object_id)
+        if goal:
+            extra_context.update(build_goal_detail_context(goal))
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    @admin.action(description=_("Queue selected goals"))
+    def queue_selected_goals(self, request, queryset):
+        from .services.game_goals import transition_goal_status
+        success = 0
+        for goal in queryset:
+            try:
+                transition_goal_status(goal, GameGoal.Status.QUEUED, reason="queued from admin")
+                success += 1
+            except Exception as exc:
+                self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
+        if success:
+            self.message_user(request, f"{success} goal(s) queued.", level=messages.SUCCESS)
+
+    @admin.action(description=_("Cancel selected goals"))
+    def cancel_selected_goals(self, request, queryset):
+        from .services.game_goals import transition_goal_status
+        success = 0
+        for goal in queryset:
+            try:
+                transition_goal_status(goal, GameGoal.Status.CANCELLED, reason="cancelled from admin")
+                success += 1
+            except Exception as exc:
+                self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
+        if success:
+            self.message_user(request, f"{success} goal(s) cancelled.", level=messages.SUCCESS)
+
+    @admin.action(description=_("Reopen selected goals (completed/cancelled → queued)"))
+    def reopen_selected_goals(self, request, queryset):
+        from .services.game_goals import reopen_goal, transition_goal_status
+        success = 0
+        for goal in queryset:
+            try:
+                if goal.status in {GameGoal.Status.COMPLETED, GameGoal.Status.CANCELLED}:
+                    reopen_goal(goal, reason="reopened from admin")
+                else:
+                    transition_goal_status(goal, GameGoal.Status.QUEUED, reason="requeued from admin")
+                success += 1
+            except Exception as exc:
+                self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
+        if success:
+            self.message_user(request, f"{success} goal(s) reopened.", level=messages.SUCCESS)
+
+    @admin.action(description=_("Resume selected goal sessions"))
+    def resume_selected_goals(self, request, queryset):
+        from .services.game_resume import resume_goal_execution
+        success = 0
+        for goal in queryset:
+            try:
+                waiting_session = (
+                    ExecutionSession.objects.filter(
+                        goal=goal, status=ExecutionSession.Status.WAITING_ASYNC
+                    )
+                    .order_by("-created_at")
+                    .first()
+                )
+                if not waiting_session:
+                    self.message_user(
+                        request,
+                        f"Goal #{goal.pk}: no waiting session to resume.",
+                        level=messages.WARNING,
+                    )
+                    continue
+                resume_goal_execution(session_id=waiting_session.pk, resolved_by=request.user)
+                success += 1
+            except Exception as exc:
+                self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
+        if success:
+            self.message_user(request, f"{success} goal session(s) resumed.", level=messages.SUCCESS)
+
+
+@admin.register(GameGoalDependency)
+class GameGoalDependencyAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME goal dependencies")
+    ai_hub_section_description = _("Describe required and optional ordering relationships inside one workspace.")
+    list_display = ("goal", "depends_on", "is_required", "note", "created_at")
+    list_filter = ("goal__workspace", "is_required")
+    search_fields = ("goal__title", "depends_on__title", "note")
+    autocomplete_fields = ("goal", "depends_on")
+    readonly_fields = ("created_at",)
 
 
 @admin.register(ExecutionSession)
@@ -1043,15 +1261,32 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
         "source_label",
         "pipeline",
         "entry_agent",
+        "goal",
         "status",
         "runtime_mode",
         "triggered_by",
         "created_at",
     )
-    list_filter = ("runtime_kind", "status", "runtime_mode", "pipeline")
-    search_fields = ("source_label", "goal_text", "pipeline__name", "entry_agent__name", "error_detail")
-    autocomplete_fields = ("pipeline", "entry_agent", "triggered_by")
-    readonly_fields = ("created_at", "updated_at")
+    list_filter = ("runtime_kind", "status", "runtime_mode", "pipeline", "goal__workspace")
+    search_fields = (
+        "source_label",
+        "goal_text",
+        "goal__title",
+        "pipeline__name",
+        "entry_agent__name",
+        "error_detail",
+    )
+    autocomplete_fields = ("pipeline", "entry_agent", "goal", "triggered_by")
+    readonly_fields = (
+        "status",
+        "final_context",
+        "goal_outcome_fingerprint",
+        "error_detail",
+        "started_at",
+        "finished_at",
+        "created_at",
+        "updated_at",
+    )
     inlines = [ExecutionStepRunInline]
     actions = ("run_selected_sessions",)
     ai_hub_field_guidance = {
@@ -1069,6 +1304,9 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
         },
         "entry_agent": {
             "help_text": _("Required for GAME sessions. Optional/descriptive for Orchestrator sessions."),
+        },
+        "goal": {
+            "help_text": _("Optional durable GAME goal. Legacy GAME sessions may continue to use goal_text only."),
         },
         "source_label": {
             "placeholder": "Example: Support ticket #4832",
@@ -1112,6 +1350,7 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
                 "status",
                 "pipeline",
                 "entry_agent",
+                "goal",
                 "triggered_by",
             ),
             "description": _(
@@ -1136,6 +1375,27 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
             "description": _("Use this area to inspect lifecycle, failures and rollback-safe execution state."),
         }),
     )
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly = list(super().get_readonly_fields(request, obj))
+        if obj and obj.status != ExecutionSession.Status.PENDING:
+            readonly.extend(
+                [
+                    "runtime_kind",
+                    "runtime_mode",
+                    "pipeline",
+                    "entry_agent",
+                    "goal",
+                    "triggered_by",
+                    "source_content_type",
+                    "source_object_id",
+                    "source_label",
+                    "goal_text",
+                    "runtime_config",
+                    "initial_context",
+                ]
+            )
+        return tuple(dict.fromkeys(readonly))
 
     def get_urls(self):
         urls = super().get_urls()
@@ -1283,7 +1543,26 @@ class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
     list_filter = ("status", "session__runtime_kind", "pipeline_step__pipeline", "agent")
     search_fields = ("session__source_label", "session__goal_text", "agent__name", "action_name", "error_detail")
     autocomplete_fields = ("session", "pipeline_step", "agent")
-    readonly_fields = ("created_at", "request_payload", "response_payload", "observation_payload", "error_detail")
+    readonly_fields = (
+        "session",
+        "order",
+        "pipeline_step",
+        "agent",
+        "action_name",
+        "status",
+        "latency_ms",
+        "created_at",
+        "request_payload",
+        "response_payload",
+        "observation_payload",
+        "error_detail",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
     ai_hub_field_guidance = {
         "session": {
             "help_text": _("Execution session this step belongs to."),
@@ -1340,6 +1619,507 @@ class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "fields": ("error_detail",),
             "description": _("Failure details for this step, if any."),
         }),
+    )
+
+
+@admin.register(GameActionDefinition)
+class GameActionDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME action definitions")
+    ai_hub_section_description = _(
+        "Register the actions the GAME dispatcher can execute. "
+        "Only active definitions are available during a goal session."
+    )
+    ai_hub_section_note = _(
+        "Built-in internal actions: finish_goal, update_goal_status, record_memory. "
+        "Built-in context tools: search_knowledge, read_document."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("Add action"),
+            "url": lambda self: reverse("admin:ai_hub_gameactiondefinition_add"),
+            "default": True,
+        },
+    )
+    list_display = ("name", "label", "action_type", "risk_level", "is_active", "updated_at")
+    list_filter = ("action_type", "risk_level", "requires_approval", "is_active")
+    search_fields = ("name", "label", "description")
+    readonly_fields = ("created_at", "updated_at")
+    ai_hub_field_guidance = {
+        "name": {
+            "placeholder": "Example: finish_goal",
+            "help_text": _(
+                "Slug name the LLM must write in its action field. "
+                "Must exactly match the dispatcher's expected name."
+            ),
+        },
+        "label": {
+            "placeholder": "Example: Finish goal",
+            "help_text": _("Human-readable label shown in admin lists."),
+        },
+        "action_type": {
+            "help_text": _(
+                "Execution mechanism: internal runs built-in Python, context_tool reads knowledge, "
+                "tool/http/sub_agent are reserved for future phases."
+            ),
+        },
+        "input_contract": {
+            "rows": 8,
+            "placeholder": (
+                '{\n  "required": ["final_answer"],\n'
+                '  "properties": {\n'
+                '    "final_answer": {"type": "string"},\n'
+                '    "message": {"type": "string"}\n'
+                "  }\n}"
+            ),
+            "help_text": _(
+                "JSON schema-style contract for the input the LLM must provide. "
+                "Leave empty to accept any JSON object."
+            ),
+        },
+        "output_contract": {
+            "rows": 8,
+            "placeholder": '{\n  "required": ["result"],\n  "properties": {\n    "result": {"type": "string"}\n  }\n}',
+            "help_text": _("Optional output contract validated after the handler returns."),
+        },
+        "risk_level": {
+            "placeholder": "low",
+            "help_text": _("Risk classification: low, medium, or high. Used by future approval policies."),
+        },
+        "requires_approval": {
+            "help_text": _("Flag for future human-in-the-loop workflows."),
+        },
+        "config": {
+            "rows": 5,
+            "placeholder": "{}",
+            "help_text": _("Optional handler-specific configuration. Reserved for future use."),
+        },
+    }
+    fieldsets = (
+        ("4.8 Action identity", {
+            "fields": ("name", "label", "description", "action_type", "is_active"),
+            "description": _(
+                "Define one dispatchable action. The name is what the LLM writes; "
+                "action_type routes to the correct execution adapter."
+            ),
+        }),
+        ("Contracts", {
+            "fields": ("input_contract", "output_contract"),
+            "description": _(
+                "input_contract is validated before the handler runs. "
+                "output_contract is validated after. Leave empty to skip validation."
+            ),
+        }),
+        ("Policy", {
+            "fields": ("risk_level", "requires_approval"),
+            "description": _("Controls future approval and risk gate flows."),
+        }),
+        ("Advanced", {
+            "fields": ("config", "created_at", "updated_at"),
+            "classes": ("collapse",),
+            "description": _("Reserved for handler-specific runtime configuration."),
+        }),
+    )
+
+
+class GameActionRunInline(admin.TabularInline):
+    model = GameActionRun
+    extra = 0
+    fields = ("iteration", "action_name", "status", "latency_ms", "started_at", "finished_at")
+    readonly_fields = ("iteration", "action_name", "status", "latency_ms", "started_at", "finished_at")
+    show_change_link = True
+    verbose_name = "Action run"
+    verbose_name_plural = "4.9 Action runs - dispatcher history for this session"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(GameActionRun)
+class GameActionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME action runs")
+    ai_hub_section_description = _(
+        "Immutable audit records for every action dispatched during a GAME goal session."
+    )
+    ai_hub_section_note = _(
+        "Records are written by the dispatcher and are read-only. "
+        "Use them to inspect what the LLM selected, what input it provided, and what the handler returned."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View sessions"),
+            "url": lambda self: reverse("admin:ai_hub_executionsession_changelist"),
+            "default": True,
+        },
+    )
+    list_display = (
+        "id",
+        "session",
+        "iteration",
+        "action_name",
+        "status",
+        "latency_ms",
+        "started_at",
+    )
+    list_filter = ("status", "action__action_type", "action")
+    search_fields = ("session__source_label", "action_name", "error_detail")
+    autocomplete_fields = ("session",)
+    readonly_fields = (
+        "session",
+        "step_run",
+        "action",
+        "idempotency_key",
+        "action_name",
+        "iteration",
+        "status",
+        "input_payload_redacted",
+        "output_payload_redacted",
+        "observation_payload_redacted",
+        "error_detail",
+        "started_at",
+        "finished_at",
+        "latency_ms",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def _render_redacted(self, payload):
+        safe = redact_payload(payload or {})
+        return format_html(
+            "<pre>{}</pre>",
+            json.dumps(safe, indent=2, ensure_ascii=False, default=str),
+        )
+
+    @admin.display(description=_("Input payload (redacted)"))
+    def input_payload_redacted(self, obj):
+        return self._render_redacted(obj.input_payload)
+
+    @admin.display(description=_("Output payload (redacted)"))
+    def output_payload_redacted(self, obj):
+        return self._render_redacted(obj.output_payload)
+
+    @admin.display(description=_("Observation payload (redacted)"))
+    def observation_payload_redacted(self, obj):
+        return self._render_redacted(obj.observation_payload)
+
+    fieldsets = (
+        ("4.9 Action run", {
+            "fields": (
+                "session",
+                "step_run",
+                "action",
+                "action_name",
+                "iteration",
+                "status",
+                "idempotency_key",
+                "started_at",
+                "finished_at",
+                "latency_ms",
+            ),
+            "description": _("Durable record of one dispatcher invocation."),
+        }),
+        ("Payloads", {
+            "fields": (
+                "input_payload_redacted",
+                "output_payload_redacted",
+                "observation_payload_redacted",
+            ),
+            "description": _(
+                "input_payload is the validated JSON the LLM provided. "
+                "output_payload is the handler result. "
+                "observation_payload is the normalised observation passed to the next iteration. "
+                "Known-sensitive keys (api_key, secret, password, token, ...) are redacted in this view."
+            ),
+        }),
+        ("Error", {
+            "fields": ("error_detail",),
+            "description": _("Handler or validation error, if any."),
+        }),
+    )
+
+
+@admin.register(GameMemoryEntry)
+class GameMemoryEntryAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME memory entries")
+    ai_hub_section_description = _(
+        "Scoped, bounded knowledge entries persisted across GAME iterations. "
+        "Workspace, goal, session, and action-result scopes control visibility."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("Add entry"),
+            "url": lambda self: reverse("admin:ai_hub_gamememoryentry_add"),
+            "default": True,
+        },
+    )
+    list_display = ("id", "workspace", "scope_type", "goal", "importance_score", "expires_at", "created_at")
+    list_filter = ("scope_type", "workspace", "goal__workspace")
+    search_fields = ("content", "workspace__name", "goal__title")
+    autocomplete_fields = ("workspace", "goal", "session")
+    readonly_fields = ("created_at",)
+    fieldsets = (
+        ("4.10 Memory entry", {
+            "fields": ("workspace", "goal", "session", "scope_type", "is_active_display"),
+            "description": _(
+                "Scope type determines visibility: workspace memory is shared across goals; "
+                "goal memory is visible only to that goal; session memory is run-specific."
+            ),
+        }),
+        ("Content", {
+            "fields": ("content", "importance_score", "expires_at"),
+            "description": _("Content is the raw text injected into future iterations."),
+        }),
+        ("Metadata", {
+            "fields": ("metadata", "created_at"),
+            "classes": ("collapse",),
+            "description": _("Source tracking and category labels for audit and compaction."),
+        }),
+    )
+
+    @admin.display(description="Active")
+    def is_active_display(self, obj):
+        from django.utils import timezone
+        if obj.expires_at and obj.expires_at <= timezone.now():
+            return format_html('<span style="color:red">Expired</span>')
+        return format_html('<span style="color:green">Active</span>')
+
+
+@admin.register(GameContinuationRequest)
+class GameContinuationRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME continuation requests")
+    ai_hub_section_description = _(
+        "Durable records for every pause in a GAME session. "
+        "Each entry captures why the session stopped and what input is needed to resume."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View sessions"),
+            "url": lambda self: reverse("admin:ai_hub_executionsession_changelist"),
+            "default": True,
+        },
+    )
+    list_display = ("id", "session", "goal", "reason_code", "status", "created_at", "resolved_at")
+    list_filter = ("status", "reason_code", "goal__workspace")
+    search_fields = ("detail", "session__source_label", "goal__title")
+    autocomplete_fields = ("session", "goal")
+    readonly_fields = ("created_at", "resolved_at", "resolved_by")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(GameActionApprovalRequest)
+class GameActionApprovalRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME action approval requests")
+    ai_hub_section_description = _(
+        "Pending and resolved approval gates for actions that require human sign-off. "
+        "Approve or reject from this list to unblock a waiting GAME session."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View sessions"),
+            "url": lambda self: reverse("admin:ai_hub_executionsession_changelist"),
+            "default": True,
+        },
+    )
+    list_display = (
+        "id", "action_run", "goal", "status", "reviewed_by", "created_at", "reviewed_at", "expires_at"
+    )
+    list_filter = ("status", "goal__workspace")
+    search_fields = ("action_run__action_name", "goal__title", "review_note")
+    autocomplete_fields = ("goal",)
+    readonly_fields = ("action_run", "created_at", "reviewed_at", "reviewed_by")
+    actions = ("approve_selected_actions", "reject_selected_actions")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_actions(self, request):
+        actions = super().get_actions(request)
+        if not request.user.has_perm("ai_hub.approve_game_action"):
+            actions.pop("approve_selected_actions", None)
+            actions.pop("reject_selected_actions", None)
+        return actions
+
+    @admin.action(description=_("Approve selected action requests"))
+    def approve_selected_actions(self, request, queryset):
+        if not request.user.has_perm("ai_hub.approve_game_action"):
+            self.message_user(
+                request,
+                _("You do not have permission to approve GAME actions."),
+                level=messages.ERROR,
+            )
+            return
+        success = 0
+        for approval_req in queryset.select_related("action_run"):
+            try:
+                approve_action_run(
+                    action_run_id=approval_req.action_run_id,
+                    reviewed_by=request.user,
+                )
+                success += 1
+            except Exception as exc:
+                self.message_user(request, f"Approval #{approval_req.pk}: {exc}", level=messages.WARNING)
+        if success:
+            self.message_user(request, f"{success} action(s) approved.", level=messages.SUCCESS)
+
+    @admin.action(description=_("Reject selected action requests"))
+    def reject_selected_actions(self, request, queryset):
+        if not request.user.has_perm("ai_hub.approve_game_action"):
+            self.message_user(
+                request,
+                _("You do not have permission to reject GAME actions."),
+                level=messages.ERROR,
+            )
+            return
+        success = 0
+        for approval_req in queryset.select_related("action_run"):
+            try:
+                reject_action_run(
+                    action_run_id=approval_req.action_run_id,
+                    reviewed_by=request.user,
+                )
+                success += 1
+            except Exception as exc:
+                self.message_user(request, f"Approval #{approval_req.pk}: {exc}", level=messages.WARNING)
+        if success:
+            self.message_user(request, f"{success} action(s) rejected.", level=messages.SUCCESS)
+
+
+@admin.register(GameWorkspaceAction)
+class GameWorkspaceActionAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME workspace actions")
+    ai_hub_section_description = _(
+        "Allow-list of actions permitted per workspace. "
+        "Disable an entry to block a specific action. "
+        "Use requires_approval_override to force human review regardless of the action's default."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View workspaces"),
+            "url": lambda self: reverse("admin:ai_hub_gameworkspace_changelist"),
+            "default": True,
+        },
+    )
+    list_display = ("id", "workspace", "action", "is_enabled", "requires_approval_override", "created_at")
+    list_filter = ("is_enabled", "requires_approval_override", "workspace")
+    search_fields = ("workspace__name", "action__name")
+    autocomplete_fields = ("workspace", "action")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(GameWorkspaceAgent)
+class GameWorkspaceAgentAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME workspace agents")
+    ai_hub_section_description = _(
+        "Allow-list of agents permitted to run as entry agents within a workspace. "
+        "Disable an entry to prevent a specific agent from being used in that workspace."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View workspaces"),
+            "url": lambda self: reverse("admin:ai_hub_gameworkspace_changelist"),
+            "default": True,
+        },
+    )
+    list_display = ("id", "workspace", "agent", "is_enabled", "created_at")
+    list_filter = ("is_enabled", "workspace")
+    search_fields = ("workspace__name", "agent__name")
+    autocomplete_fields = ("workspace", "agent")
+    readonly_fields = ("created_at",)
+
+
+class GameGoalPlanStepInline(admin.TabularInline):
+    model = GameGoalPlanStep
+    extra = 0
+    fields = ("order", "title", "status", "depends_on_step", "created_at")
+    readonly_fields = ("created_at",)
+    autocomplete_fields = ()
+    ordering = ("order",)
+
+
+@admin.register(GameGoalPlan)
+class GameGoalPlanAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME goal plans")
+    ai_hub_section_description = _(
+        "Structured execution plans attached to goals. "
+        "Each plan holds an ordered set of steps that guide the agent's work."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View goals"),
+            "url": lambda self: reverse("admin:ai_hub_gamegoal_changelist"),
+            "default": True,
+        },
+    )
+    list_display = ("id", "goal", "status", "version", "created_at", "updated_at")
+    list_filter = ("status",)
+    search_fields = ("goal__title",)
+    readonly_fields = ("created_at", "updated_at")
+    inlines = [GameGoalPlanStepInline]
+
+
+@admin.register(GameGoalPlanStep)
+class GameGoalPlanStepAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME goal plan steps")
+    ai_hub_section_description = _("Individual steps within a goal plan.")
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View plans"),
+            "url": lambda self: reverse("admin:ai_hub_gamegoalplan_changelist"),
+            "default": True,
+        },
+    )
+    list_display = ("id", "plan", "order", "title", "status", "depends_on_step", "created_at")
+    list_filter = ("status", "plan__goal__workspace")
+    search_fields = ("title", "plan__goal__title")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(GameDelegationRun)
+class GameDelegationRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("GAME delegation runs")
+    ai_hub_section_description = _(
+        "Records of sub-agent delegation requests. Each entry tracks a parent action, "
+        "the target agent, the delegated task, and the outcome."
+    )
+    ai_hub_section_accent = "game"
+    ai_hub_section_actions = (
+        {
+            "label": _("View goals"),
+            "url": lambda self: reverse("admin:ai_hub_gamegoal_changelist"),
+            "default": True,
+        },
+    )
+    list_display = (
+        "id", "parent_goal", "target_agent", "status", "created_at", "finished_at",
+    )
+    list_filter = ("status", "target_agent")
+    search_fields = ("parent_goal__title", "target_agent__name", "task")
+    readonly_fields = (
+        "parent_action_run", "parent_goal", "delegated_session", "target_agent",
+        "task", "expected_result", "result_summary", "created_at", "finished_at",
     )
 
 

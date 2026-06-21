@@ -12,7 +12,7 @@ Use it to learn how AI pipelines work, explore live execution telemetry, and und
 
 | Requirement | Minimum | Notes |
 |---|---|---|
-| Python | 3.10+ | [python.org/downloads](https://www.python.org/downloads/) |
+| Python | 3.12+ | [python.org/downloads](https://www.python.org/downloads/) |
 | Git | any | to clone the repo |
 
 > **No API keys needed.** The project ships with a Training provider that returns deterministic responses — everything works out of the box.
@@ -41,7 +41,7 @@ That's it. The script will:
 - run database migrations
 - seed tutorial and training data
 - import documentation from `docs_source/`
-- create an admin superuser (`admin` / `admin1234`)
+- create an admin superuser (`admin` with a generated password printed once)
 
 ---
 
@@ -72,7 +72,7 @@ Open **http://localhost:8000/** in your browser.
 | `http://localhost:8000/tutorials/` | Interactive tutorial missions |
 | `http://localhost:8000/assistant/` | AI documentation chatbot |
 | `http://localhost:8000/dashboard/` | Visual dashboard — all AI Hub entities |
-| `http://localhost:8000/admin/` | Django admin (`admin` / `admin1234`) |
+| `http://localhost:8000/admin/` | Django admin (`admin`; setup prints the generated password) |
 | `http://localhost:8000/admin/ai_hub/` | AI Hub control panel |
 
 ---
@@ -83,7 +83,7 @@ Open **http://localhost:8000/** in your browser.
 manage.py              Entry point
 setup_dev.py           One-command dev setup (run once after cloning)
 requirements.txt       Python dependencies
-.env.example           Environment variable template
+.one-env.example       Environment variable template
 docs_source/           Markdown documentation source files
 
 _core/                 Django project settings, URLs, WSGI
@@ -155,8 +155,8 @@ source venv/bin/activate        # macOS/Linux
 pip install -r requirements.txt
 
 # 3. Create .env
-cp .env.example .env            # macOS/Linux
-# copy .env.example .env        # Windows
+cp .one-env.example .env        # macOS/Linux
+# copy .one-env.example .env    # Windows
 # Edit SECRET_KEY in .env
 
 # 4. Migrate

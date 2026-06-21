@@ -142,6 +142,51 @@ The workspace shows:
 - recent GAME sessions,
 - recommended GAME agents.
 
+The AI Hub admin index also exposes `GAME workspaces`, `GAME goals`, and `GAME goal dependencies`. Use those model pages to define durable work and dependency relationships. They do not schedule or launch sessions automatically.
+
+Goal lists can be filtered by workspace, status, due date, and calculated-priority range. Dependency records must connect goals inside the same workspace and are validated against duplicates and cycles.
+
+### Workspace operational dashboard
+
+Each workspace has a **Dashboard** link in its changelist row. The dashboard shows the following scoped to that workspace:
+
+- goal status counts,
+- top eligible goals with an inline scheduler explanation (base priority plus each bonus),
+- pending approval requests,
+- blocked goals (queued goals with unresolved required dependencies),
+- recent execution sessions,
+- workspace policy — enabled agents, enabled actions, and budget.
+
+The dashboard requires staff access and the `view_executionsession` permission.
+
+### Goal detail enrichments
+
+The change form for a `GameGoal` includes additional read-only panels below the main fields:
+
+- **Scheduler explanation** — shows base priority, each bonus and its reason, and the calculated total; visible when the goal is queued or running.
+- **Resume** — indicates when the goal has a waiting session that can be resumed; only appears when the goal is in a waiting status with at least one `WAITING_ASYNC` session.
+- **Session history** — all execution sessions linked to the goal, ordered by most recent.
+- **Action runs** — all `GameActionRun` records linked to sessions of the goal, ordered by `started_at`.
+- **Goal plan** — the attached `GameGoalPlan` (if any) with its ordered steps and statuses.
+- **Memory entries** — the most important `GameMemoryEntry` records for the goal.
+
+### Approval operations
+
+The `GAME action approval requests` changelist supports two bulk actions:
+
+- **Approve selected action requests** — calls `approve_action_run()` for each selected pending request.
+- **Reject selected action requests** — calls `reject_action_run()` for each selected pending request.
+
+Both actions require the `ai_hub.approve_game_action` permission. Users without the permission do not see these actions in the dropdown and cannot execute them even via a direct POST.
+
+Approval is gated by `AI_HUB_GAME_ACTION_DISPATCH_ENABLED`: when that kill-switch is off, approving is refused outright so an action is never left approved-but-unexecuted.
+
+### Feature flags and the admin
+
+GAME kill-switch flags (`AI_HUB_GAME_GOALS_ENABLED`, `AI_HUB_GAME_SCHEDULER_ENABLED`, etc.) gate the **service layer** — `create_goal`, `claim_next_goal`, `execute_game_action`, `record_memory`, `resume_goal_execution`, and `run_delegated_agent`.
+
+They do **not** gate direct Django admin model edits. The standard "Add GAME goal" form writes through the model, so it bypasses both the flag and the `create_goal` "must start draft/queued" rule. Likewise, the goal bulk actions (`queue`/`cancel`/`reopen`) call `transition_goal_status`, which is not flag-gated. If you need a hard stop on goal creation in an environment, disable the relevant add/change admin permissions in addition to the feature flag.
+
 ## Creating A GAME Session
 
 Open:
@@ -194,6 +239,10 @@ Use filters to separate:
 - status,
 - runtime mode,
 - pipeline.
+
+Goal-bound GAME sessions show their durable goal and can also be filtered by goal workspace. Legacy GAME sessions continue to show their standalone `goal_text` without requiring a goal record.
+
+Execution payload dashboards require both staff access and the `view_executionsession` permission. Running a session through the internal endpoint requires `change_executionsession`. Runtime-generated statuses, final contexts, outcome fingerprints, and step telemetry are read-only in Admin.
 
 The session change page includes a timeline of step runs with:
 

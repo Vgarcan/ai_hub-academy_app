@@ -3,13 +3,13 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260623-missiondeck-v10">
 {% endblock %}
 
 {% block extrahead %}
 {{ block.super }}
 {{ game_graph.graph|json_script:"ai-control-graph-data" }}
-<script defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260606-guided-v8"></script>
+<script defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260623-missiondeck-v10"></script>
 {% endblock %}
 
 {% block breadcrumbs %}
@@ -21,144 +21,138 @@
 {% endblock %}
 
 {% block content %}
-<div class="ai-control">
-  <header class="ai-control__header">
+<div class="ai-console">
+
+  <header class="mc-head">
     <div>
+      <div class="mc-eyebrow">// AI Hub · GAME</div>
       <h1>{% translate "GAME workspace" %}</h1>
       <p>{% translate "Autonomous goal sessions where one entry agent iterates with memory, observations and a stop contract." %}</p>
     </div>
-    <nav class="ai-control__actions" aria-label="{% translate 'GAME actions' %}">
-      <a class="button" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Create GAME session" %}</a>
-      <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=game">{% translate "View GAME sessions" %}</a>
-      <a class="button" href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "View agents" %}</a>
+    <nav class="mc-head__actions" aria-label="{% translate 'GAME actions' %}">
+      <a class="mc-btn mc-btn--primary" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Create GAME session" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=game">{% translate "View GAME sessions" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "View agents" %}</a>
     </nav>
   </header>
 
-  <section class="ai-control__metrics ai-workspace-metrics" aria-label="{% translate 'GAME metrics' %}">
-    <article><span>{% translate "GAME sessions" %}</span><strong>{{ metrics.sessions }}</strong></article>
-    <article><span>{% translate "Running / waiting" %}</span><strong>{{ metrics.active_sessions }}</strong></article>
-    <article><span>{% translate "Success" %}</span><strong>{{ metrics.successful_sessions }}</strong></article>
-    <article><span>{% translate "Failed" %}</span><strong>{{ metrics.failed_sessions }}</strong></article>
-    <article><span>{% translate "GAME agents" %}</span><strong>{{ metrics.recommended_agents }}</strong></article>
+  <section class="mc-vitals" aria-label="{% translate 'GAME metrics' %}">
+    <article class="mc-vital mc-vital--accent">
+      <div class="mc-eyebrow">{% translate "GAME sessions" %}</div>
+      <div class="mc-vital__n">{{ metrics.sessions }}</div>
+      <div class="mc-vital__sub">{{ metrics.active_sessions }} · {% translate "Running / waiting" %}</div>
+    </article>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "Success" %}</div>
+      <div class="mc-vital__n">{{ metrics.successful_sessions }}</div>
+      <div class="mc-vital__sub">{% translate "completed goals" %}</div>
+    </article>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "Failed" %}</div>
+      <div class="mc-vital__n">{{ metrics.failed_sessions }}</div>
+      <div class="mc-vital__sub">{% translate "needs review" %}</div>
+    </article>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "GAME agents" %}</div>
+      <div class="mc-vital__n">{{ metrics.recommended_agents }}</div>
+      <div class="mc-vital__sub">{% translate "ready to run goals" %}</div>
+    </article>
   </section>
 
-  <section class="ai-guide-card ai-guide-card--workspace ai-guide-card--game">
-    <span class="ai-guide-card__eyebrow">{% translate "How GAME works" %}</span>
-    <h2>{% translate "A GAME session is a goal-driven decision loop" %}</h2>
-    <div class="ai-flow-strip" aria-label="{% translate 'GAME loop' %}">
-      <span>{% translate "Goal" %}</span>
-      <span>{% translate "Entry agent" %}</span>
-      <span>{% translate "Decision" %}</span>
-      <span>{% translate "Action + observation" %}</span>
-      <span>{% translate "Memory or final answer" %}</span>
+  <section class="mc-panel">
+    <div class="mc-panel__body">
+      <div class="mc-eyebrow">{% translate "How GAME works" %}</div>
+      <p style="margin:8px 0 0;color:var(--mc-text-soft)">{% translate "A GAME session is a goal-driven decision loop:" %}
+        <strong>{% translate "Goal" %}</strong> →
+        <strong>{% translate "Entry agent" %}</strong> →
+        <strong>{% translate "Decision" %}</strong> →
+        <strong>{% translate "Action + observation" %}</strong> →
+        <strong>{% translate "Memory or final answer" %}</strong>.
+        {% translate "Keep max iterations low while testing and review the timeline after each run." %}</p>
     </div>
-    <p>{% translate "Use GAME when the next step is not fixed in advance. Keep max iterations low while testing and review the timeline after each run." %}</p>
   </section>
 
-  <section class="ai-game-graph-layout">
-    <div class="ai-control__graph-panel">
-      <div class="ai-control__panel-heading">
-        <div>
-          <h2>{{ game_graph.title }}</h2>
-          <span>{{ game_graph.subtitle }}</span>
-        </div>
-        <span id="ai-control-node-count"></span>
+  <!-- decision graph (same engine as the control center) -->
+  <section class="mc-graph" data-mc-graph aria-label="{% translate 'GAME decision graph' %}">
+    <div class="mc-graph__bar">
+      <div class="mc-graph__title">
+        <strong>{{ game_graph.title }}</strong>
+        <span>{{ game_graph.subtitle }}</span>
       </div>
-      <div class="ai-control__toolbar ai-control__toolbar--compact" aria-label="{% translate 'GAME graph filters' %}">
-        <label>
-          <span>{% translate "Filter" %}</span>
-          <input id="ai-control-search" type="search" placeholder="{% translate 'Search goal, agent, action or memory' %}">
-        </label>
-        <label class="ai-control__depth">
-          <span>{% translate "Focus depth" %}</span>
-          <select id="ai-control-depth">
-            <option value="1" selected>{% translate "1 hop" %}</option>
-            <option value="2">{% translate "2 hops" %}</option>
-            <option value="3">{% translate "3 hops" %}</option>
-          </select>
-        </label>
-        <label class="ai-control__isolate">
-          <span>{% translate "Mode" %}</span>
-          <span class="ai-toggle">
-            <input id="ai-control-isolate" type="checkbox" checked>
-            <span>{% translate "Isolate focus" %}</span>
-          </span>
-        </label>
-        <button type="button" class="ai-chip ai-chip--ghost" id="ai-control-clear-focus">{% translate "Clear focus" %}</button>
-      </div>
-      <div class="ai-control__graph-scroll ai-control__graph-scroll--compact">
-        <svg id="ai-control-graph" role="img" aria-label="{% translate 'GAME decision graph' %}"></svg>
+      <div class="mc-graph__tools">
+        <input class="mc-vsearch" data-mc-search type="search" placeholder="{% translate 'Filter goal, agent, action…' %}" aria-label="{% translate 'Filter graph nodes' %}">
+        <select class="mc-vselect" data-mc-depth aria-label="{% translate 'Focus depth' %}">
+          <option value="1" selected>{% translate "1 hop" %}</option>
+          <option value="2">{% translate "2 hops" %}</option>
+          <option value="3">{% translate "3 hops" %}</option>
+        </select>
+        <label class="mc-vtoggle"><input type="checkbox" data-mc-isolate>{% translate "Isolate" %}</label>
+        <button class="mc-vaction" data-mc-fullscreen type="button" aria-pressed="false" data-enter="{% translate 'Full screen' %}" data-exit="{% translate 'Exit full screen' %}">{% translate "Full screen" %}</button>
+        <div class="mc-chiprow" data-mc-chips role="group" aria-label="{% translate 'Filter by node type' %}"></div>
       </div>
     </div>
-
-    <aside class="ai-control__side">
-      <section class="ai-control__panel ai-control__legend">
-        <h2>{% translate "GAME legend" %}</h2>
-        <ul class="ai-control__legend-list">
-          {% for item in game_graph.legend %}
-            <li>
-              <span class="ai-legend-dot ai-legend-dot--{{ item.kind }}"></span>
-              <strong>{{ item.label }}</strong>
-              <small>{{ item.description }}</small>
-            </li>
-          {% endfor %}
-        </ul>
-      </section>
-      <section class="ai-control__panel" id="ai-control-selection">
-        <h2>{% translate "Selected node" %}</h2>
-        <p>{% translate "Select a GAME node to inspect how the goal, decision, action and memory connect." %}</p>
-      </section>
-    </aside>
+    <div class="mc-stage" data-mc-stage>
+      <div class="mc-stage__inner" data-mc-stage-inner>
+        <canvas data-mc-edges></canvas>
+      </div>
+      <aside class="mc-drawer" data-mc-drawer aria-live="polite">
+        <button class="mc-drawer__close" data-mc-drawer-close type="button" aria-label="{% translate 'Close detail' %}">✕</button>
+        <div data-mc-drawer-body></div>
+      </aside>
+    </div>
+    <div class="mc-graph__foot">
+      <span class="mc-relkey" style="color:#38bdf8"><i></i>guides</span>
+      <span class="mc-relkey" style="color:#fb7185"><i></i>decides</span>
+      <span class="mc-relkey" style="color:#fb923c"><i></i>acts</span>
+      <span class="mc-relkey" style="color:#a78bfa"><i></i>observes</span>
+      <span class="mc-relkey" style="color:#34d399"><i></i>finishes</span>
+      <span class="mc-count" data-mc-count></span>
+    </div>
   </section>
 
-  <section class="ai-workspace-board">
-    <article class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+  <section class="mc-twocol">
+    <article class="mc-panel">
+      <div class="mc-panel__head">
         <h2>{% translate "GAME sessions" %}</h2>
         <a href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=game">{% translate "View all" %}</a>
       </div>
-      <div class="ai-run-list">
+      <div class="mc-panel__body mc-stack">
         {% for session in game_sessions %}
-          <a class="ai-run-card ai-run-card--{{ session.status }}" href="{% url 'admin:ai_hub_executionsession_change' session.id %}">
+          <a class="mc-runcard mc-runcard--{{ session.status }}" href="{% url 'admin:ai_hub_executionsession_change' session.id %}">
             <header>
-              <strong>{{ session.source_label|default:"GAME session" }}</strong>
-              <span class="ai-status-pill">{{ session.status }}</span>
+              <b>{{ session.source_label|default:"GAME session" }}</b>
+              <span class="mc-pill mc-pill--{{ session.status }}">{{ session.status }}</span>
             </header>
             <small>{% if session.entry_agent %}{{ session.entry_agent.name }}{% else %}{% translate "No entry agent" %}{% endif %}</small>
           </a>
         {% empty %}
-          <article class="ai-empty-state">
-            <strong>{% translate "No GAME sessions yet" %}</strong>
-            <p>{% translate "Create one session with a short goal, run it, then inspect every decision in the timeline." %}</p>
-            <a class="button default" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Create GAME session" %}</a>
-          </article>
+          <p class="mc-empty">{% translate "No GAME sessions yet. Create one with a short goal, run it, then inspect every decision in the timeline." %}</p>
+          <a class="mc-btn mc-btn--accent" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Create GAME session" %}</a>
         {% endfor %}
       </div>
     </article>
 
-    <article class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+    <article class="mc-panel">
+      <div class="mc-panel__head">
         <h2>{% translate "GAME agents" %}</h2>
         <a href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "View agents" %}</a>
       </div>
-      <div class="ai-run-list">
+      <div class="mc-panel__body mc-stack">
         {% for agent in game_agents %}
-          <a class="ai-run-card" href="{% url 'admin:ai_hub_agentprofile_change' agent.id %}">
+          <a class="mc-runcard" href="{% url 'admin:ai_hub_agentprofile_change' agent.id %}">
             <header>
-              <strong>{{ agent.name }}</strong>
-              <span class="ai-status-pill ai-status-pill--ok">{{ agent.game_fit_label }}</span>
+              <b>{{ agent.name }}</b>
+              <span class="mc-pill mc-pill--ok">{{ agent.game_fit_label }}</span>
             </header>
             <small>{{ agent.role }} · {{ agent.game_sessions_total }} {% translate "session(s)" %}</small>
           </a>
         {% empty %}
-          <article class="ai-empty-state">
-            <strong>{% translate "No GAME-ready agents detected" %}</strong>
-            <p>{% translate "Create an active agent whose prompt mentions goal, action, memory, observations and final_answer." %}</p>
-            <a class="button default" href="{% url 'admin:ai_hub_agentprofile_add' %}">{% translate "Create agent" %}</a>
-          </article>
+          <p class="mc-empty">{% translate "No GAME-ready agents detected. Create an active agent whose prompt mentions goal, action, memory, observations and final_answer." %}</p>
+          <a class="mc-btn mc-btn--accent" href="{% url 'admin:ai_hub_agentprofile_add' %}">{% translate "Create agent" %}</a>
         {% endfor %}
       </div>
     </article>
   </section>
+
 </div>
 {% endblock %}

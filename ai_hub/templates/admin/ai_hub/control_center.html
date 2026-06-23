@@ -3,13 +3,13 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260623-missiondeck-v10">
 {% endblock %}
 
 {% block extrahead %}
 {{ block.super }}
 {{ graph|json_script:"ai-control-graph-data" }}
-<script defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260606-guided-v8"></script>
+<script defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260623-missiondeck-v10"></script>
 {% endblock %}
 
 {% block breadcrumbs %}
@@ -21,287 +21,307 @@
 {% endblock %}
 
 {% block content %}
-<div class="ai-control">
-  <header class="ai-control__header">
+<div class="ai-console">
+
+  <header class="mc-head">
     <div>
+      <div class="mc-eyebrow">// <b>AI Hub</b> · {% translate "operations console" %}</div>
       <h1>{% translate "AI Hub Control Center" %}</h1>
-      <p>{% translate "Operational map for providers, models, agents, knowledge, tools, pipelines and execution health." %}</p>
+      <p>{% translate "System health, the connection graph and what needs attention — at a glance." %}</p>
     </div>
-    <nav class="ai-control__actions" aria-label="{% translate 'Control center actions' %}">
-      <a class="button" href="{% url 'admin:ai_hub_pipelinedefinition_changelist' %}">{% translate "Pipelines" %}</a>
-      <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Sessions" %}</a>
-      <a class="button" href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "Agents" %}</a>
+    <nav class="mc-head__actions" aria-label="{% translate 'Control center actions' %}">
+      <a class="mc-btn mc-btn--primary" href="{% url 'admin:ai_hub_pipelinedefinition_changelist' %}">{% translate "Pipelines" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Sessions" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "Agents" %}</a>
     </nav>
   </header>
 
-  <section class="ai-control__metrics" aria-label="{% translate 'System metrics' %}">
-    <article><span>{% translate "Providers" %}</span><strong>{{ metrics.providers }}</strong></article>
-    <article><span>{% translate "Models" %}</span><strong>{{ metrics.models }}</strong></article>
-    <article><span>{% translate "Agents" %}</span><strong>{{ metrics.agents }}</strong></article>
-    <article><span>{% translate "Pipelines" %}</span><strong>{{ metrics.pipelines }}</strong></article>
-    <article><span>{% translate "Orchestrator" %}</span><strong>{{ metrics.orchestrator_sessions }}</strong></article>
-    <article><span>{% translate "Sessions" %}</span><strong>{{ metrics.execution_sessions }}</strong></article>
-    <article><span>{% translate "GAME" %}</span><strong>{{ metrics.game_sessions }}</strong></article>
-    <article><span>{% translate "Success rate" %}</span><strong>{{ metrics.success_rate }}%</strong></article>
-    <article><span>{% translate "Failed" %}</span><strong>{{ metrics.failed_runs }}</strong></article>
-    <article><span>{% translate "Avg latency" %}</span><strong>{{ metrics.avg_latency }} ms</strong></article>
-  </section>
-
-  <section class="ai-control__status-map" aria-label="{% translate 'Status summary' %}">
-    <article class="ai-status-card ai-status-card--ok">
-      <span>{% translate "Healthy" %}</span>
-      <strong>{{ status_summary.ok }}</strong>
+  <!-- vitals -->
+  <section class="mc-vitals" aria-label="{% translate 'System vitals' %}">
+    <article class="mc-vital mc-vital--accent">
+      <div class="mc-eyebrow">{% translate "Success rate" %}</div>
+      <div class="mc-vital__n">{{ metrics.success_rate }}<small>%</small></div>
+      <div class="mc-vital__sub">{{ metrics.runs }} {% translate "runs" %} · {{ metrics.failed_runs }} {% translate "failed" %}</div>
     </article>
-    <article class="ai-status-card ai-status-card--warning">
-      <span>{% translate "Needs review" %}</span>
-      <strong>{{ status_summary.warning }}</strong>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "Avg latency" %}</div>
+      <div class="mc-vital__n">{{ metrics.avg_latency }}<small> ms</small></div>
+      <div class="mc-vital__sub">{% translate "per execution step" %}</div>
     </article>
-    <article class="ai-status-card ai-status-card--error">
-      <span>{% translate "Errors" %}</span>
-      <strong>{{ status_summary.error }}</strong>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "Sessions" %}</div>
+      <div class="mc-vital__n">{{ metrics.execution_sessions }}</div>
+      <div class="mc-vital__sub">{{ metrics.orchestrator_sessions }} {% translate "orchestrator" %} · {{ metrics.game_sessions }} GAME</div>
     </article>
-    <article class="ai-status-card ai-status-card--inactive">
-      <span>{% translate "Inactive" %}</span>
-      <strong>{{ status_summary.inactive }}</strong>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "Agents" %}</div>
+      <div class="mc-vital__n">{{ metrics.agents }}</div>
+      <div class="mc-vital__sub">{{ metrics.models }} {% translate "models" %} · {{ metrics.providers }} {% translate "providers" %}</div>
     </article>
   </section>
 
-  <section class="ai-control__toolbar" aria-label="{% translate 'Graph filters' %}">
-    <label class="ai-control__pipeline-filter">
-      <span>{% translate "Pipeline scope" %}</span>
-      <select id="ai-control-pipeline-scope">
-        <option value="all">{% translate "All pipelines" %}</option>
-        {% for pipeline in pipeline_summaries %}
-          <option value="{{ pipeline.id }}">{{ pipeline.name }}</option>
+  <!-- inventory line -->
+  <div class="mc-invline" aria-label="{% translate 'System inventory' %}">
+    <span class="mc-lead">{% translate "Inventory" %}</span>
+    <b>{{ metrics.providers }}</b>&nbsp;{% translate "providers" %} <span class="mc-sep">·</span>
+    <b>{{ metrics.models }}</b>&nbsp;{% translate "models" %} <span class="mc-sep">·</span>
+    <b>{{ metrics.agents }}</b>&nbsp;{% translate "agents" %} <span class="mc-sep">·</span>
+    <b>{{ metrics.pipelines }}</b>&nbsp;{% translate "pipelines" %} <span class="mc-sep">·</span>
+    <b>{{ metrics.orchestrator_sessions }}</b>&nbsp;{% translate "orchestrator" %} <span class="mc-sep">·</span>
+    <b>{{ metrics.game_sessions }}</b>&nbsp;GAME
+  </div>
+
+  <!-- health bar -->
+  <section class="mc-panel" aria-label="{% translate 'System status' %}">
+    <div class="mc-panel__body">
+      <div class="mc-healthbar">
+        <i class="ok" style="flex-grow: {{ status_summary.ok }}"></i>
+        <i class="warn" style="flex-grow: {{ status_summary.warning }}"></i>
+        <i class="err" style="flex-grow: {{ status_summary.error }}"></i>
+        <i class="off" style="flex-grow: {{ status_summary.inactive }}"></i>
+        <i class="off" style="flex-grow: {{ status_summary.unknown }}"></i>
+      </div>
+      <div class="mc-health-legend">
+        <span class="item"><span class="dot" style="background:var(--mc-ok)"></span>{% translate "Healthy" %} <b>{{ status_summary.ok }}</b></span>
+        <span class="item"><span class="dot" style="background:var(--mc-warn)"></span>{% translate "Needs review" %} <b>{{ status_summary.warning }}</b></span>
+        <span class="item"><span class="dot" style="background:var(--mc-error)"></span>{% translate "Errors" %} <b>{{ status_summary.error }}</b></span>
+        <span class="item"><span class="dot" style="background:var(--mc-off)"></span>{% translate "Inactive" %} <b>{{ status_summary.inactive }}</b></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- the graph -->
+  <section class="mc-graph" data-mc-graph aria-label="{% translate 'AI pipeline connection graph' %}">
+    <div class="mc-graph__bar">
+      <div class="mc-graph__title">
+        <strong>{% translate "Connection graph" %}</strong>
+        <span>{% translate "How providers, models, agents, knowledge, tools and pipelines connect" %}</span>
+      </div>
+      <div class="mc-graph__tools">
+        <select class="mc-vselect" data-mc-scope aria-label="{% translate 'Pipeline scope' %}">
+          <option value="all">{% translate "All pipelines" %}</option>
+          {% for pipeline in pipeline_summaries %}
+            <option value="{{ pipeline.id }}">{{ pipeline.name }}</option>
+          {% endfor %}
+        </select>
+        <input class="mc-vsearch" data-mc-search type="search" placeholder="{% translate 'Filter nodes…' %}" aria-label="{% translate 'Filter graph nodes' %}">
+        <select class="mc-vselect" data-mc-depth aria-label="{% translate 'Focus depth' %}">
+          <option value="1" selected>{% translate "1 hop" %}</option>
+          <option value="2">{% translate "2 hops" %}</option>
+          <option value="3">{% translate "3 hops" %}</option>
+        </select>
+        <label class="mc-vtoggle"><input type="checkbox" data-mc-isolate>{% translate "Isolate" %}</label>
+        <button class="mc-vaction" data-mc-fullscreen type="button" aria-pressed="false" data-enter="{% translate 'Full screen' %}" data-exit="{% translate 'Exit full screen' %}">{% translate "Full screen" %}</button>
+        <div class="mc-chiprow" data-mc-chips role="group" aria-label="{% translate 'Filter by node type' %}"></div>
+      </div>
+    </div>
+    <div class="mc-stage" data-mc-stage>
+      <div class="mc-stage__inner" data-mc-stage-inner>
+        <canvas data-mc-edges></canvas>
+      </div>
+      <aside class="mc-drawer" data-mc-drawer aria-live="polite">
+        <button class="mc-drawer__close" data-mc-drawer-close type="button" aria-label="{% translate 'Close detail' %}">✕</button>
+        <div data-mc-drawer-body></div>
+      </aside>
+    </div>
+    <div class="mc-graph__foot">
+      <span class="mc-relkey" style="color:#38bdf8"><i></i>serves</span>
+      <span class="mc-relkey" style="color:#fb7185"><i></i>runs</span>
+      <span class="mc-relkey" style="color:#a78bfa"><i></i>informs</span>
+      <span class="mc-relkey" style="color:#fb923c"><i></i>enables</span>
+      <span class="mc-relkey" style="color:#34d399"><i></i>contains</span>
+      <span class="mc-relkey" style="color:#f472b6"><i></i>calls</span>
+      <span class="mc-count" data-mc-count></span>
+    </div>
+  </section>
+
+  <!-- attention -->
+  <section class="mc-panel mc-attnbox" data-mc-attention>
+    <div class="mc-panel__head">
+      <h2>{% translate "Needs attention" %}</h2>
+      <span class="mc-eyebrow">{{ attention_items|length }} {% translate "open" %}{% if metrics.waiting_runs %} · {{ metrics.waiting_runs }} {% translate "waiting" %}{% endif %}</span>
+    </div>
+    <div class="mc-panel__body">
+      <div class="mc-attnbar">
+        <div class="mc-tabs mc-tabs--compact" role="tablist" aria-label="{% translate 'Attention view' %}">
+          <button class="mc-tab is-on" data-mc-attn-view="open" type="button">{% translate "Open" %} <span class="tag" data-mc-attn-open-count>{{ attention_items|length }}</span></button>
+          <button class="mc-tab" data-mc-attn-view="archived" type="button">{% translate "Archived" %} <span class="tag" data-mc-attn-archived-count>0</span></button>
+        </div>
+        <div class="mc-attnbar__tools">
+          <select class="mc-vselect" data-mc-attn-filter aria-label="{% translate 'Filter attention items' %}">
+            <option value="all">{% translate "All types" %}</option>
+            <option value="error">{% translate "Errors" %}</option>
+            <option value="warning">{% translate "Warnings" %}</option>
+            <option value="step">{% translate "Step failures" %}</option>
+            <option value="provider">{% translate "Providers" %}</option>
+            <option value="model">{% translate "Models" %}</option>
+            <option value="agent">{% translate "Agents" %}</option>
+            <option value="pipeline">{% translate "Pipelines" %}</option>
+            <option value="knowledge">{% translate "Knowledge" %}</option>
+          </select>
+          <select class="mc-vselect" data-mc-attn-sort aria-label="{% translate 'Sort attention items' %}">
+            <option value="date">{% translate "Newest first" %}</option>
+            <option value="relevance">{% translate "Most relevant" %}</option>
+            <option value="severity">{% translate "Severity" %}</option>
+          </select>
+        </div>
+      </div>
+      <ul class="mc-attn" data-mc-attn-list>
+        {% for item in attention_items %}
+          <li class="sev-{{ item.severity }}"
+              data-mc-attn-item
+              data-id="{{ item.id }}"
+              data-severity="{{ item.severity }}"
+              data-source="{{ item.source }}"
+              data-relevance="{{ item.relevance }}"
+              data-timestamp="{% if item.occurred_at %}{{ item.occurred_at|date:'c' }}{% endif %}"
+              title="{{ item.hover }}">
+            <span class="ic">{% if item.severity == "error" %}!{% else %}▲{% endif %}</span>
+            <span class="msg">
+              <b>{{ item.title }}</b>
+              <small>{% if item.occurred_at %}{{ item.occurred_at|date:"Y-m-d H:i" }} · {% endif %}{{ item.detail }}</small>
+            </span>
+            <span class="mc-attn__actions">
+              <span class="mc-pill mc-pill--{{ item.severity }}">{{ item.severity }}</span>
+              {% if item.url %}<a class="mc-iconbtn mc-iconbtn--accent" href="{{ item.url }}" title="{% translate 'Open incident' %}" aria-label="{% translate 'Open incident' %}">↗<span>{% translate "Open incident" %}</span></a>{% endif %}
+              <button class="mc-iconbtn" data-mc-attn-snooze type="button" title="{% translate 'Silence 24h' %}" aria-label="{% translate 'Silence 24h' %}">⏱<span>{% translate "Silence 24h" %}</span></button>
+              <button class="mc-iconbtn" data-mc-attn-archive type="button" title="{% translate 'Archive' %}" aria-label="{% translate 'Archive' %}">✓<span>{% translate "Archive" %}</span></button>
+              <button class="mc-iconbtn" data-mc-attn-restore type="button" title="{% translate 'Restore' %}" aria-label="{% translate 'Restore' %}" hidden>↺<span>{% translate "Restore" %}</span></button>
+            </span>
+          </li>
+        {% empty %}
+          <li class="mc-attn__empty">{% translate "All systems nominal — no configuration warnings or failing steps." %}</li>
         {% endfor %}
-      </select>
-    </label>
-    <label>
-      <span>{% translate "Filter" %}</span>
-      <input id="ai-control-search" type="search" placeholder="{% translate 'Search node name, type or detail' %}">
-    </label>
-    <label class="ai-control__depth">
-      <span>{% translate "Focus depth" %}</span>
-      <select id="ai-control-depth">
-        <option value="1" selected>{% translate "1 hop" %}</option>
-        <option value="2">{% translate "2 hops" %}</option>
-        <option value="3">{% translate "3 hops" %}</option>
-      </select>
-    </label>
-    <label class="ai-control__isolate">
-      <span>{% translate "Mode" %}</span>
-      <span class="ai-toggle">
-        <input id="ai-control-isolate" type="checkbox" checked>
-        <span>{% translate "Isolate focus" %}</span>
-      </span>
-    </label>
-    <div class="ai-control__chips" role="group" aria-label="{% translate 'Node type filters' %}">
-      <button type="button" class="ai-chip is-active" data-kind="all">{% translate "All" %}</button>
-      <button type="button" class="ai-chip" data-kind="provider">{% translate "Providers" %}</button>
-      <button type="button" class="ai-chip" data-kind="model">{% translate "Models" %}</button>
-      <button type="button" class="ai-chip" data-kind="agent">{% translate "Agents" %}</button>
-      <button type="button" class="ai-chip" data-kind="pipeline">{% translate "Pipelines" %}</button>
-      <button type="button" class="ai-chip" data-kind="step">{% translate "Steps" %}</button>
-      <button type="button" class="ai-chip" data-kind="knowledge">{% translate "Knowledge" %}</button>
-      <button type="button" class="ai-chip" data-kind="tool">{% translate "Tools" %}</button>
-      <button type="button" class="ai-chip ai-chip--ghost" id="ai-control-clear-focus">{% translate "Clear focus" %}</button>
+      </ul>
+      <p class="mc-attn__empty" data-mc-attn-empty hidden>{% translate "No incidents match the current view." %}</p>
+      <ul class="mc-attn mc-attn--legacy" hidden>
+        {% for row in top_fail_steps %}
+          <li class="sev-error">
+            <span class="ic">!</span>
+            <span class="msg">{{ row.pipeline_step__pipeline__name }} · {% translate "step" %} {{ row.pipeline_step__order }} · {{ row.pipeline_step__agent__name }}
+              <small>{{ row.total }} {% translate "failed run(s)" %}</small></span>
+            <span class="mc-pill mc-pill--error">{% translate "error" %}</span>
+          </li>
+        {% endfor %}
+        {% for warning in warnings %}
+          <li class="sev-warn">
+            <span class="ic">▲</span>
+            <span class="msg">{{ warning }}</span>
+            <span class="mc-pill mc-pill--warning">{% translate "warn" %}</span>
+          </li>
+        {% endfor %}
+        {% if not top_fail_steps and not warnings %}
+          <li class="mc-attn__empty">{% translate "All systems nominal — no configuration warnings or failing steps." %}</li>
+        {% endif %}
+      </ul>
     </div>
   </section>
 
-  <section class="ai-control__main">
-    <div class="ai-control__graph-panel">
-      <div class="ai-control__panel-heading">
-        <h2>{% translate "Connection graph" %}</h2>
-        <span id="ai-control-node-count"></span>
-      </div>
-      <div class="ai-control__graph-scroll">
-        <svg id="ai-control-graph" role="img" aria-label="{% translate 'AI pipeline connection graph' %}"></svg>
-      </div>
+  <!-- detail tabs -->
+  <section class="mc-section">
+    <div class="mc-tabs" data-mc-tabs role="tablist" aria-label="{% translate 'System detail' %}">
+      <button class="mc-tab is-on" data-mc-tab="mc-tab-pipelines" role="tab" type="button">{% translate "Pipelines" %} <span class="tag">{{ pipeline_summaries|length }}</span></button>
+      <button class="mc-tab" data-mc-tab="mc-tab-models" role="tab" type="button">{% translate "Models" %} <span class="tag">{{ model_catalog|length }}</span></button>
+      <button class="mc-tab" data-mc-tab="mc-tab-sessions" role="tab" type="button">{% translate "Sessions" %}</button>
+      <button class="mc-tab" data-mc-tab="mc-tab-critical" role="tab" type="button">{% translate "Critical nodes" %}</button>
+      <button class="mc-tab" data-mc-tab="mc-tab-checklist" role="tab" type="button">{% translate "Checklist" %}</button>
     </div>
 
-    <aside class="ai-control__side">
-      <section class="ai-control__panel ai-control__legend">
-        <h2>{% translate "Legend" %}</h2>
-        <ul class="ai-control__legend-list">
-          {% for item in legend %}
-            <li>
-              <span class="ai-legend-dot ai-legend-dot--{{ item.kind }}"></span>
-              <strong>{{ item.label }}</strong>
-              <small>{{ item.description }}</small>
-            </li>
-          {% endfor %}
-        </ul>
-        <h3 class="ai-legend-subtitle">{% translate "Relations" %}</h3>
-        <ul class="ai-relation-legend">
-          <li><span style="--edge:#38bdf8"></span>{% translate "serves" %}</li>
-          <li><span style="--edge:#f43f5e"></span>{% translate "runs" %}</li>
-          <li><span style="--edge:#a78bfa"></span>{% translate "informs" %}</li>
-          <li><span style="--edge:#fb923c"></span>{% translate "enables" %}</li>
-          <li><span style="--edge:#34d399"></span>{% translate "contains" %}</li>
-          <li><span style="--edge:#f472b6"></span>{% translate "calls" %}</li>
-          <li><span style="--edge:#94a3b8"></span>{% translate "next" %}</li>
-          <li><span style="--edge:#f59e0b"></span>{% translate "fallback" %}</li>
-        </ul>
-      </section>
-      <section class="ai-control__panel">
-        <h2>{% translate "Warnings" %}</h2>
-        <ul class="ai-control__list">
-          {% for warning in warnings %}
-            <li>{{ warning }}</li>
-          {% empty %}
-            <li>{% translate "No configuration warnings detected." %}</li>
-          {% endfor %}
-        </ul>
-      </section>
-      <section class="ai-control__panel">
-        <h2>{% translate "Top failing steps" %}</h2>
-        <ul class="ai-control__list">
-          {% for row in top_fail_steps %}
-            <li>
-              {{ row.pipeline_step__pipeline__name }} /
-              {% translate "step" %} {{ row.pipeline_step__order }} /
-              {{ row.pipeline_step__agent__name }}:
-              {{ row.total }}
-            </li>
-          {% empty %}
-            <li>{% translate "No failing steps yet." %}</li>
-          {% endfor %}
-        </ul>
-      </section>
-      <section class="ai-control__panel" id="ai-control-selection">
-        <h2>{% translate "Selected node" %}</h2>
-        <p>{% translate "Select a node in the graph to inspect its role and open the admin record." %}</p>
-      </section>
-    </aside>
-  </section>
-
-  <section class="ai-control__lower-grid">
-    <div class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-        <h2>{% translate "Pipeline trace" %}</h2>
-        <a href="{% url 'admin:ai_hub_pipelinedefinition_changelist' %}">{% translate "Edit pipelines" %}</a>
-      </div>
-      <div class="ai-pipeline-list">
+    <div class="mc-tabpanel" id="mc-tab-pipelines" role="tabpanel">
+      <div class="mc-stack">
         {% for pipeline in pipeline_summaries %}
-          <article class="ai-pipeline-card ai-pipeline-card--{{ pipeline.status }}">
+          <article class="mc-pipe mc-pipe--{{ pipeline.status }}">
             <header>
               <div>
-                <h3><a href="{{ pipeline.url }}">{{ pipeline.name }}</a></h3>
-                <p>{{ pipeline.total_runs }} {% translate "runs" %}, {{ pipeline.failed_runs }} {% translate "failed" %}</p>
+                <h4><a href="{{ pipeline.url }}">{{ pipeline.name }}</a></h4>
+                <p>{{ pipeline.total_runs }} {% translate "runs" %} · {{ pipeline.failed_runs }} {% translate "failed" %}</p>
               </div>
-              <span class="ai-status-pill ai-status-pill--{{ pipeline.status }}">{{ pipeline.status }}</span>
+              <span class="mc-pill mc-pill--{{ pipeline.status }}">{{ pipeline.status }}</span>
             </header>
             <ol>
               {% for step in pipeline.steps %}
                 <li>
-                  <a href="{{ step.url }}">{{ step.order }}. {{ step.agent }}</a>
-                  <span>{{ step.model }}</span>
-                  <small>{{ step.provider }} / {{ step.on_error }}{% if step.avg_latency %} / {{ step.avg_latency }} ms{% endif %}</small>
+                  <span class="ord">{{ step.order }}</span>
+                  <span class="who"><a href="{{ step.url }}">{{ step.agent }}</a><small>{{ step.model }} · {{ step.provider }} · {{ step.on_error }}</small></span>
+                  <span class="mc-pill mc-pill--{{ step.status }}">{% if step.avg_latency %}{{ step.avg_latency }} ms{% else %}{{ step.status }}{% endif %}</span>
                 </li>
               {% empty %}
-                <li>{% translate "No steps configured." %}</li>
+                <li><span class="ord"></span><span class="who mc-empty">{% translate "No steps configured." %}</span><span></span></li>
               {% endfor %}
             </ol>
           </article>
         {% empty %}
-          <p>{% translate "No pipelines configured yet." %}</p>
+          <p class="mc-empty">{% translate "No pipelines configured yet." %}</p>
         {% endfor %}
       </div>
     </div>
 
-    <div class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-        <h2>{% translate "Model catalog" %}</h2>
-        <a href="{% url 'admin:ai_hub_modelconfig_changelist' %}">{% translate "Edit models" %}</a>
-      </div>
-      <div class="ai-model-table-wrap">
-        <table class="ai-model-table">
-          <thead>
-            <tr>
-              <th>{% translate "Model" %}</th>
-              <th>{% translate "Provider" %}</th>
-              <th>{% translate "Status" %}</th>
-              <th>{% translate "Defaults" %}</th>
-            </tr>
-          </thead>
+    <div class="mc-tabpanel" id="mc-tab-models" role="tabpanel" hidden>
+      <div class="mc-panel"><div class="mc-panel__body mc-tablewrap">
+        <table class="mc-cat">
+          <thead><tr>
+            <th>{% translate "Model" %}</th><th>{% translate "Provider" %}</th><th>{% translate "Status" %}</th><th>{% translate "Defaults" %}</th>
+          </tr></thead>
           <tbody>
             {% for model in model_catalog %}
               <tr>
-                <td><a href="{{ model.url }}">{{ model.name }}</a></td>
-                <td>{{ model.provider }} <span>{{ model.provider_type }}</span></td>
-                <td><span class="ai-status-pill ai-status-pill--{{ model.status }}">{{ model.detail }}</span></td>
-                <td>{{ model.temperature }} temp / {{ model.max_tokens }} tokens{% if model.supports_tools %} / tools{% endif %}</td>
+                <td class="who"><a href="{{ model.url }}">{{ model.name }}</a></td>
+                <td>{{ model.provider }} <small>{{ model.provider_type }}</small></td>
+                <td><span class="mc-pill mc-pill--{{ model.status }}">{{ model.detail }}</span></td>
+                <td><small>{{ model.temperature }} temp · {{ model.max_tokens }} tok{% if model.supports_tools %} · tools{% endif %}</small></td>
               </tr>
             {% empty %}
-              <tr><td colspan="4">{% translate "No models configured yet." %}</td></tr>
+              <tr><td colspan="4" class="mc-empty">{% translate "No models configured yet." %}</td></tr>
             {% endfor %}
           </tbody>
         </table>
-      </div>
+      </div></div>
     </div>
-  </section>
 
-  <section class="ai-control__analytics-grid">
-    <div class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-        <h2>{% translate "Operational checklist" %}</h2>
-      </div>
-      <div class="ai-checklist">
-        {% for item in health_checklist %}
-          <article class="ai-checklist__item ai-checklist__item--{{ item.status }}">
-            <strong>{{ item.label }}</strong>
-            <span>{{ item.detail }}</span>
-            {% if item.status != "ok" %}
-              <small>{{ item.action }}</small>
-            {% endif %}
-          </article>
+    <div class="mc-tabpanel" id="mc-tab-sessions" role="tabpanel" hidden>
+      <div class="mc-stack">
+        {% for session in recent_sessions %}
+          <a class="mc-runcard mc-runcard--{{ session.status }}" href="{{ session.url }}">
+            <header>
+              <b>#{{ session.id }} {% if session.pipeline__name %}{{ session.pipeline__name }}{% else %}{{ session.entry_agent__name|default:"Session" }}{% endif %}</b>
+              <span class="mc-pill mc-pill--{{ session.status }}">{{ session.status }}</span>
+            </header>
+            <small>{{ session.runtime_kind }} · {{ session.runtime_mode }} · {{ session.created_at }}{% if session.error_detail %} · {{ session.error_detail|truncatechars:80 }}{% endif %}</small>
+          </a>
+        {% empty %}
+          <p class="mc-empty">{% translate "No sessions yet." %}</p>
         {% endfor %}
       </div>
     </div>
 
-    <div class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-        <h2>{% translate "Critical nodes" %}</h2>
-      </div>
-      <ol class="ai-critical-list">
+    <div class="mc-tabpanel" id="mc-tab-critical" role="tabpanel" hidden>
+      <ol class="mc-critical">
         {% for node in critical_nodes %}
           <li>
-            <a href="{{ node.url }}">{{ node.label }}</a>
-            <span class="ai-status-pill ai-status-pill--{{ node.status }}">{{ node.kind }}</span>
-            <small>{{ node.incoming }} in / {{ node.outgoing }} out / {{ node.total }} total</small>
+            <header>
+              <b><a href="{{ node.url }}">{{ node.label }}</a></b>
+              <span class="mc-pill mc-pill--{{ node.status }}">{{ node.kind }}</span>
+            </header>
+            <small>{{ node.incoming }} in · {{ node.outgoing }} out · {{ node.total }} {% translate "links" %}</small>
           </li>
         {% empty %}
-          <li>{% translate "No connected nodes yet." %}</li>
+          <li class="mc-empty">{% translate "No connected nodes yet." %}</li>
         {% endfor %}
       </ol>
     </div>
 
-    <div class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-        <h2>{% translate "Recent sessions" %}</h2>
-        <a href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "View all" %}</a>
-      </div>
-      <div class="ai-run-list">
-        {% for session in recent_sessions %}
-          <article class="ai-run-card ai-run-card--{{ session.status }}">
-            <header>
-              <a href="{{ session.url }}">
-                #{{ session.id }}
-                {% if session.pipeline__name %}{{ session.pipeline__name }}{% else %}{{ session.entry_agent__name|default:"Session" }}{% endif %}
-              </a>
-              <span class="ai-status-pill ai-status-pill--{{ session.status }}">{{ session.status }}</span>
-            </header>
-            <p>{{ session.source_label|default:"No source" }}</p>
-            <small>{{ session.runtime_kind }} / {{ session.runtime_mode }} / {{ session.created_at }}</small>
-            {% if session.error_detail %}
-              <small>{{ session.error_detail|truncatechars:120 }}</small>
-            {% endif %}
+    <div class="mc-tabpanel" id="mc-tab-checklist" role="tabpanel" hidden>
+      <div class="mc-check">
+        {% for item in health_checklist %}
+          <article class="mc-check__item {% if item.status == 'ok' %}done{% else %}{{ item.status }}{% endif %}">
+            <span class="mark">{% if item.status == 'ok' %}✓{% else %}!{% endif %}</span>
+            <span><b>{{ item.label }}</b><small>{{ item.detail }}</small></span>
+            <span class="mc-pill mc-pill--{% if item.status == 'ok' %}ok{% else %}warning{% endif %}">{{ item.status }}</span>
           </article>
-        {% empty %}
-          <p>{% translate "No sessions yet." %}</p>
         {% endfor %}
       </div>
     </div>
   </section>
+
 </div>
 {% endblock %}

@@ -183,6 +183,30 @@ def _action(label: str, detail: str, url: str, button: str) -> dict:
     return {"label": label, "detail": detail, "url": url, "button": button}
 
 
+def _attention_item(
+    item_id: str,
+    severity: str,
+    title: str,
+    detail: str,
+    url: str = "",
+    occurred_at=None,
+    source: str = "config",
+    relevance: int = 1,
+    hover: str = "",
+) -> dict:
+    return {
+        "id": item_id,
+        "severity": severity,
+        "title": title,
+        "detail": detail,
+        "url": url,
+        "occurred_at": occurred_at,
+        "source": source,
+        "relevance": relevance,
+        "hover": hover or detail,
+    }
+
+
 def _ollama_model_name(model_name: str) -> str:
     return model_name.removeprefix("ollama/")
 
@@ -567,6 +591,7 @@ def build_control_center_context() -> dict:
     nodes = []
     edges = []
     warnings = []
+    attention_items = []
     model_catalog = []
     pipeline_summaries = []
     pipeline_scopes = []
@@ -607,7 +632,21 @@ def build_control_center_context() -> dict:
             )
         )
         if status in {"error", "warning"}:
-            warnings.append(f"Provider '{provider.name}': {health.detail}")
+            message = f"Provider '{provider.name}': {health.detail}"
+            warnings.append(message)
+            attention_items.append(
+                _attention_item(
+                    f"provider:{provider.id}:{status}",
+                    "error" if status == "error" else "warning",
+                    f"Provider: {provider.name}",
+                    health.detail,
+                    _admin_url("providerconfig", provider.id),
+                    provider.updated_at,
+                    "provider",
+                    90 if status == "error" else 60,
+                    f"{message} Type: {provider.get_provider_type_display()}. Base URL: {provider.base_url or 'not set'}.",
+                )
+            )
 
     for model in models:
         health = provider_health.get(model.provider_id)
@@ -618,7 +657,21 @@ def build_control_center_context() -> dict:
         if not model.is_active or not model.provider.is_active:
             status = "inactive"
         if model.is_active and model.provider.is_active and not installed:
-            warnings.append(f"Model '{model.model_name}' is configured but was not reported by Ollama.")
+            message = f"Model '{model.model_name}' is configured but was not reported by Ollama."
+            warnings.append(message)
+            attention_items.append(
+                _attention_item(
+                    f"model:{model.id}:missing",
+                    "warning",
+                    f"Model not reported: {model.model_name}",
+                    f"Provider {model.provider.name} did not report this configured model.",
+                    _admin_url("modelconfig", model.id),
+                    model.updated_at,
+                    "model",
+                    55,
+                    f"{message} Provider: {model.provider.name}. Temperature: {model.temperature_default}. Max tokens: {model.max_tokens_default}.",
+                )
+            )
         model_catalog.append(
             {
                 "name": model.model_name,
@@ -663,7 +716,21 @@ def build_control_center_context() -> dict:
         if not collection.is_active:
             status = "inactive"
         if collection.is_active and not active_docs:
-            warnings.append(f"Knowledge collection '{collection.name}' has no active documents.")
+            message = f"Knowledge collection '{collection.name}' has no active documents."
+            warnings.append(message)
+            attention_items.append(
+                _attention_item(
+                    f"knowledge:{collection.id}:empty",
+                    "warning",
+                    f"Knowledge empty: {collection.name}",
+                    "Collection is active but has no active documents.",
+                    _admin_url("knowledgecollection", collection.id),
+                    collection.updated_at,
+                    "knowledge",
+                    45,
+                    f"{message} Agents using it: {collection.agents.count()}.",
+                )
+            )
         nodes.append(
             _node(
                 f"knowledge:{collection.id}",
@@ -692,7 +759,21 @@ def build_control_center_context() -> dict:
         status = "ok" if agent.is_active and agent.model_config.is_active and agent.model_config.provider.is_active else "inactive"
         if agent.is_active and (not agent.input_contract or not agent.output_contract):
             status = "warning"
-            warnings.append(f"Agent '{agent.name}' has incomplete contracts.")
+            message = f"Agent '{agent.name}' has incomplete contracts."
+            warnings.append(message)
+            attention_items.append(
+                _attention_item(
+                    f"agent:{agent.id}:contracts",
+                    "warning",
+                    f"Agent contracts: {agent.name}",
+                    "Input or output contract is missing.",
+                    _admin_url("agentprofile", agent.id),
+                    agent.updated_at,
+                    "agent",
+                    50,
+                    f"{message} Role: {agent.role}. Model: {agent.model_config.model_name}.",
+                )
+            )
         nodes.append(
             _node(
                 f"agent:{agent.id}",
@@ -752,7 +833,21 @@ def build_control_center_context() -> dict:
         steps = list(pipeline.steps.all())
         if pipeline.is_active and not steps:
             status = "warning"
-            warnings.append(f"Pipeline '{pipeline.name}' is active without steps.")
+            message = f"Pipeline '{pipeline.name}' is active without steps."
+            warnings.append(message)
+            attention_items.append(
+                _attention_item(
+                    f"pipeline:{pipeline.id}:no-steps",
+                    "warning",
+                    f"Pipeline has no steps: {pipeline.name}",
+                    "Pipeline is active but no ordered steps are configured.",
+                    _admin_url("pipelinedefinition", pipeline.id),
+                    pipeline.updated_at,
+                    "pipeline",
+                    65,
+                    f"{message} Add PipelineStep records or deactivate until it is ready.",
+                )
+            )
         nodes.append(
             _node(
                 f"pipeline:{pipeline.id}",
@@ -862,10 +957,39 @@ def build_control_center_context() -> dict:
     avg_latency = ExecutionStepRun.objects.aggregate(avg=Avg("latency_ms"))["avg"] or 0
     top_fail_steps = list(
         ExecutionStepRun.objects.filter(status=ExecutionStepRun.Status.FAILED)
-        .values("pipeline_step__pipeline__name", "pipeline_step__order", "pipeline_step__agent__name")
-        .annotate(total=Count("id"))
-        .order_by("-total")[:6]
+        .values("pipeline_step_id", "pipeline_step__pipeline__name", "pipeline_step__order", "pipeline_step__agent__name")
+        .annotate(total=Count("id"), last_seen=Max("created_at"))
+        .order_by("-last_seen", "-total")[:10]
     )
+    for row in top_fail_steps:
+        latest_failure = (
+            ExecutionStepRun.objects.filter(
+                status=ExecutionStepRun.Status.FAILED,
+                pipeline_step_id=row["pipeline_step_id"],
+            )
+            .select_related("session", "pipeline_step", "pipeline_step__pipeline", "agent")
+            .order_by("-created_at")
+            .first()
+        )
+        if not latest_failure:
+            continue
+        pipeline_name = row["pipeline_step__pipeline__name"] or "No pipeline"
+        step_order = row["pipeline_step__order"] or latest_failure.order
+        agent_name = row["pipeline_step__agent__name"] or (latest_failure.agent.name if latest_failure.agent else "No agent")
+        detail = latest_failure.error_detail or latest_failure.session.error_detail or "Latest failed step has no error detail."
+        attention_items.append(
+            _attention_item(
+                f"step-failure:{row['pipeline_step_id'] or 'none'}",
+                "error",
+                f"{pipeline_name} / step {step_order} / {agent_name}",
+                f"{row['total']} failed run(s). Latest: session #{latest_failure.session_id}.",
+                _admin_url("executionsteprun", latest_failure.id),
+                latest_failure.created_at,
+                "step",
+                100 + int(row["total"] or 0),
+                f"{detail} Open the latest failed step run for request, response, observation and error payloads.",
+            )
+        )
     session_totals = ExecutionSession.objects.aggregate(
         total=Count("id"),
         orchestrator=Count("id", filter=Q(runtime_kind=ExecutionSession.RuntimeKind.ORCHESTRATOR)),
@@ -936,6 +1060,22 @@ def build_control_center_context() -> dict:
     for node in nodes:
         node["trace"] = _node_trace(node, edges, nodes_by_id)
 
+    if warnings and not attention_items:
+        attention_items.extend(
+            _attention_item(
+                f"warning:{index}",
+                "warning",
+                warning,
+                "Configuration warning.",
+                "",
+                None,
+                "config",
+                40,
+                warning,
+            )
+            for index, warning in enumerate(warnings[:12], start=1)
+        )
+
     return {
         "graph": {"nodes": nodes, "edges": edges, "pipelineScopes": pipeline_scopes},
         "metrics": {
@@ -955,6 +1095,11 @@ def build_control_center_context() -> dict:
         },
         "warnings": warnings[:12],
         "top_fail_steps": top_fail_steps,
+        "attention_items": sorted(
+            attention_items,
+            key=lambda item: (item["occurred_at"] is not None, item["occurred_at"], item["relevance"]),
+            reverse=True,
+        )[:40],
         "pipeline_metrics": pipeline_counts,
         "legend": NODE_KIND_LEGEND,
         "status_summary": _status_summary(nodes),

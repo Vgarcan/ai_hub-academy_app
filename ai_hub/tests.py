@@ -2460,6 +2460,47 @@ class HubAdminControlCenterTests(TestCase):
         self.assertContains(response, game_ready_agent.name)
         self.assertContains(response, "GAME-ready")
 
+    @patch("ai_hub.services.admin_control_center.requests.get")
+    def test_control_center_renders_mission_deck(self, mocked_get):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"models": [{"name": "qwen3:8b"}]}
+
+        mocked_get.return_value = Response()
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.get(reverse("admin:ai_hub_control_center"))
+
+        self.assertEqual(response.status_code, 200)
+        # new console shell + graph engine hooks (built only from existing context)
+        self.assertContains(response, 'class="ai-console"')
+        self.assertContains(response, "data-mc-graph")
+        self.assertContains(response, "data-mc-stage-inner")
+        self.assertContains(response, "data-mc-edges")
+        self.assertContains(response, 'id="ai-control-graph-data"')
+        # progressive-disclosure tabs + always-on attention band
+        self.assertContains(response, "data-mc-tabs")
+        self.assertContains(response, "Connection graph")
+        self.assertContains(response, "Needs attention")
+        # themed stylesheet + graph engine wired with the refreshed cache key
+        self.assertContains(response, "admin_control_center.css?v=20260623-missiondeck-v10")
+        self.assertContains(response, "admin_control_center.js?v=20260623-missiondeck-v10")
+
+    def test_game_workspace_uses_shared_graph_engine(self):
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.get(reverse("admin:ai_hub_workspace_game"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "data-mc-graph")
+        self.assertContains(response, "GAME decision graph")
+        self.assertContains(response, 'id="ai-control-graph-data"')
+
     def test_agent_changelist_shows_workspace_usage(self):
         create_execution_session(
             source_label="Agent workspace marker",

@@ -72,6 +72,28 @@ class HubModelValidationTests(TestCase):
         with self.assertRaises(ValidationError):
             agent.full_clean()
 
+    def test_training_model_name_must_follow_routing_convention(self):
+        provider = ProviderConfig.objects.create(name="p-train", provider_type="training")
+
+        bad = ModelConfig(provider=provider, model_name="training-game-v1")
+        with self.assertRaises(ValidationError):
+            bad.full_clean()
+
+        for good_name in ("training", "training/assistant"):
+            ok = ModelConfig(provider=provider, model_name=good_name)
+            try:
+                ok.full_clean()
+            except ValidationError:
+                self.fail(f"model_name {good_name!r} should pass the training convention")
+
+    def test_non_training_model_name_is_not_constrained(self):
+        provider = ProviderConfig.objects.create(name="p-openai", provider_type="openai")
+        model = ModelConfig(provider=provider, model_name="gpt-4.1-mini")
+        try:
+            model.full_clean()
+        except ValidationError:
+            self.fail("non-training providers must not be subject to the training convention")
+
     def test_cannot_activate_pipeline_with_gaps(self):
         provider = ProviderConfig.objects.create(name="p2", provider_type="openai")
         model = ModelConfig.objects.create(provider=provider, model_name="gpt-y")
@@ -2190,6 +2212,13 @@ class GameMemoryTests(TestCase):
             **kwargs,
         )
 
+    def test_record_memory_coerces_float_importance_score(self):
+        from decimal import Decimal
+
+        entry = self._record("Float importance is coerced", importance_score=0.9)
+        entry.refresh_from_db()
+        self.assertEqual(entry.importance_score, Decimal("0.90"))
+
     # ---- Phase 07 spec test names ------------------------------------------
 
     def test_workspace_memory_visible_to_its_goals(self):
@@ -3821,12 +3850,17 @@ class GameAdminOperationalUXTests(TestCase):
 
         self.goal = transition_goal_status(self.goal, GameGoal.Status.RUNNING, reason="test")
         self.goal = transition_goal_status(self.goal, GameGoal.Status.WAITING_APPROVAL, reason="test")
-        ExecutionSession.objects.create(
+        waiting_session = ExecutionSession.objects.create(
             runtime_kind=ExecutionSession.RuntimeKind.GAME,
             entry_agent=self.agent,
             goal=self.goal,
             goal_text="test",
             status=ExecutionSession.Status.WAITING_ASYNC,
+        )
+        GameContinuationRequest.objects.create(
+            session=waiting_session,
+            goal=self.goal,
+            reason_code=GameContinuationRequest.ReasonCode.NEEDS_INFORMATION,
         )
 
         ctx = build_goal_detail_context(self.goal)
@@ -4104,3 +4138,621 @@ class GameFeatureFlagTests(TestCase):
 
         approval.refresh_from_db()
         self.assertEqual(approval.status, GameActionApprovalRequest.Status.PENDING)
+
+
+class GamePostPhase12StabilizationTests(TestCase):
+    def setUp(self):
+        self.provider = ProviderConfig.objects.create(
+            name="post12-provider", provider_type="training"
+        )
+        self.model_cfg = ModelConfig.objects.create(
+            provider=self.provider, model_name="post12-model"
+        )
+        self.parent_agent = AgentProfile.objects.create(
+            name="post12-parent", role="parent", model_config=self.model_cfg
+        )
+        self.target_agent = AgentProfile.objects.create(
+            name="post12-target", role="target", model_config=self.model_cfg
+        )
+        self.workspace = create_workspace(name="post12-workspace")
+        self.goal = create_goal(
+            workspace=self.workspace, title="Post-12 goal", description="stabilize"
+        )
+        self.parent_session = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=self.parent_agent,
+            goal=self.goal,
+            goal_text="stabilize",
+            status=ExecutionSession.Status.RUNNING,
+        )
+        self.delegate_action = GameActionDefinition.objects.create(
+            name="delegate_to_agent",
+            label="Delegate",
+            action_type=GameActionDefinition.ActionType.SUB_AGENT,
+            risk_level="medium",
+        )
+
+    def make_parent_action(self, suffix="one"):
+        return GameActionRun.objects.create(
+            session=self.parent_session,
+            action=self.delegate_action,
+            idempotency_key=f"post12-{suffix}",
+            action_name=self.delegate_action.name,
+            iteration=1,
+            status=GameActionRun.Status.RUNNING,
+        )
+
+    def test_self_delegation_is_denied_by_default(self):
+        with self.assertRaisesMessage(ValidationError, "Self-delegation"):
+            run_delegated_agent(
+                session=self.parent_session,
+                action_run=self.make_parent_action("self"),
+                workspace=self.workspace,
+                goal=self.goal,
+                target_agent_name=self.parent_agent.name,
+                task="Do not recurse into yourself.",
+            )
+
+    def test_self_delegation_requires_explicit_policy(self):
+        self.workspace.default_policy = {"safety": {"allow_self_delegation": True}}
+        self.workspace.full_clean()
+        self.workspace.save(update_fields=["default_policy"])
+        response = {
+            "status": "ok",
+            "content": _json.dumps(
+                {"action": "finish", "message": "done", "complete": True, "final_answer": "ok"}
+            ),
+        }
+        with patch("ai_hub.services.agent_runtime.completion_call", return_value=response):
+            result = run_delegated_agent(
+                session=self.parent_session,
+                action_run=self.make_parent_action("self-allowed"),
+                workspace=self.workspace,
+                goal=self.goal,
+                target_agent_name=self.parent_agent.name,
+                task="Explicit self task.",
+            )
+        self.assertEqual(result["status"], GameDelegationRun.Status.SUCCESS)
+
+    def test_delegated_session_reapplies_workspace_policy(self):
+        parent_action = self.make_parent_action("policy")
+        child = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=self.target_agent,
+            goal_text="child",
+            status=ExecutionSession.Status.RUNNING,
+        )
+        GameDelegationRun.objects.create(
+            parent_action_run=parent_action,
+            parent_goal=self.goal,
+            delegated_session=child,
+            target_agent=self.target_agent,
+            task="child",
+            status=GameDelegationRun.Status.RUNNING,
+        )
+        GameActionDefinition.objects.create(
+            name="finish_goal",
+            label="High-risk finish",
+            action_type=GameActionDefinition.ActionType.INTERNAL,
+            risk_level="high",
+        )
+
+        with self.assertRaises(PolicyViolationError):
+            execute_game_action(
+                session=child,
+                action_name="finish_goal",
+                action_input={"final_answer": "must be blocked"},
+            )
+        self.assertEqual(child.game_action_runs.get().status, GameActionRun.Status.FAILED)
+
+    def test_plan_model_rejects_reverse_dependency_and_cycle(self):
+        plan = create_plan(goal=self.goal)
+        first = add_plan_step(plan=plan, title="first", order=1)
+        second = add_plan_step(plan=plan, title="second", order=2)
+        first.depends_on_step = second
+        with self.assertRaisesMessage(ValidationError, "earlier step"):
+            first.full_clean()
+
+    def test_plan_revision_preserves_snapshot(self):
+        from ai_hub.services.game_plans import revise_plan
+
+        plan = create_plan(goal=self.goal, summary="v1")
+        add_plan_step(plan=plan, title="first", order=1)
+        revised = revise_plan(plan=plan, summary="v2")
+        self.assertEqual(revised.version, 2)
+        self.assertEqual(revised.revision_history[0]["summary"], "v1")
+        self.assertEqual(revised.revision_history[0]["steps"][0]["title"], "first")
+
+    def _make_pending_approval(self):
+        action = GameActionDefinition.objects.create(
+            name="post12-approval",
+            label="Approval",
+            action_type=GameActionDefinition.ActionType.INTERNAL,
+            requires_approval=True,
+        )
+        self.parent_session.status = ExecutionSession.Status.WAITING_ASYNC
+        self.parent_session.save(update_fields=["status"])
+        run = GameActionRun.objects.create(
+            session=self.parent_session,
+            action=action,
+            idempotency_key="post12-approval-run",
+            action_name=action.name,
+            iteration=2,
+            status=GameActionRun.Status.WAITING_APPROVAL,
+        )
+        approval = GameActionApprovalRequest.objects.create(
+            action_run=run,
+            goal=self.goal,
+            requested_payload={"password": "approval-secret"},
+        )
+        continuation = GameContinuationRequest.objects.create(
+            session=self.parent_session,
+            goal=self.goal,
+            reason_code=GameContinuationRequest.ReasonCode.NEEDS_APPROVAL,
+            payload={"action_run_id": run.pk, "token": "continuation-secret"},
+        )
+        return run, approval, continuation
+
+    def test_nonapprover_cannot_edit_or_see_pending_approval_dashboard(self):
+        _, approval, _ = self._make_pending_approval()
+        User = get_user_model()
+        user = User.objects.create_user(username="post12-limited", password="test", is_staff=True)
+        for codename in (
+            "view_gameworkspace", "view_executionsession",
+            "view_gameactionapprovalrequest", "change_gameactionapprovalrequest",
+        ):
+            user.user_permissions.add(Permission.objects.get(codename=codename))
+        client = Client()
+        client.force_login(User.objects.get(pk=user.pk))
+
+        dashboard = client.get(
+            reverse("admin:ai_hub_gameworkspace_dashboard", args=[self.workspace.pk])
+        )
+        self.assertNotContains(dashboard, "post12-approval")
+        response = client.post(
+            reverse("admin:ai_hub_gameactionapprovalrequest_change", args=[approval.pk]),
+            {"status": "approved", "requested_payload": '{"changed": true}', "_save": "Save"},
+        )
+        self.assertEqual(response.status_code, 302)
+        approval.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.PENDING)
+        self.assertEqual(approval.requested_payload["password"], "approval-secret")
+
+    def test_review_endpoint_passes_note_to_service(self):
+        _, approval, _ = self._make_pending_approval()
+        reviewer = get_user_model().objects.create_superuser(
+            username="post12-reviewer", password="test", email="review@example.com"
+        )
+        client = Client()
+        client.force_login(reviewer)
+        with patch("ai_hub.admin.approve_action_run") as approve_mock:
+            response = client.post(
+                reverse(
+                    "admin:ai_hub_gameactionapprovalrequest_approve", args=[approval.pk]
+                ),
+                {"review_note": "Reviewed safely."},
+            )
+        self.assertEqual(response.status_code, 302)
+        approve_mock.assert_called_once_with(
+            action_run_id=approval.action_run_id,
+            reviewed_by=reviewer,
+            review_note="Reviewed safely.",
+        )
+
+    def test_step_and_session_admin_redact_sensitive_values(self):
+        _, approval, continuation = self._make_pending_approval()
+        step = ExecutionStepRun.objects.create(
+            session=self.parent_session,
+            order=1,
+            agent=self.parent_agent,
+            action_name="audit",
+            status=ExecutionStepRun.Status.SUCCESS,
+            request_payload={"password": "step-secret"},
+        )
+        self.parent_session.final_context = {"api_key": "session-secret"}
+        self.parent_session.save(update_fields=["final_context"])
+        user = get_user_model().objects.create_superuser(
+            username="post12-admin", password="test", email="admin@example.com"
+        )
+        client = Client()
+        client.force_login(user)
+        step_response = client.get(
+            reverse("admin:ai_hub_executionsteprun_change", args=[step.pk])
+        )
+        session_response = client.get(
+            reverse("admin:ai_hub_executionsession_change", args=[self.parent_session.pk])
+        )
+        approval_response = client.get(
+            reverse("admin:ai_hub_gameactionapprovalrequest_change", args=[approval.pk])
+        )
+        continuation_response = client.get(
+            reverse("admin:ai_hub_gamecontinuationrequest_change", args=[continuation.pk])
+        )
+        self.assertNotContains(step_response, "step-secret")
+        self.assertNotContains(session_response, "session-secret")
+        self.assertNotContains(approval_response, "approval-secret")
+        self.assertNotContains(continuation_response, "continuation-secret")
+        self.assertContains(step_response, "***REDACTED***")
+        self.assertContains(session_response, "***REDACTED***")
+        self.assertContains(approval_response, "***REDACTED***")
+        self.assertContains(continuation_response, "***REDACTED***")
+
+    def test_unified_timeline_contains_all_event_types(self):
+        from ai_hub.services.game_operational_ux import build_session_timeline
+
+        run, _, _ = self._make_pending_approval()
+        ExecutionStepRun.objects.create(
+            session=self.parent_session,
+            order=1,
+            agent=self.parent_agent,
+            action_name="step",
+            status=ExecutionStepRun.Status.SUCCESS,
+        )
+        events = build_session_timeline(self.parent_session)
+        self.assertEqual(
+            {event["kind"] for event in events},
+            {"step", "action", "continuation", "approval"},
+        )
+        self.assertIn(run.pk, [event["pk"] for event in events if event["kind"] == "action"])
+
+    def test_goal_and_memory_flags_close_execution_and_read_boundaries(self):
+        with override_settings(AI_HUB_GAME_GOALS_ENABLED=False):
+            with self.assertRaises(ValidationError):
+                create_goal_execution_session(goal=self.goal, entry_agent=self.target_agent)
+        record_memory(
+            scope_type=GameMemoryEntry.ScopeType.WORKSPACE,
+            workspace=self.workspace,
+            content="flagged",
+        )
+        with override_settings(AI_HUB_GAME_MEMORY_ENABLED=False):
+            with self.assertRaises(ValidationError):
+                build_goal_memory_context(
+                    workspace=self.workspace,
+                    goal=self.goal,
+                    session=self.parent_session,
+                    max_chars=100,
+                )
+
+    def test_reusable_feature_flag_defaults_are_closed(self):
+        from ai_hub.services.game_feature_flags import _FLAG_DEFAULTS
+
+        self.assertTrue(_FLAG_DEFAULTS)
+        self.assertTrue(all(value is False for value in _FLAG_DEFAULTS.values()))
+
+
+class GameDelegationBudgetConcurrencyTests(TransactionTestCase):
+    reset_sequences = True
+
+    def test_delegation_budget_reservation_is_serialized(self):
+        if connection.vendor != "postgresql":
+            self.skipTest("Delegation budget locking requires PostgreSQL semantics.")
+
+        from threading import Barrier, Lock
+
+        provider = ProviderConfig.objects.create(name="delegation-lock-provider", provider_type="training")
+        model_cfg = ModelConfig.objects.create(provider=provider, model_name="delegation-lock-model")
+        parent = AgentProfile.objects.create(name="delegation-lock-parent", role="p", model_config=model_cfg)
+        target = AgentProfile.objects.create(name="delegation-lock-target", role="t", model_config=model_cfg)
+        workspace = GameWorkspace.objects.create(
+            name="delegation-lock-workspace",
+            default_policy={"budget": {"max_sub_agent_runs_per_goal": 1}},
+        )
+        goal = create_goal(workspace=workspace, title="lock goal", description="d")
+        session = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=parent,
+            goal=goal,
+            goal_text="d",
+            status=ExecutionSession.Status.RUNNING,
+        )
+        definition = GameActionDefinition.objects.create(
+            name="delegate_to_agent",
+            label="Delegate",
+            action_type=GameActionDefinition.ActionType.SUB_AGENT,
+        )
+        action_ids = []
+        for index in range(2):
+            action_ids.append(
+                GameActionRun.objects.create(
+                    session=session,
+                    action=definition,
+                    idempotency_key=f"delegation-lock-{index}",
+                    action_name=definition.name,
+                    iteration=index + 1,
+                    status=GameActionRun.Status.RUNNING,
+                ).pk
+            )
+        barrier = Barrier(2)
+        result_lock = Lock()
+        results = []
+        response = {
+            "status": "ok",
+            "content": '{"action":"finish","message":"done","complete":true,"final_answer":"ok"}',
+        }
+
+        def delegate(action_id):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                with patch("ai_hub.services.agent_runtime.completion_call", return_value=response):
+                    run_delegated_agent(
+                        session=ExecutionSession.objects.get(pk=session.pk),
+                        action_run=GameActionRun.objects.get(pk=action_id),
+                        workspace=GameWorkspace.objects.get(pk=workspace.pk),
+                        goal=GameGoal.objects.get(pk=goal.pk),
+                        target_agent_name=target.name,
+                        task="one slot only",
+                    )
+                result = "success"
+            except Exception as exc:
+                result = type(exc).__name__
+            finally:
+                close_old_connections()
+            with result_lock:
+                results.append(result)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(delegate, action_id) for action_id in action_ids]
+            for future in futures:
+                future.result(timeout=30)
+
+        self.assertEqual(GameDelegationRun.objects.count(), 1)
+        self.assertEqual(results.count("success"), 1)
+
+
+class GameVerticalSliceRegressionTests(TestCase):
+    """Proves the complete safe, read-only GAME vertical slice."""
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_vertical_slice_complete_chain_and_no_external_write(self, mocked_call):
+        workspace = create_workspace(
+            name="Vertical slice workspace",
+            default_runtime_config={"max_iterations": 4},
+            default_policy={
+                "budget": {
+                    "max_iterations_per_session": 4,
+                    "max_action_runs_per_session": 6,
+                },
+                "safety": {"allow_external_writes": False},
+            },
+        )
+        provider = ProviderConfig.objects.create(
+            name="vertical-slice-provider", provider_type="training"
+        )
+        model = ModelConfig.objects.create(
+            provider=provider, model_name="vertical-slice-model"
+        )
+        agent = AgentProfile.objects.create(
+            name="vertical-slice-agent",
+            role="GAME documentation analyst",
+            model_config=model,
+        )
+        collection = KnowledgeCollection.objects.create(name="Vertical slice docs")
+        document = KnowledgeDocument.objects.create(
+            collection=collection,
+            title="GAME architecture",
+            curated_text="The GAME architecture uses goals, scoped memory, and safe actions.",
+            status=KnowledgeDocument.Status.ACTIVE,
+        )
+        agent.knowledge_collections.add(collection)
+
+        for name, action_type in (
+            ("search_knowledge", GameActionDefinition.ActionType.CONTEXT_TOOL),
+            ("read_document", GameActionDefinition.ActionType.CONTEXT_TOOL),
+            ("record_memory", GameActionDefinition.ActionType.INTERNAL),
+            ("finish_goal", GameActionDefinition.ActionType.INTERNAL),
+        ):
+            GameActionDefinition.objects.create(
+                name=name,
+                label=name.replace("_", " ").title(),
+                action_type=action_type,
+                risk_level="low",
+            )
+
+        selected_goal = create_goal(
+            workspace=workspace,
+            title="Review GAME docs",
+            description="Identify missing architecture components.",
+            base_priority=100,
+        )
+        next_goal = create_goal(
+            workspace=workspace,
+            title="Update README",
+            description="Update the public guide after the review.",
+            base_priority=50,
+        )
+        create_goal(
+            workspace=workspace,
+            title="Clean admin copy",
+            description="Polish minor labels.",
+            base_priority=10,
+        )
+
+        refresh_workspace_goal_priorities(workspace.pk)
+        claimed = claim_next_goal(workspace.pk)
+        self.assertEqual(claimed.pk, selected_goal.pk)
+        session = create_goal_execution_session(goal=claimed, entry_agent=agent)
+
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": (
+                    '{"action":"search_knowledge","action_input":{"query":"architecture"},'
+                    '"message":"search","complete":false,"final_answer":""}'
+                ),
+            },
+            {
+                "status": "ok",
+                "content": (
+                    f'{{"action":"read_document","action_input":{{"document_id":{document.pk}}},'
+                    '"message":"read","complete":false,"final_answer":""}'
+                ),
+            },
+            {
+                "status": "ok",
+                "content": (
+                    '{"action":"record_memory","action_input":{"scope_type":"goal",'
+                    '"content":"GAME uses scoped memory and safe actions."},'
+                    '"message":"remember","complete":false,"final_answer":""}'
+                ),
+            },
+            {
+                "status": "ok",
+                "content": (
+                    '{"action":"finish_goal","action_input":{"final_answer":"Review complete."},'
+                    '"message":"finish","complete":false,"final_answer":""}'
+                ),
+            },
+        ]
+
+        run_execution_session(session.pk, use_action_dispatcher=True)
+        session.refresh_from_db()
+        selected_goal.refresh_from_db()
+
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(selected_goal.status, GameGoal.Status.COMPLETED)
+        self.assertEqual(session.step_runs.count(), 4)
+        self.assertEqual(
+            list(
+                session.game_action_runs.order_by("iteration").values_list(
+                    "action_name", flat=True
+                )
+            ),
+            ["search_knowledge", "read_document", "record_memory", "finish_goal"],
+        )
+        self.assertIn("action_output", session.step_runs.get(order=1).observation_payload)
+        self.assertTrue(
+            GameMemoryEntry.objects.filter(
+                workspace=workspace,
+                goal=selected_goal,
+                scope_type=GameMemoryEntry.ScopeType.GOAL,
+                content="GAME uses scoped memory and safe actions.",
+            ).exists()
+        )
+        self.assertFalse(
+            session.game_action_runs.filter(
+                action__action_type__in=[
+                    GameActionDefinition.ActionType.TOOL,
+                    GameActionDefinition.ActionType.HTTP,
+                    GameActionDefinition.ActionType.PYTHON_CALLABLE,
+                ]
+            ).exists()
+        )
+        self.assertEqual(get_next_eligible_goal(workspace.pk).pk, next_goal.pk)
+
+
+# ============================================================
+# Orphaned RUNNING goal cleanup
+# ============================================================
+
+from datetime import timedelta as _timedelta  # noqa: E402
+
+from ai_hub.services.game_goals import (  # noqa: E402
+    cancel_orphaned_running_goals,
+    find_orphaned_running_goals,
+)
+
+
+class GameOrphanedGoalCleanupTests(TestCase):
+    def setUp(self):
+        self.provider = ProviderConfig.objects.create(name="orphan-prov", provider_type="training")
+        self.model_cfg = ModelConfig.objects.create(provider=self.provider, model_name="training")
+        self.agent = AgentProfile.objects.create(
+            name="orphan-agent", role="r", model_config=self.model_cfg
+        )
+        self.workspace = create_workspace(name="orphan-ws", description="test")
+
+    def _running_goal(self, title):
+        goal = create_goal(workspace=self.workspace, title=title, description="d")
+        return transition_goal_status(goal, GameGoal.Status.RUNNING, reason="test")
+
+    def test_orphaned_running_goal_is_cancelled(self):
+        goal = self._running_goal("orphaned")
+
+        cancelled = cancel_orphaned_running_goals()
+
+        self.assertIn(goal.pk, [g.pk for g in cancelled])
+        goal.refresh_from_db()
+        self.assertEqual(goal.status, GameGoal.Status.CANCELLED)
+
+    def test_running_goal_with_active_session_is_left_untouched(self):
+        goal = self._running_goal("has-active-session")
+        ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=self.agent,
+            goal=goal,
+            goal_text="test",
+            status=ExecutionSession.Status.WAITING_ASYNC,
+        )
+
+        cancelled = cancel_orphaned_running_goals()
+
+        self.assertNotIn(goal.pk, [g.pk for g in cancelled])
+        goal.refresh_from_db()
+        self.assertEqual(goal.status, GameGoal.Status.RUNNING)
+
+    def test_running_goal_with_terminal_session_is_an_orphan(self):
+        goal = self._running_goal("terminal-session")
+        ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=self.agent,
+            goal=goal,
+            goal_text="test",
+            status=ExecutionSession.Status.FAILED,
+        )
+
+        cancel_orphaned_running_goals()
+
+        goal.refresh_from_db()
+        self.assertEqual(goal.status, GameGoal.Status.CANCELLED)
+
+    def test_older_than_filters_recent_goals(self):
+        goal = self._running_goal("recent")
+
+        # Recent goal is not swept when older_than is set.
+        self.assertEqual(find_orphaned_running_goals(older_than=_timedelta(hours=1)), [])
+
+        # Force updated_at into the past (update() bypasses auto_now).
+        old = timezone.now() - _timedelta(hours=2)
+        GameGoal.objects.filter(pk=goal.pk).update(updated_at=old)
+        candidates = find_orphaned_running_goals(older_than=_timedelta(hours=1))
+        self.assertIn(goal.pk, [g.pk for g in candidates])
+
+    def test_cleanup_scoped_to_workspace(self):
+        goal = self._running_goal("in-scope")
+        other_ws = create_workspace(name="orphan-other-ws", description="d")
+        other_goal = create_goal(workspace=other_ws, title="out-of-scope", description="d")
+        other_goal = transition_goal_status(other_goal, GameGoal.Status.RUNNING, reason="test")
+
+        cancel_orphaned_running_goals(workspace=self.workspace)
+
+        goal.refresh_from_db()
+        other_goal.refresh_from_db()
+        self.assertEqual(goal.status, GameGoal.Status.CANCELLED)
+        self.assertEqual(other_goal.status, GameGoal.Status.RUNNING)
+
+    def test_management_command_dry_run_does_not_mutate(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        goal = self._running_goal("dry-run-goal")
+
+        out = StringIO()
+        call_command("cleanup_orphaned_goals", "--dry-run", stdout=out)
+
+        self.assertIn("dry-run", out.getvalue())
+        goal.refresh_from_db()
+        self.assertEqual(goal.status, GameGoal.Status.RUNNING)
+
+    def test_management_command_cancels_orphans(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        goal = self._running_goal("cmd-goal")
+
+        out = StringIO()
+        call_command("cleanup_orphaned_goals", stdout=out)
+
+        self.assertIn("Cancelled 1", out.getvalue())
+        goal.refresh_from_db()
+        self.assertEqual(goal.status, GameGoal.Status.CANCELLED)

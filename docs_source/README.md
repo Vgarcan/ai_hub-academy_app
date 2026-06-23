@@ -1,45 +1,34 @@
-# AI Hub Documentation
+# AI Hub Academy Documentation
 
-This folder contains the app-level documentation for `ai_hub`.
+This folder (`docs_source/`) holds the **academy host project's own** documentation.
 
-The docs are written from the point of view of `ai_hub` as a reusable Django app. Host-specific workflows should be documented in the host project, unless they illustrate a generic integration pattern.
+The reusable platform docs (`01`–`14`) are **not duplicated here** — they live in the single source of truth at [`ai_hub/_docs/`](../ai_hub/_docs/README.md). The documentation importer (`import_academy_docs`) publishes the platform docs from `ai_hub/_docs/` and the academy docs from this folder, so the academy site shows the full set without two copies drifting apart.
 
-## Reading Order
+## What lives here
 
-1. [`01_PROJECT_OVERVIEW.md`](01_PROJECT_OVERVIEW.md) - what `ai_hub` is, what it owns, and how it should be reused.
-2. [`02_INSTALLATION.md`](02_INSTALLATION.md) - app installation, URLs, migrations, admin access, and static files.
-3. [`03_CONFIGURATION.md`](03_CONFIGURATION.md) - providers, models, agents, knowledge, tools, and first setup.
-4. [`04_CORE_CONCEPTS.md`](04_CORE_CONCEPTS.md) - the vocabulary used throughout the app.
-5. [`05_ORCHESTRATOR_WORKSPACE.md`](05_ORCHESTRATOR_WORKSPACE.md) - fixed ordered workflows.
-6. [`06_GAME_WORKSPACE.md`](06_GAME_WORKSPACE.md) - autonomous goal sessions.
-7. [`07_ADMIN_GUIDE.md`](07_ADMIN_GUIDE.md) - guided Admin UX, forms, control center, and everyday operation.
-8. [`08_RUNTIME_AND_SERVICES.md`](08_RUNTIME_AND_SERVICES.md) - service layer and execution behavior.
-9. [`09_MODELS_AND_DATABASE.md`](09_MODELS_AND_DATABASE.md) - model reference and database relationships.
-10. [`10_INTEGRATION_GUIDE.md`](10_INTEGRATION_GUIDE.md) - how a host project connects to `ai_hub`.
-11. [`11_TESTING_GUIDE.md`](11_TESTING_GUIDE.md) - recommended test commands and coverage strategy.
-12. [`12_TROUBLESHOOTING.md`](12_TROUBLESHOOTING.md) - common failures and fixes.
-13. [`13_ROADMAP.md`](13_ROADMAP.md) - recommended next product and engineering work.
-14. [`14_CHANGELOG.md`](14_CHANGELOG.md) - notable app and documentation changes.
-15. [`15_ACADEMY_FEATURES.md`](15_ACADEMY_FEATURES.md) - academy-specific features: documentation browser, assistant, tutorials, labs, management commands, and URL reference.
+- [`15_ACADEMY_FEATURES.md`](15_ACADEMY_FEATURES.md) — academy-specific features: documentation browser, AI assistant, tutorials, lab exercises, management commands, URL reference, and academy troubleshooting.
+- This `README.md` — the academy doc index.
 
-## Current Product Shape
+## Platform docs (published from `ai_hub/_docs/`)
 
-`ai_hub` currently provides:
-
-- a guided app home at `/admin/ai_hub/`,
-- a visual Orchestrator workspace,
-- a visual GAME workspace,
-- a global control center graph,
-- section-level admin guidance,
-- guided forms with examples and placeholders,
-- reusable provider/model/agent/tool/knowledge configuration,
-- generic execution sessions and step telemetry,
-- staff-only execution endpoints.
+1. `01_PROJECT_OVERVIEW` — what `ai_hub` is and what it owns
+2. `02_INSTALLATION` — install, migrate, admin, static files
+3. `03_CONFIGURATION` — providers, models, agents, tools, GAME feature flags
+4. `04_CORE_CONCEPTS` — vocabulary
+5. `05_ORCHESTRATOR_WORKSPACE` — fixed ordered pipelines
+6. `06_GAME_WORKSPACE` — autonomous goal sessions
+7. `07_ADMIN_GUIDE` — guided admin and everyday operation
+8. `08_RUNTIME_AND_SERVICES` — service layer and execution
+9. `09_MODELS_AND_DATABASE` — model reference
+10. `10_INTEGRATION_GUIDE` — connecting a host project
+11. `11_TESTING_GUIDE` — test commands and strategy
+12. `12_TROUBLESHOOTING` — common failures and fixes
+13. `13_ROADMAP` — recommended next work
+14. `14_CHANGELOG` — notable changes
 
 ## Documentation Rules
 
-- Write app documentation in English.
-- Keep reusable platform documentation in `ai_hub/_docs/`.
-- Keep host-product instructions outside `ai_hub` unless they explain a generic adapter pattern.
+- Reusable platform docs are canonical in `ai_hub/_docs/`; edit them there, not here.
+- Academy-specific docs live in this folder (numbered `15`+).
+- Write documentation in English.
 - Do not document private credentials or secrets.
-- Prefer examples that can be copied into another Django project.

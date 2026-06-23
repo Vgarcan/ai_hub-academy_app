@@ -324,6 +324,13 @@ def execute_game_action(
         workspace = session.goal.workspace
     if goal is None and session.goal_id:
         goal = session.goal
+    delegation_context = None
+    if workspace is None and not session.goal_id:
+        try:
+            delegation_context = session.delegation_run
+            workspace = delegation_context.parent_goal.workspace
+        except Exception:
+            delegation_context = None
 
     step_run_id = step_run.pk if step_run is not None else None
     audit_input = action_input if isinstance(action_input, dict) else {"_invalid_input": action_input}
@@ -385,6 +392,7 @@ def execute_game_action(
         if workspace is not None:
             from ai_hub.services.game_policy import (
                 ApprovalRequiredByPolicyError,
+                PolicyViolationError,
                 check_budget_before_action,
                 validate_action_policy,
             )
@@ -398,6 +406,13 @@ def execute_game_action(
                 action_definition,
                 action_run=action_run,
             )
+            if delegation_context is not None and (
+                action_definition.requires_approval or policy_requires_approval
+            ):
+                raise PolicyViolationError(
+                    "Delegated sessions cannot execute approval-gated actions. "
+                    "Return the requested operation to the parent agent for separate approval."
+                )
     except Exception as exc:
         action_run.status = GameActionRun.Status.FAILED
         action_run.error_detail = str(exc)

@@ -29,45 +29,45 @@
   {% endif %}
 
   <div class="ai-session-timeline__list">
-    {% for step in timeline_steps %}
-      <article class="ai-session-step ai-session-step--{{ step.status }}">
+    {% for event in timeline_events %}
+      <article class="ai-session-step ai-session-step--{{ event.status }}">
         <header>
           <div>
-            <span>#{{ step.order }} · {{ step.action_name|default:"step" }}</span>
+            <span>{{ event.kind|upper }} · {{ event.action|default:"event" }}</span>
             <h3>
-              {% if step.agent %}{{ step.agent.name }}{% else %}{% translate "No agent" %}{% endif %}
+              {% if event.agent %}{{ event.agent }}{% else %}{% translate "System" %}{% endif %}
             </h3>
           </div>
-          <a class="button" href="{{ step.change_url }}">{% translate "Open" %}</a>
+          <a class="button" href="{{ event.change_url }}">{% translate "Open" %}</a>
         </header>
         <dl>
           <div>
             <dt>{% translate "Status" %}</dt>
-            <dd>{{ step.status }}</dd>
+            <dd>{{ event.status }}</dd>
           </div>
           <div>
             <dt>{% translate "Action" %}</dt>
-            <dd>{{ step.action|default:"-" }}</dd>
+            <dd>{{ event.action|default:"-" }}</dd>
           </div>
           <div>
-            <dt>{% translate "Complete" %}</dt>
-            <dd>{% if step.complete %}{% translate "Yes" %}{% else %}{% translate "No" %}{% endif %}</dd>
+            <dt>{% translate "Time" %}</dt>
+            <dd>{{ event.timestamp|date:"Y-m-d H:i:s" }}</dd>
           </div>
           <div>
             <dt>{% translate "Latency" %}</dt>
-            <dd>{% if step.latency_ms != None %}{{ step.latency_ms }} ms{% else %}-{% endif %}</dd>
+            <dd>{% if event.latency_ms != None %}{{ event.latency_ms }} ms{% else %}-{% endif %}</dd>
           </div>
         </dl>
-        {% if step.message %}
-          <p>{{ step.message|truncatechars:420 }}</p>
+        {% if event.summary %}
+          <p>{{ event.summary|truncatechars:420 }}</p>
         {% endif %}
-        {% if step.error_detail %}
-          <p class="ai-session-step__error">{{ step.error_detail }}</p>
+        {% if event.error %}
+          <p class="ai-session-step__error">{{ event.error }}</p>
         {% endif %}
       </article>
     {% empty %}
       <article class="ai-session-timeline__empty">
-        {% translate "No step runs have been recorded yet." %}
+        {% translate "No timeline events have been recorded yet." %}
       </article>
     {% endfor %}
   </div>

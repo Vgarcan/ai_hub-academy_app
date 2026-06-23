@@ -186,7 +186,7 @@ python manage.py runserver
 | `python manage.py run_doc_sync` | Run the Documentation Sync GAME agent once |
 | `python manage.py embed_docs` | Generate semantic embeddings for all documentation chunks (requires Ollama with `bge-m3:latest`) |
 | `python manage.py embed_docs --force` | Re-generate embeddings even for chunks that already have one |
-| `python manage.py test` | Run all 74 tests |
+| `python manage.py test` | Run the full test suite |
 | `python manage.py createsuperuser` | Create an admin user interactively |
 
 ---
@@ -278,7 +278,7 @@ python manage.py embed_docs --model bge-m3:latest
 
 ```bash
 python manage.py test
-# 74 tests, all should pass
+# the full suite should pass
 ```
 
 ---
@@ -333,7 +333,7 @@ Every AI call creates an `ExecutionSession` with one `ExecutionStepRun` per step
 ```bash
 python manage.py embed_docs --model bge-m3:latest
 ```
-Confirm `bge-m3:latest` is installed in Ollama (`ollama list`). Pull it first if missing: `ollama pull bge-m3`. After the command completes, all 175+ chunks will have vector embeddings and the assistant will use semantic search automatically.
+Confirm `bge-m3:latest` is installed in Ollama (`ollama list`). Pull it first if missing: `ollama pull bge-m3`. After the command completes, all documentation chunks will have vector embeddings and the assistant will use semantic search automatically.
 
 **`embed_docs` skips all chunks and says "All chunks already embedded"**
 → Embeddings already exist. To force a full refresh (e.g. after updating the documentation source), run:

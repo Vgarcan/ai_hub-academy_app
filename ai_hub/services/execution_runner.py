@@ -368,8 +368,10 @@ def _run_game_session(
     if not entry_agent.is_active:
         raise ValidationError("GAME entry agent must be active before it can run.")
     if session.goal_id:
+        from ai_hub.services.game_feature_flags import require_game_feature
         from ai_hub.services.game_policy import validate_goal_execution_policy
 
+        require_game_feature("AI_HUB_GAME_GOALS_ENABLED")
         validate_goal_execution_policy(session.goal.workspace, session.goal, session)
     if start_order == 1 and session.step_runs.exists():
         raise ValidationError("Execution session already has step runs.")
@@ -392,14 +394,18 @@ def _run_game_session(
         observations = []
     scoped_memory = dict(context.get("scoped_memory") or {})
     if session.goal_id:
+        from ai_hub.services.game_feature_flags import is_game_feature_enabled
         from ai_hub.services.game_memory import build_goal_memory_context
 
-        scoped_memory = build_goal_memory_context(
-            workspace=session.goal.workspace,
-            goal=session.goal,
-            session=session,
-            max_chars=runtime_config.get("game_memory_max_chars", 4000),
-        )
+        if is_game_feature_enabled("AI_HUB_GAME_MEMORY_ENABLED"):
+            scoped_memory = build_goal_memory_context(
+                workspace=session.goal.workspace,
+                goal=session.goal,
+                session=session,
+                max_chars=runtime_config.get("game_memory_max_chars", 4000),
+            )
+        else:
+            scoped_memory = {"entries": [], "disabled": True}
     previous_response = {}
     final_answer = ""
     finish_reason = ""

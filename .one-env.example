@@ -17,6 +17,10 @@ CSRF_TRUSTED_ORIGINS=http://localhost,http://127.0.0.1,https://aihub.dev-bakery.
 # Production defaults become secure automatically when DEBUG=False. Set HSTS
 # only after confirming the entire deployment is permanently HTTPS.
 SECURE_HSTS_SECONDS=0
+# Enable these only when every subdomain is permanently HTTPS and the domain
+# is ready for browser preload registration.
+SECURE_HSTS_INCLUDE_SUBDOMAINS=False
+SECURE_HSTS_PRELOAD=False
 # Anonymous assistant calls may incur provider cost. Enable only behind rate limiting.
 ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=False
 
@@ -48,9 +52,8 @@ ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=False
 # ============================================================
 # GAME feature flags
 # ============================================================
-# Each flag defaults to True (all phases are tested and production-ready).
-# Set a flag to False to disable that subsystem without a code deploy.
-# Useful as a kill switch when rolling out to a new environment.
+# DEBUG development defaults these flags on. Production defaults them off and
+# requires explicit opt-in for each subsystem, so they also work as kill switches.
 #
 # AI_HUB_GAME_GOALS_ENABLED=True
 # AI_HUB_GAME_SCHEDULER_ENABLED=True

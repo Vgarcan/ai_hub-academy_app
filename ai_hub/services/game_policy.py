@@ -73,6 +73,7 @@ def validate_workspace_policy(policy: dict) -> None:
 
     bool_safety_keys = {
         "allow_external_writes",
+        "allow_self_delegation",
         "require_approval_for_medium_risk",
         "require_approval_for_high_risk",
     }
@@ -238,11 +239,11 @@ def check_budget_before_action(session, action, *, action_run=None) -> None:
 
 
 def _get_workspace(session):
-    if not session.goal_id:
-        return None
     try:
-        goal = session.goal
-        return goal.workspace if goal is not None else None
+        if session.goal_id:
+            return session.goal.workspace
+        delegation = session.delegation_run
+        return delegation.parent_goal.workspace
     except Exception:
         return None
 

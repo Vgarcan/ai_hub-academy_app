@@ -17,16 +17,23 @@ AI Hub already has the core platform pieces:
 - Agent profiles.
 - Knowledge collections and documents.
 - Tool definitions.
-- Orchestrator pipeline definitions.
-- Pipeline steps.
-- Execution sessions.
-- Execution step runs.
-- GAME sessions through `ExecutionSession`.
-- Admin workspaces.
-- Control center.
-- Guided admin forms and changelists.
-- Runtime services.
-- Host adapter pattern.
+- Orchestrator pipeline definitions and steps.
+- Execution sessions and step runs.
+- Admin workspaces, control center, guided forms and changelists.
+- Runtime services and the host adapter pattern.
+
+The GAME subsystem is now a full feature line, not just a session mode:
+
+- Durable `GameWorkspace` / `GameGoal` / `GameGoalDependency` models.
+- Deterministic scheduler with transparent priority bonuses.
+- Goal-bound execution sessions with central, idempotent outcome mapping.
+- Explicit action dispatcher with audited `GameActionRun` records, closed allow-lists, and payload redaction.
+- Scoped memory (workspace/goal/session) with bounded context and compaction.
+- Pause / approval / resume with permission-gated review.
+- Workspace policies and budgets; external writes closed by default.
+- Goal plans and one-level sub-agent delegation.
+- Per-capability feature flags (fail-closed in the reusable layer).
+- Operational admin dashboards, goal-detail enrichment, lifecycle bulk actions, and an orphaned-goal cleanup command.
 
 This is enough to build real AI workflows.
 
@@ -49,7 +56,9 @@ If a feature only helps one host project, it probably belongs in that host app.
 
 The admin is the main product surface.
 
-Recommended improvements:
+Delivered: workspace-specific GAME dashboards, goal-detail enrichment panels, and readable scheduler/outcome summaries.
+
+Still recommended:
 
 - More guided setup flows.
 - Better empty states.
@@ -57,8 +66,6 @@ Recommended improvements:
 - Inline examples for prompts and contracts.
 - Safer JSON editing.
 - Responsive improvements for all model pages.
-- Workspace-specific dashboards.
-- More readable execution error summaries.
 
 Target outcome:
 
@@ -111,15 +118,13 @@ Slow two-minute model runs do not block the user interface and do not create dup
 
 Tools are powerful and need strict controls.
 
-Recommended work:
+Delivered: explicit allow-lists (callable registry, HTTP allowed-hosts, GET/HEAD context rule), tool/action audit logs via `GameActionRun`, and timeout clamping.
 
-- Explicit allowlists per tool kind.
-- Safe HTTP tool configuration.
-- Safe callable registry.
-- Tool execution audit logs.
-- Tool timeout configuration.
+Still recommended:
+
+- Safe callable registry expansion and signing.
 - Tool error normalization.
-- Clear model compatibility rules.
+- Clearer model compatibility rules.
 
 Target outcome:
 
@@ -149,18 +154,16 @@ Agents receive the right context without forcing admins to paste huge documents 
 
 ## Priority 6: GAME Readiness
 
-GAME should become easier to understand and safer to operate.
+Most of the original GAME readiness goals are now delivered.
 
-Recommended work:
+Delivered: human approval checkpoints, continue/resume action, a built-in action dispatcher with allow-lists, memory preview and stop-reason/scheduler display in the operational admin, plus policies, budgets, plans, and sub-agent delegation.
+
+Still recommended:
 
 - Explicit GAME-ready agent flag.
-- GAME session templates.
+- GAME session/goal templates.
 - Visual GAME timeline.
-- Memory preview.
-- Stop reason display.
-- Continue session action.
-- Human approval checkpoints.
-- Built-in action registry.
+- Decisiveness guidance in default GAME prompts (avoid deliberation loops on ambiguous tasks).
 
 Target outcome:
 

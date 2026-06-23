@@ -66,6 +66,16 @@ gpt-4.1-mini
 
 The exact accepted form depends on the provider adapter.
 
+## Training Provider Model Is Rejected On Save
+
+The `training` provider is a deterministic stub. Its model name must be exactly `training` or start with `training/` (for example `training/assistant`). Saving a training-provider model with any other name fails with:
+
+```text
+Training-provider models must be named 'training' or start with 'training/'
+```
+
+This is intentional: any other name would not be routed to the stub and would fail at runtime against the real client. Rename the model to follow the convention.
+
 ## Agent Does Not Appear In GAME Workspace
 
 The GAME workspace highlights agents that are already used in GAME sessions or look GAME-ready.
@@ -101,6 +111,27 @@ Example:
 ```
 
 If this fails often, reduce prompt complexity and keep the first goal smaller.
+
+## GAME Feature Is Disabled
+
+A GAME service can raise:
+
+```text
+GAME feature 'AI_HUB_GAME_..._ENABLED' is disabled. Set ... =True in Django settings to enable it.
+```
+
+This means the matching feature flag is off (the reusable default is fail-closed). Enable the flag in settings or the environment — see `03_CONFIGURATION.md`. Remember flags gate the service layer only; the admin add/change forms write directly to the model.
+
+## Goal Is Stuck In Running
+
+A goal stays in `running` if its session never reached a terminal state (an interrupted run, or stub sessions left by tests). Cancel orphaned goals — those with no active session — with:
+
+```bash
+python manage.py cleanup_orphaned_goals --dry-run
+python manage.py cleanup_orphaned_goals
+```
+
+A goal with an active session (pending/running/waiting_async) is never touched.
 
 ## Pipeline Cannot Be Activated
 

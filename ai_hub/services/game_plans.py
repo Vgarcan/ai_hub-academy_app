@@ -47,3 +47,34 @@ def add_plan_step(
     step.full_clean()
     step.save()
     return step
+
+
+@transaction.atomic
+def revise_plan(*, plan: GameGoalPlan, summary: str, status: str | None = None) -> GameGoalPlan:
+    """Snapshot the current plan and advance its durable version atomically."""
+    locked = GameGoalPlan.objects.select_for_update().get(pk=plan.pk)
+    history = list(locked.revision_history or [])
+    history.append(
+        {
+            "version": locked.version,
+            "summary": locked.summary,
+            "status": locked.status,
+            "steps": list(
+                locked.steps.order_by("order").values(
+                    "order", "title", "description", "status", "depends_on_step_id"
+                )
+            ),
+        }
+    )
+    locked.version += 1
+    locked.summary = summary
+    if status is not None:
+        if status not in GameGoalPlan.Status.values:
+            raise ValidationError(f"Unknown GAME plan status '{status}'.")
+        locked.status = status
+    locked.revision_history = history
+    locked.full_clean()
+    locked.save(
+        update_fields=["version", "summary", "status", "revision_history", "updated_at"]
+    )
+    return locked

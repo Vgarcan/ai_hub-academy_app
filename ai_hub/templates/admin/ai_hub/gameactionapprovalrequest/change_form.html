@@ -1,0 +1,18 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{% block after_field_sets %}
+{{ block.super }}
+{% if can_review_action and approval_is_pending %}
+<section class="module aligned">
+  <h2>{% translate "Review action request" %}</h2>
+  <p>{% translate "The requested payload is immutable. Add an optional audit note, then approve or reject through the service layer." %}</p>
+  <label for="game-review-note"><strong>{% translate "Review note" %}</strong></label>
+  <textarea id="game-review-note" name="review_note" rows="4" maxlength="4000"></textarea>
+  <div class="submit-row">
+    <button type="submit" class="default" formaction="{% url 'admin:ai_hub_gameactionapprovalrequest_approve' original.pk %}" formmethod="post">{% translate "Approve and execute" %}</button>
+    <button type="submit" formaction="{% url 'admin:ai_hub_gameactionapprovalrequest_reject' original.pk %}" formmethod="post">{% translate "Reject" %}</button>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

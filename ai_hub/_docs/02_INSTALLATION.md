@@ -77,7 +77,7 @@ these URLs is optional.
 python manage.py migrate ai_hub
 ```
 
-After migrating, the database should contain reusable AI tables such as:
+After migrating, the database should contain the reusable AI tables, including the core configuration and execution tables:
 
 - `ai_hub_providerconfig`
 - `ai_hub_modelconfig`
@@ -85,6 +85,8 @@ After migrating, the database should contain reusable AI tables such as:
 - `ai_hub_pipelinedefinition`
 - `ai_hub_executionsession`
 - `ai_hub_executionsteprun`
+
+and the GAME domain tables (`ai_hub_gameworkspace`, `ai_hub_gamegoal`, `ai_hub_gameactionrun`, `ai_hub_gamememoryentry`, and related). Run `python manage.py migrate ai_hub` again after pulling updates; migrations are additive.
 
 ## Create An Admin User
 
@@ -94,7 +96,11 @@ python manage.py createsuperuser
 
 The bundled development setup generates the initial admin password instead of using a shared default. Set `DJANGO_SUPERUSER_PASSWORD` before running setup only when automation needs a predetermined value.
 
-For `DEBUG=False`, provide a strong `SECRET_KEY`. Secure redirect and cookie settings default to enabled in production mode. Configure `SECURE_HSTS_SECONDS` only after confirming the complete deployment is permanently HTTPS.
+For `DEBUG=False`, provide a strong `SECRET_KEY`. Secure redirect and cookie settings default to enabled in production mode. Configure `SECURE_HSTS_SECONDS`, `SECURE_HSTS_INCLUDE_SUBDOMAINS`, and `SECURE_HSTS_PRELOAD` only after confirming the complete domain and all included subdomains are permanently HTTPS.
+
+## Enable GAME Features
+
+The GAME subsystem is gated by feature flags (`AI_HUB_GAME_*_ENABLED`). They default to enabled in this repo, but the reusable safety default is fail-closed — if you adopt `ai_hub` into a new project and a flag is disabled, GAME services raise a clear error. Enable the capabilities you use. See `03_CONFIGURATION.md` for the full list.
 
 Then open:
 

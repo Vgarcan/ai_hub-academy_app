@@ -48,13 +48,11 @@ Defines a concrete model available through a provider.
 Important fields:
 
 - `provider`: parent provider.
-- `display_name`: friendly user-facing name.
-- `model_name`: exact provider model identifier.
-- `temperature_default`: default generation temperature.
+- `model_name`: exact provider model identifier. For a `training` (stub) provider it must be `training` or start with `training/`, enforced on save.
+- `temperature_default`: default generation temperature (defaults to `0.70`).
 - `max_tokens_default`: default output budget.
 - `supports_tools`: whether this model/runtime can work with tools.
-- `config`: model-specific JSON configuration.
-- `is_active`: whether the model can be used.
+- `is_active`: whether the model can be used (a model cannot be active under an inactive provider).
 
 Operational note:
 
@@ -238,6 +236,10 @@ Deleting a workspace intentionally cascades to its goals and their dependency re
 `GameContinuationRequest` records why a session paused and permits only one pending continuation per session. `GameActionApprovalRequest` links an approval decision to exactly one action run and records reviewer, note, expiry, and status.
 
 `GameWorkspaceAction` and `GameWorkspaceAgent` configure per-workspace permissions. Once at least one mapping of a type exists, that mapping set is treated as a closed allow-list. Policy services—not model output—decide permissions, approvals, external-write safety, and budgets.
+
+`GameGoalPlan.revision_history` stores JSON snapshots when `revise_plan()` advances the plan version. Plan versions and step orders start at one; step dependencies must point backwards within the same plan, and self/circular dependencies are rejected.
+
+`GameDelegationRun` validates its parent action/goal, delegated session/target-agent relationship and terminal timestamp. Admin treats delegation rows as immutable audit records.
 
 ## `ExecutionSession`
 

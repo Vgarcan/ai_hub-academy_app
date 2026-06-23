@@ -23,6 +23,10 @@ SECURE_SSL_REDIRECT = os.environ.get("SECURE_SSL_REDIRECT", str(not DEBUG)) == "
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", str(not DEBUG)) == "True"
 CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", str(not DEBUG)) == "True"
 SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = (
+    os.environ.get("SECURE_HSTS_INCLUDE_SUBDOMAINS", "False") == "True"
+)
+SECURE_HSTS_PRELOAD = os.environ.get("SECURE_HSTS_PRELOAD", "False") == "True"
 
 ALLOWED_HOSTS = os.environ.get(
     "ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
@@ -111,7 +115,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "/admin/login/"
 LOGIN_REDIRECT_URL = "/"
 
-# Directory containing Markdown source docs to import into the DB
+# Markdown documentation roots imported into the DB.
+# AIHUB_DOCS_SOURCE is the canonical reusable-platform doc set (files 01-14);
+# ACADEMY_DOCS_SOURCE holds only academy-specific docs (15+). The importer reads
+# both, so there is a single source of truth and no duplicated/ drifting copies.
+AIHUB_DOCS_SOURCE = BASE_DIR / "ai_hub" / "_docs"
 ACADEMY_DOCS_SOURCE = BASE_DIR / "docs_source"
 
 # Python-callable tools are code execution capabilities. Keep the allow-list explicit.
@@ -129,11 +137,23 @@ ACADEMY_ASSISTANT_ALLOW_ANONYMOUS = (
     os.environ.get("ACADEMY_ASSISTANT_ALLOW_ANONYMOUS", "False") == "True"
 )
 
-# GAME feature flags — each defaults to True (all phases tested).
-# Set to False in an environment variable to disable a specific subsystem.
-AI_HUB_GAME_GOALS_ENABLED = os.environ.get("AI_HUB_GAME_GOALS_ENABLED", "True") == "True"
-AI_HUB_GAME_SCHEDULER_ENABLED = os.environ.get("AI_HUB_GAME_SCHEDULER_ENABLED", "True") == "True"
-AI_HUB_GAME_ACTION_DISPATCH_ENABLED = os.environ.get("AI_HUB_GAME_ACTION_DISPATCH_ENABLED", "True") == "True"
-AI_HUB_GAME_MEMORY_ENABLED = os.environ.get("AI_HUB_GAME_MEMORY_ENABLED", "True") == "True"
-AI_HUB_GAME_RESUME_ENABLED = os.environ.get("AI_HUB_GAME_RESUME_ENABLED", "True") == "True"
-AI_HUB_GAME_DELEGATION_ENABLED = os.environ.get("AI_HUB_GAME_DELEGATION_ENABLED", "True") == "True"
+def _env_bool(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ImproperlyConfigured(f"{name} must be a boolean value, got {raw!r}.")
+
+
+# GAME is enabled by default only for DEBUG/development. Production rollout is
+# fail-closed unless each subsystem is explicitly enabled through the environment.
+AI_HUB_GAME_GOALS_ENABLED = _env_bool("AI_HUB_GAME_GOALS_ENABLED", DEBUG)
+AI_HUB_GAME_SCHEDULER_ENABLED = _env_bool("AI_HUB_GAME_SCHEDULER_ENABLED", DEBUG)
+AI_HUB_GAME_ACTION_DISPATCH_ENABLED = _env_bool("AI_HUB_GAME_ACTION_DISPATCH_ENABLED", DEBUG)
+AI_HUB_GAME_MEMORY_ENABLED = _env_bool("AI_HUB_GAME_MEMORY_ENABLED", DEBUG)
+AI_HUB_GAME_RESUME_ENABLED = _env_bool("AI_HUB_GAME_RESUME_ENABLED", DEBUG)
+AI_HUB_GAME_DELEGATION_ENABLED = _env_bool("AI_HUB_GAME_DELEGATION_ENABLED", DEBUG)

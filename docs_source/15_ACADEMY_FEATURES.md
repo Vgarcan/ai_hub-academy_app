@@ -162,3 +162,45 @@ python manage.py run_doc_sync                 # smoke test
 /assistant/                                        → Documentation assistant chat UI
 /assistant/ask/                                    → Chat API endpoint (POST)
 ```
+
+---
+
+## Troubleshooting (Academy)
+
+### Documentation Assistant Gives Vague Or Off-Topic Answers
+
+The documentation assistant supports two search modes:
+
+1. **Semantic search** — uses vector embeddings (cosine similarity) to find content even when the user's words differ from the docs. Requires Ollama running with `bge-m3:latest` and at least one `DocumentationChunk` with a non-null embedding.
+2. **Keyword search** — plain Django ORM text filtering on `search_text` and `heading`. Active when embeddings are missing or Ollama is unreachable.
+
+If the assistant gives answers that miss the point, semantic search is probably inactive. Verify:
+
+```bash
+python manage.py shell -c "
+from academy.models import DocumentationChunk
+total = DocumentationChunk.objects.count()
+embedded = DocumentationChunk.objects.exclude(embedding__isnull=True).count()
+print(f'{embedded}/{total} chunks have embeddings')
+"
+```
+
+If the count shows `0/N`, generate embeddings:
+
+```bash
+ollama list            # confirm bge-m3 is available
+ollama pull bge-m3     # pull if missing
+python manage.py embed_docs --model bge-m3:latest
+```
+
+Run `embed_docs` once after `import_academy_docs` and again after any bulk update to the documentation source files. Use `embed_docs --force` to refresh existing embeddings.
+
+### Documentation Chat Falls Back To Keyword Search At Runtime
+
+Even with embeddings present, the assistant falls back to keyword search if Ollama is unreachable at query time (used to embed the user's question). Check that Ollama is running and the base URL in the provider config is correct:
+
+```bash
+curl http://<ollama-base-url>/api/tags
+```
+
+If this returns a list of models, Ollama is reachable. If it times out or refuses, start Ollama or correct the URL.

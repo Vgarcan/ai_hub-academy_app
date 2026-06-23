@@ -94,7 +94,11 @@ max_tokens_default = 4000
 supports_tools = false
 ```
 
-Use lower temperatures for structured extraction and contract-heavy JSON. Use higher temperatures for style, rewriting, and reflective text.
+Use lower temperatures for structured extraction and contract-heavy JSON. Use higher temperatures for style, rewriting, and reflective text. If you leave `temperature_default` unset it defaults to `0.70`.
+
+### Training (stub) provider
+
+The built-in `training` provider is a deterministic stub that returns canned responses without calling any external API — useful for local development and tests with no API key. Its router only recognises a model whose `model_name` is exactly `training` or starts with `training/` (for example `training/assistant`). Any other name on a training provider is rejected at save time with a clear validation error, because it would otherwise fall through to the real client and fail at runtime.
 
 ## Agent Configuration
 
@@ -213,6 +217,31 @@ Example config:
 Do not store secrets in tool config. Use environment variables or host-project adapters.
 
 Python-callable tools are code-execution capabilities. Their dotted callable path must also appear in the host setting `AI_HUB_ALLOWED_TOOL_CALLABLES`. A Python callable classified as a GAME `context_tool` additionally requires `config.read_only=true`; HTTP context tools must use GET or HEAD and an explicitly allowed host.
+
+## GAME Feature Flags
+
+The GAME subsystem is gated by per-capability flags read from Django settings (overridable via environment variables). They let a host project enable GAME incrementally and act as kill-switches.
+
+| Setting | Gates |
+| --- | --- |
+| `AI_HUB_GAME_GOALS_ENABLED` | Goal creation |
+| `AI_HUB_GAME_SCHEDULER_ENABLED` | Claiming the next eligible goal |
+| `AI_HUB_GAME_ACTION_DISPATCH_ENABLED` | Action execution and approval dispatch |
+| `AI_HUB_GAME_MEMORY_ENABLED` | Recording scoped memory |
+| `AI_HUB_GAME_RESUME_ENABLED` | Resuming a waiting session |
+| `AI_HUB_GAME_DELEGATION_ENABLED` | Sub-agent delegation |
+
+Behaviour:
+
+- In this repo's settings each flag defaults to `True`.
+- The reusable safety default is **fail-closed**: when a flag is disabled, the matching service raises a `ValidationError` rather than running.
+- Flags gate the **service layer** only. The Django admin writes through the model directly, so the "Add GAME goal" form and the goal bulk actions are not blocked by a disabled flag. To hard-stop an operation in an environment, also remove the relevant admin permissions.
+
+Set a flag to `False` to disable a capability without a code change:
+
+```text
+AI_HUB_GAME_DELEGATION_ENABLED=False
+```
 
 ## Runtime Modes
 

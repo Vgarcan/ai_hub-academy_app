@@ -1,9 +1,14 @@
 """
 Import Markdown documentation files into the database.
 
+By default it reads two roots: the canonical reusable-platform docs
+(AIHUB_DOCS_SOURCE, files 01-14) and the academy-specific docs
+(ACADEMY_DOCS_SOURCE, 15+). This keeps a single source of truth — the platform
+docs are not duplicated into docs_source.
+
 Usage:
-    python manage.py import_academy_docs --path docs_source
-    python manage.py import_academy_docs  # uses ACADEMY_DOCS_SOURCE from settings
+    python manage.py import_academy_docs            # reads both configured roots
+    python manage.py import_academy_docs --path some/dir   # single-root override
 """
 import re
 from pathlib import Path
@@ -95,6 +100,44 @@ def _page_title_from_filename(path: Path) -> str:
     return stem.replace("_", " ").title()
 
 
+def collect_doc_files(explicit_path=None):
+    """Return an ordered list of ``(md_file, root)`` pairs to import.
+
+    With ``explicit_path`` it behaves as a single-root import (legacy ``--path``).
+    Otherwise it reads the canonical reusable-platform docs first
+    (``AIHUB_DOCS_SOURCE``, files 01-14) and then the academy-specific docs
+    (``ACADEMY_DOCS_SOURCE``, 15+). The platform ``README`` is skipped (it is a
+    developer index, not a published page) and duplicate page slugs are dropped so
+    the first (platform) root wins. This gives one source of truth with no
+    duplicated, drifting copies.
+    """
+    if explicit_path:
+        roots = [(Path(explicit_path), False)]
+    else:
+        roots = []
+        platform = getattr(settings, "AIHUB_DOCS_SOURCE", None)
+        academy = getattr(settings, "ACADEMY_DOCS_SOURCE", None)
+        if platform:
+            roots.append((Path(platform), True))
+        if academy:
+            roots.append((Path(academy), False))
+
+    seen_slugs = set()
+    files = []
+    for root, is_platform in roots:
+        if not root.exists():
+            continue
+        for md_file in sorted(root.glob("**/*.md")):
+            if is_platform and md_file.stem.upper() == "README":
+                continue
+            slug = slugify(md_file.stem)[:50]
+            if slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            files.append((md_file, root))
+    return files
+
+
 class Command(BaseCommand):
     help = "Import Markdown files from a directory into the documentation database."
 
@@ -124,23 +167,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        docs_path = options["path"]
-        if docs_path:
-            base_path = Path(docs_path)
-        else:
-            base_path = getattr(settings, "ACADEMY_DOCS_SOURCE", None)
-            if not base_path:
-                self.stderr.write("No path provided and ACADEMY_DOCS_SOURCE not set in settings.")
-                return
-            base_path = Path(base_path)
-
-        if not base_path.exists():
-            self.stderr.write(f"Path does not exist: {base_path}")
-            return
-
-        md_files = sorted(base_path.glob("**/*.md"))
-        if not md_files:
-            self.stderr.write(f"No .md files found in {base_path}")
+        doc_files = collect_doc_files(options["path"])
+        if not doc_files:
+            self.stderr.write("No .md files found to import.")
             return
 
         source_name = options["source_name"]
@@ -155,7 +184,7 @@ class Command(BaseCommand):
         pages_created = 0
         chunks_created = 0
 
-        for order, md_file in enumerate(md_files, start=1):
+        for order, (md_file, root) in enumerate(doc_files, start=1):
             title = _page_title_from_filename(md_file)
             page_slug = slugify(md_file.stem)[:50]
             body = md_file.read_text(encoding="utf-8")
@@ -165,7 +194,7 @@ class Command(BaseCommand):
                 defaults={
                     "source": source,
                     "title": title,
-                    "source_path": str(md_file.relative_to(base_path.parent)),
+                    "source_path": str(md_file.relative_to(root.parent)),
                     "body_markdown": body,
                     "order": order,
                     "is_active": True,

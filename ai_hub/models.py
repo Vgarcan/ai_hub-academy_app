@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -41,7 +43,7 @@ class ProviderConfig(models.Model):
 class ModelConfig(models.Model):
     provider = models.ForeignKey(ProviderConfig, on_delete=models.CASCADE, related_name="models")
     model_name = models.CharField(max_length=140)
-    temperature_default = models.DecimalField(max_digits=4, decimal_places=2, default=0.70)
+    temperature_default = models.DecimalField(max_digits=4, decimal_places=2, default=Decimal("0.70"))
     max_tokens_default = models.PositiveIntegerField(default=1000)
     supports_tools = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
@@ -60,6 +62,20 @@ class ModelConfig(models.Model):
     def clean(self):
         if self.is_active and not self.provider.is_active:
             raise ValidationError("Cannot activate a model with an inactive provider.")
+        # The training stub router only matches model == "training" or "training/...".
+        # Any other name silently falls through to the real LLM client and fails at
+        # runtime, so enforce the convention at config time with a clear error.
+        if self.provider.provider_type == ProviderConfig.ProviderType.TRAINING:
+            if self.model_name != "training" and not self.model_name.startswith("training/"):
+                raise ValidationError(
+                    {
+                        "model_name": (
+                            "Training-provider models must be named 'training' or start "
+                            "with 'training/' (e.g. 'training/assistant'); otherwise the "
+                            "request is not routed to the deterministic stub."
+                        )
+                    }
+                )
 
 
 class ToolDefinition(models.Model):
@@ -841,6 +857,7 @@ class GameGoalPlan(models.Model):
     version = models.PositiveIntegerField(default=1)
     summary = models.TextField(blank=True)
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.ACTIVE)
+    revision_history = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -848,9 +865,19 @@ class GameGoalPlan(models.Model):
         ordering = ["-created_at"]
         verbose_name = "4.15 GAME goal plan"
         verbose_name_plural = "4.15 GAME goal plans - structured execution aids"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(version__gte=1),
+                name="aihub_plan_version_gte_1",
+            ),
+        ]
 
     def __str__(self):
         return f"Plan #{self.pk} — {self.goal.title} ({self.status})"
+
+    def clean(self):
+        if not isinstance(self.revision_history, list):
+            raise ValidationError({"revision_history": "Plan revision history must be a JSON list."})
 
 
 class GameGoalPlanStep(models.Model):
@@ -883,6 +910,14 @@ class GameGoalPlanStep(models.Model):
             models.UniqueConstraint(
                 fields=["plan", "order"], name="ai_hub_unique_plan_step_order"
             ),
+            models.CheckConstraint(
+                condition=models.Q(order__gte=1),
+                name="aihub_plan_step_order_gte_1",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(pk=models.F("depends_on_step")),
+                name="aihub_plan_step_not_self",
+            ),
         ]
 
     def __str__(self):
@@ -894,6 +929,16 @@ class GameGoalPlanStep(models.Model):
                 raise ValidationError("A step cannot depend on itself.")
             if self.depends_on_step.plan_id != self.plan_id:
                 raise ValidationError("Step dependency must belong to the same plan.")
+            if self.depends_on_step.order >= self.order:
+                raise ValidationError("A plan step may depend only on an earlier step.")
+
+            current = self.depends_on_step
+            visited = set()
+            while current is not None:
+                if current.pk in visited or (self.pk and current.pk == self.pk):
+                    raise ValidationError("Circular plan-step dependencies are not allowed.")
+                visited.add(current.pk)
+                current = current.depends_on_step
 
 
 class GameDelegationRun(models.Model):
@@ -935,9 +980,39 @@ class GameDelegationRun(models.Model):
                 fields=["parent_goal", "status"], name="aihub_delegation_goal_stat_idx"
             ),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        status__in=["pending", "running"],
+                        finished_at__isnull=True,
+                    )
+                    | models.Q(
+                        status__in=["success", "failed"],
+                        finished_at__isnull=False,
+                    )
+                ),
+                name="aihub_delegation_terminal_time",
+            ),
+        ]
 
     def __str__(self):
         return f"Delegation #{self.pk} → {self.target_agent.name} ({self.status})"
+
+    def clean(self):
+        if self.parent_action_run_id and self.parent_goal_id:
+            parent_session = self.parent_action_run.session
+            if parent_session.goal_id != self.parent_goal_id:
+                raise ValidationError("Delegation parent goal must match the parent action session goal.")
+            if self.parent_action_run.action.action_type != GameActionDefinition.ActionType.SUB_AGENT:
+                raise ValidationError("Delegation parent action must be a sub-agent action.")
+        if self.delegated_session_id:
+            if self.delegated_session.goal_id is not None:
+                raise ValidationError("Delegated sessions must not be linked directly to a GAME goal.")
+            if self.delegated_session.entry_agent_id != self.target_agent_id:
+                raise ValidationError("Delegated session entry agent must match the target agent.")
+        if self.status in {self.Status.SUCCESS, self.Status.FAILED} and not self.finished_at:
+            raise ValidationError("Terminal delegation runs require finished_at.")
 
 
 # === END REUSABLE AI PIPELINE CORE =========================================

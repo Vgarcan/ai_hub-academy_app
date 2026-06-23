@@ -26,10 +26,11 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 `ai_hub` currently provides:
 
 - a guided app home at `/admin/ai_hub/`,
-- a visual Orchestrator workspace,
-- a visual GAME workspace,
-- a global control center graph,
-- section-level admin guidance,
+- a visual Orchestrator workspace for fixed ordered pipelines,
+- a full GAME subsystem: durable goals, deterministic scheduling, action dispatch, scoped memory, pause/approval/resume, policies and budgets, plans, and sub-agent delegation,
+- per-capability GAME feature flags (fail-closed in the reusable layer),
+- operational GAME dashboards, goal-detail enrichment, and lifecycle/approval bulk actions,
+- a global control center graph and section-level admin guidance,
 - guided forms with examples and placeholders,
 - reusable provider/model/agent/tool/knowledge configuration,
 - generic execution sessions and step telemetry,

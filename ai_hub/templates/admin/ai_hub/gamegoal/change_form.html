@@ -17,6 +17,17 @@
 </section>
 {% endif %}
 
+{% if blockers %}
+<section class="module ai-goal-detail">
+  <h2>{% translate "Goal blockers" %}</h2>
+  <ul>
+    {% for blocker in blockers %}
+    <li>{{ blocker.title }} — <em>{{ blocker.status }}</em></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 {% if is_resumable %}
 <section class="module ai-goal-detail">
   <h2>{% translate "Resume" %}</h2>

@@ -181,11 +181,32 @@ Both actions require the `ai_hub.approve_game_action` permission. Users without 
 
 Approval is gated by `AI_HUB_GAME_ACTION_DISPATCH_ENABLED`: when that kill-switch is off, approving is refused outright so an action is never left approved-but-unexecuted.
 
+### Cleaning up orphaned running goals
+
+A goal can stay stuck in `running` if its execution session never reaches a terminal
+state (an interrupted run, or stub sessions created by integration test suites).
+These never clean themselves up. Use:
+
+```text
+python manage.py cleanup_orphaned_goals
+python manage.py cleanup_orphaned_goals --workspace 3
+python manage.py cleanup_orphaned_goals --older-than-hours 24
+python manage.py cleanup_orphaned_goals --dry-run
+```
+
+The command cancels `running` goals that have **no active session**
+(pending/running/waiting_async). Goals with an active session are never touched.
+Use `--dry-run` first to see what would be cancelled. This is distinct from
+`reconcile_goal_outcomes()`, which only repairs goals whose session already reached
+a terminal state.
+
 ### Feature flags and the admin
 
 GAME kill-switch flags (`AI_HUB_GAME_GOALS_ENABLED`, `AI_HUB_GAME_SCHEDULER_ENABLED`, etc.) gate the **service layer** — `create_goal`, `claim_next_goal`, `execute_game_action`, `record_memory`, `resume_goal_execution`, and `run_delegated_agent`.
 
-They do **not** gate direct Django admin model edits. The standard "Add GAME goal" form writes through the model, so it bypasses both the flag and the `create_goal` "must start draft/queued" rule. Likewise, the goal bulk actions (`queue`/`cancel`/`reopen`) call `transition_goal_status`, which is not flag-gated. If you need a hard stop on goal creation in an environment, disable the relevant add/change admin permissions in addition to the feature flag.
+The goals flag removes goal creation and lifecycle bulk actions from Admin. Runtime audit records (action runs, continuations, approvals and delegations) are immutable; approval/rejection use dedicated POST controls that call the service layer and preserve an optional review note.
+
+Aggregated GAME views apply permissions to each related collection. Approval panels require `approve_game_action`; session, action, memory and configuration panels require their corresponding view permissions. Session/step/action/continuation/approval payloads use the shared redaction layer rather than raw JSON widgets.
 
 ## Creating A GAME Session
 

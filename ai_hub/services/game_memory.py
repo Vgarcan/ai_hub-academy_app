@@ -21,6 +21,11 @@ def record_memory(
 ) -> GameMemoryEntry:
     """Create and persist a GameMemoryEntry after scope validation."""
     require_game_feature("AI_HUB_GAME_MEMORY_ENABLED")
+    # Coerce float/int/str callers to Decimal. A raw float (e.g. 0.9) reaches the
+    # DecimalField as 0.9000000000000000222..., which fails the 2-decimal-place
+    # validator; routing through str() yields a clean Decimal('0.9').
+    if not isinstance(importance_score, Decimal):
+        importance_score = Decimal(str(importance_score))
     entry = GameMemoryEntry(
         workspace=workspace,
         goal=goal,
@@ -54,6 +59,7 @@ def build_goal_memory_context(
 
     Returns metadata about truncation so the caller can surface it.
     """
+    require_game_feature("AI_HUB_GAME_MEMORY_ENABLED")
     try:
         max_chars = int(max_chars)
     except (TypeError, ValueError) as exc:

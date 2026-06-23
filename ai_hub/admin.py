@@ -5,7 +5,7 @@ from django.contrib import admin
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db.models import Count, Q
-from django.http import HttpResponseRedirect, JsonResponse
+from django.http import HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.html import format_html
@@ -42,7 +42,7 @@ from .services.admin_control_center import (
     build_game_graph_context,
 )
 from .services.execution_runner import run_execution_session
-from .services.game_operational_ux import redact_payload
+from .services.game_operational_ux import redact_payload, redact_text
 from .services.game_resume import approve_action_run, reject_action_run
 
 
@@ -51,6 +51,18 @@ ACTIVE_EXECUTION_STATUSES = (
     ExecutionSession.Status.RUNNING,
     ExecutionSession.Status.WAITING_ASYNC,
 )
+
+
+def _render_redacted_json(payload):
+    safe = redact_payload(payload or {})
+    return format_html(
+        "<pre>{}</pre>",
+        json.dumps(safe, indent=2, ensure_ascii=False, default=str),
+    )
+
+
+def _render_redacted_text(value):
+    return format_html("<pre>{}</pre>", redact_text(value))
 GAME_INPUT_HINTS = {
     "goal",
     "goal_text",
@@ -428,7 +440,11 @@ class ModelConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
         },
         "model_name": {
             "placeholder": "Examples: gpt-4.1-mini, ollama/qwen3:8b, deepseek-chat",
-            "help_text": _("Use the exact model identifier expected by the provider or LiteLLM adapter."),
+            "help_text": _(
+                "Use the exact model identifier expected by the provider or LiteLLM adapter. "
+                "For the Training (stub) provider the name must be 'training' or start with "
+                "'training/' (e.g. 'training/assistant') so it routes to the deterministic stub."
+            ),
         },
         "temperature_default": {
             "placeholder": "0.20 for extraction, 0.70 for writing",
@@ -1124,7 +1140,7 @@ class GameWorkspaceAdmin(AIHubListPageMixin, admin.ModelAdmin):
             **self.admin_site.each_context(request),
             "title": f"Dashboard — {workspace.name}",
             "opts": self.model._meta,
-            **build_workspace_dashboard_context(workspace),
+            **build_workspace_dashboard_context(workspace, user=request.user),
         }
         return TemplateResponse(request, "admin/ai_hub/gameworkspace/dashboard.html", context)
 
@@ -1167,7 +1183,7 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
         extra_context = extra_context or {}
         goal = self.get_object(request, object_id)
         if goal:
-            extra_context.update(build_goal_detail_context(goal))
+            extra_context.update(build_goal_detail_context(goal, user=request.user))
         return super().change_view(request, object_id, form_url, extra_context=extra_context)
 
     @admin.action(description=_("Queue selected goals"))
@@ -1279,9 +1295,11 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
     autocomplete_fields = ("pipeline", "entry_agent", "goal", "triggered_by")
     readonly_fields = (
         "status",
-        "final_context",
+        "runtime_config_redacted",
+        "initial_context_redacted",
+        "final_context_redacted",
         "goal_outcome_fingerprint",
-        "error_detail",
+        "error_detail_redacted",
         "started_at",
         "finished_at",
         "created_at",
@@ -1376,6 +1394,65 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
         }),
     )
 
+    def has_add_permission(self, request):
+        from .services.game_feature_flags import is_game_feature_enabled
+
+        return is_game_feature_enabled("AI_HUB_GAME_GOALS_ENABLED") and super().has_add_permission(request)
+
+    def get_actions(self, request):
+        from .services.game_feature_flags import is_game_feature_enabled
+
+        actions = super().get_actions(request)
+        if not is_game_feature_enabled("AI_HUB_GAME_GOALS_ENABLED"):
+            for name in self.actions:
+                actions.pop(name, None)
+        return actions
+
+    audit_fieldsets = (
+        ("5.0 Generic execution", {
+            "fields": (
+                "runtime_kind", "runtime_mode", "status", "pipeline", "entry_agent",
+                "goal", "triggered_by",
+            ),
+        }),
+        ("Source adapter", {
+            "fields": ("source_content_type", "source_object_id", "source_label"),
+        }),
+        ("Goal and context", {
+            "fields": (
+                "goal_text", "runtime_config_redacted", "initial_context_redacted",
+                "final_context_redacted",
+            ),
+        }),
+        ("Timing and audit", {
+            "fields": (
+                "started_at", "finished_at", "created_at", "updated_at",
+                "goal_outcome_fingerprint", "error_detail_redacted",
+            ),
+        }),
+    )
+
+    def get_fieldsets(self, request, obj=None):
+        if obj is not None:
+            return self.audit_fieldsets
+        return super().get_fieldsets(request, obj)
+
+    @admin.display(description=_("Runtime config (redacted)"))
+    def runtime_config_redacted(self, obj):
+        return _render_redacted_json(obj.runtime_config)
+
+    @admin.display(description=_("Initial context (redacted)"))
+    def initial_context_redacted(self, obj):
+        return _render_redacted_json(obj.initial_context)
+
+    @admin.display(description=_("Final context (redacted)"))
+    def final_context_redacted(self, obj):
+        return _render_redacted_json(obj.final_context)
+
+    @admin.display(description=_("Error detail (redacted)"))
+    def error_detail_redacted(self, obj):
+        return _render_redacted_text(obj.error_detail)
+
     def get_readonly_fields(self, request, obj=None):
         readonly = list(super().get_readonly_fields(request, obj))
         if obj and obj.status != ExecutionSession.Status.PENDING:
@@ -1409,6 +1486,8 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
         return custom_urls + urls
 
     def change_view(self, request, object_id, form_url="", extra_context=None):
+        from .services.game_operational_ux import build_session_timeline
+
         extra_context = extra_context or {}
         session = self.get_object(request, object_id)
         if session:
@@ -1416,12 +1495,24 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
                 self._timeline_step_context(step_run)
                 for step_run in session.step_runs.select_related("agent", "pipeline_step").order_by("order")
             ]
+            timeline_events = build_session_timeline(session, user=request.user)
+            url_names = {
+                "step": "admin:ai_hub_executionsteprun_change",
+                "action": "admin:ai_hub_gameactionrun_change",
+                "continuation": "admin:ai_hub_gamecontinuationrequest_change",
+                "approval": "admin:ai_hub_gameactionapprovalrequest_change",
+            }
+            for event in timeline_events:
+                event["change_url"] = reverse(url_names[event["kind"]], args=[event["pk"]])
+            extra_context["timeline_events"] = timeline_events
             extra_context["timeline_summary"] = {
-                "total": len(extra_context["timeline_steps"]),
+                "total": len(timeline_events),
                 "runtime_kind": session.runtime_kind,
                 "status": session.status,
                 "finish_reason": (session.final_context or {}).get("finish_reason", ""),
-                "final_answer": (session.final_context or {}).get("final_answer", ""),
+                "final_answer": redact_text(
+                    (session.final_context or {}).get("final_answer", "")
+                ),
             }
         return super().change_view(request, object_id, form_url, extra_context=extra_context)
 
@@ -1552,10 +1643,10 @@ class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
         "status",
         "latency_ms",
         "created_at",
-        "request_payload",
-        "response_payload",
-        "observation_payload",
-        "error_detail",
+        "request_payload_redacted",
+        "response_payload_redacted",
+        "observation_payload_redacted",
+        "error_detail_redacted",
     )
 
     def has_add_permission(self, request):
@@ -1563,6 +1654,22 @@ class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    @admin.display(description=_("Request payload (redacted)"))
+    def request_payload_redacted(self, obj):
+        return _render_redacted_json(obj.request_payload)
+
+    @admin.display(description=_("Response payload (redacted)"))
+    def response_payload_redacted(self, obj):
+        return _render_redacted_json(obj.response_payload)
+
+    @admin.display(description=_("Observation payload (redacted)"))
+    def observation_payload_redacted(self, obj):
+        return _render_redacted_json(obj.observation_payload)
+
+    @admin.display(description=_("Error detail (redacted)"))
+    def error_detail_redacted(self, obj):
+        return _render_redacted_text(obj.error_detail)
     ai_hub_field_guidance = {
         "session": {
             "help_text": _("Execution session this step belongs to."),
@@ -1612,11 +1719,15 @@ class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "description": _("One observable step inside a reusable AI Hub execution session."),
         }),
         ("Payloads", {
-            "fields": ("request_payload", "response_payload", "observation_payload"),
+            "fields": (
+                "request_payload_redacted",
+                "response_payload_redacted",
+                "observation_payload_redacted",
+            ),
             "description": _("Request, model/tool response and environment observation stored as portable JSON."),
         }),
         ("Error", {
-            "fields": ("error_detail",),
+            "fields": ("error_detail_redacted",),
             "description": _("Failure details for this step, if any."),
         }),
     )
@@ -1779,7 +1890,7 @@ class GameActionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
         "input_payload_redacted",
         "output_payload_redacted",
         "observation_payload_redacted",
-        "error_detail",
+        "error_detail_redacted",
         "started_at",
         "finished_at",
         "latency_ms",
@@ -1792,11 +1903,7 @@ class GameActionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
         return False
 
     def _render_redacted(self, payload):
-        safe = redact_payload(payload or {})
-        return format_html(
-            "<pre>{}</pre>",
-            json.dumps(safe, indent=2, ensure_ascii=False, default=str),
-        )
+        return _render_redacted_json(payload)
 
     @admin.display(description=_("Input payload (redacted)"))
     def input_payload_redacted(self, obj):
@@ -1809,6 +1916,10 @@ class GameActionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
     @admin.display(description=_("Observation payload (redacted)"))
     def observation_payload_redacted(self, obj):
         return self._render_redacted(obj.observation_payload)
+
+    @admin.display(description=_("Error detail (redacted)"))
+    def error_detail_redacted(self, obj):
+        return _render_redacted_text(obj.error_detail)
 
     fieldsets = (
         ("4.9 Action run", {
@@ -1840,7 +1951,7 @@ class GameActionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
             ),
         }),
         ("Error", {
-            "fields": ("error_detail",),
+            "fields": ("error_detail_redacted",),
             "description": _("Handler or validation error, if any."),
         }),
     )
@@ -1912,7 +2023,19 @@ class GameContinuationRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
     list_filter = ("status", "reason_code", "goal__workspace")
     search_fields = ("detail", "session__source_label", "goal__title")
     autocomplete_fields = ("session", "goal")
-    readonly_fields = ("created_at", "resolved_at", "resolved_by")
+    readonly_fields = (
+        "session", "goal", "reason_code", "detail_redacted", "payload_redacted",
+        "status", "created_at", "resolved_at", "resolved_by",
+    )
+    fields = readonly_fields
+
+    @admin.display(description=_("Detail (redacted)"))
+    def detail_redacted(self, obj):
+        return _render_redacted_text(obj.detail)
+
+    @admin.display(description=_("Payload (redacted)"))
+    def payload_redacted(self, obj):
+        return _render_redacted_json(obj.payload)
 
     def has_add_permission(self, request):
         return False
@@ -1942,14 +2065,92 @@ class GameActionApprovalRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
     list_filter = ("status", "goal__workspace")
     search_fields = ("action_run__action_name", "goal__title", "review_note")
     autocomplete_fields = ("goal",)
-    readonly_fields = ("action_run", "created_at", "reviewed_at", "reviewed_by")
+    change_form_template = "admin/ai_hub/gameactionapprovalrequest/change_form.html"
+    readonly_fields = (
+        "action_run", "goal", "status", "requested_payload_redacted",
+        "reviewed_by", "review_note_redacted", "created_at", "reviewed_at", "expires_at",
+    )
+    fields = readonly_fields
     actions = ("approve_selected_actions", "reject_selected_actions")
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "<int:object_id>/approve/",
+                self.admin_site.admin_view(self.review_approve_view),
+                name="ai_hub_gameactionapprovalrequest_approve",
+            ),
+            path(
+                "<int:object_id>/reject/",
+                self.admin_site.admin_view(self.review_reject_view),
+                name="ai_hub_gameactionapprovalrequest_reject",
+            ),
+        ]
+        return custom_urls + urls
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        obj = self.get_object(request, object_id)
+        extra_context = extra_context or {}
+        extra_context.update(
+            {
+                "can_review_action": request.user.has_perm("ai_hub.approve_game_action"),
+                "approval_is_pending": bool(
+                    obj and obj.status == GameActionApprovalRequest.Status.PENDING
+                ),
+            }
+        )
+        return super().change_view(
+            request, object_id, form_url=form_url, extra_context=extra_context
+        )
+
+    def _review_view(self, request, object_id, *, approve):
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not request.user.has_perm("ai_hub.approve_game_action"):
+            raise PermissionDenied
+        approval = self.get_object(request, object_id)
+        if approval is None:
+            from django.http import Http404
+            raise Http404
+        review_note = str(request.POST.get("review_note") or "").strip()[:4000]
+        if approve:
+            approve_action_run(
+                action_run_id=approval.action_run_id,
+                reviewed_by=request.user,
+                review_note=review_note,
+            )
+            self.message_user(request, _("Action approved and executed."), level=messages.SUCCESS)
+        else:
+            reject_action_run(
+                action_run_id=approval.action_run_id,
+                reviewed_by=request.user,
+                review_note=review_note,
+            )
+            self.message_user(request, _("Action rejected."), level=messages.SUCCESS)
+        return HttpResponseRedirect(
+            reverse("admin:ai_hub_gameactionapprovalrequest_change", args=[approval.pk])
+        )
+
+    def review_approve_view(self, request, object_id):
+        return self._review_view(request, object_id, approve=True)
+
+    def review_reject_view(self, request, object_id):
+        return self._review_view(request, object_id, approve=False)
 
     def has_add_permission(self, request):
         return False
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    @admin.display(description=_("Requested payload (redacted)"))
+    def requested_payload_redacted(self, obj):
+        return _render_redacted_json(obj.requested_payload)
+
+    @admin.display(description=_("Review note (redacted)"))
+    def review_note_redacted(self, obj):
+        return _render_redacted_text(obj.review_note)
 
     def get_actions(self, request):
         actions = super().get_actions(request)
@@ -2075,8 +2276,14 @@ class GameGoalPlanAdmin(AIHubListPageMixin, admin.ModelAdmin):
     list_display = ("id", "goal", "status", "version", "created_at", "updated_at")
     list_filter = ("status",)
     search_fields = ("goal__title",)
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("version", "revision_history", "created_at", "updated_at")
     inlines = [GameGoalPlanStepInline]
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None:
+            fields.extend(["goal", "summary", "status"])
+        return tuple(dict.fromkeys(fields))
 
 
 @admin.register(GameGoalPlanStep)
@@ -2119,8 +2326,14 @@ class GameDelegationRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
     search_fields = ("parent_goal__title", "target_agent__name", "task")
     readonly_fields = (
         "parent_action_run", "parent_goal", "delegated_session", "target_agent",
-        "task", "expected_result", "result_summary", "created_at", "finished_at",
+        "status", "task", "expected_result", "result_summary", "created_at", "finished_at",
     )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 def _install_ai_hub_workspace_admin_urls():

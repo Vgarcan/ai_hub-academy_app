@@ -1,5 +1,6 @@
 from decimal import Decimal
 from datetime import timedelta
+import re
 
 from django.db.models import Exists, OuterRef
 
@@ -33,6 +34,18 @@ def redact_payload(payload):
         else:
             result[k] = redact_payload(v)
     return result
+
+
+def redact_text(value):
+    """Best-effort masking for common secret forms embedded in text/error strings."""
+    text = str(value or "")
+    text = re.sub(
+        r"(?i)(api[_-]?key|password|secret|access[_-]?token|refresh[_-]?token|authorization)"
+        r"(\s*[:=]\s*)([^\s,;]+)",
+        r"\1\2***REDACTED***",
+        text,
+    )
+    return re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer ***REDACTED***", text)
 
 
 def build_scheduler_explanation(goal, *, now=None):
@@ -71,14 +84,16 @@ def build_scheduler_explanation(goal, *, now=None):
     return {"base_priority": base, "bonuses": bonuses, "total": total}
 
 
-def build_workspace_dashboard_context(workspace):
+def build_workspace_dashboard_context(workspace, *, user=None):
     """Aggregate operational data scoped to one workspace."""
     from django.db.models import Count
     from django.utils import timezone
     from ai_hub.models import (
         ExecutionSession,
+        ExecutionStepRun,
         GameActionApprovalRequest,
         GameActionRun,
+        GameDelegationRun,
         GameGoalDependency,
         GameWorkspaceAction,
         GameWorkspaceAgent,
@@ -110,24 +125,43 @@ def build_workspace_dashboard_context(workspace):
             {"goal": g, "explanation": build_scheduler_explanation(g, now=now)}
             for g in eligible_qs
         ),
-        key=lambda item: -item["explanation"]["total"],
+        key=lambda item: (
+            -item["explanation"]["total"],
+            item["goal"].due_at is None,
+            item["goal"].due_at or now,
+            item["goal"].created_at,
+            item["goal"].pk,
+        ),
     )
     top_eligible = scored[:5]
 
-    blocked_goals = list(
+    dependency_blocked = list(
         goals_qs.filter(status=GameGoal.Status.QUEUED)
         .annotate(has_unresolved=Exists(unresolved_req))
         .filter(has_unresolved=True)
     )
+    from ai_hub.services.game_dependencies import get_goal_blockers
 
-    pending_approvals = list(
-        GameActionApprovalRequest.objects.filter(
-            goal__workspace=workspace,
-            status=GameActionApprovalRequest.Status.PENDING,
+    blocked_candidates = {
+        goal.pk: goal
+        for goal in [*dependency_blocked, *goals_qs.filter(status=GameGoal.Status.BLOCKED)]
+    }
+    blocked_goals = [
+        {"goal": goal, "blockers": get_goal_blockers(goal)}
+        for goal in blocked_candidates.values()
+    ]
+
+    can_review = user is None or user.has_perm("ai_hub.approve_game_action")
+    pending_approvals = []
+    if can_review:
+        pending_approvals = list(
+            GameActionApprovalRequest.objects.filter(
+                goal__workspace=workspace,
+                status=GameActionApprovalRequest.Status.PENDING,
+            )
+            .select_related("action_run", "goal")
+            .order_by("-created_at")[:10]
         )
-        .select_related("action_run", "goal")
-        .order_by("-created_at")[:10]
-    )
 
     recent_sessions = list(
         ExecutionSession.objects.filter(goal__workspace=workspace)
@@ -135,21 +169,38 @@ def build_workspace_dashboard_context(workspace):
         .order_by("-created_at")[:10]
     )
 
-    recent_action_runs = list(
-        GameActionRun.objects.filter(session__goal__workspace=workspace)
-        .select_related("action", "session")
-        .order_by("-started_at")[:10]
-    )
+    recent_action_runs = []
+    if user is None or user.has_perm("ai_hub.view_gameactionrun"):
+        recent_action_runs = list(
+            GameActionRun.objects.filter(session__goal__workspace=workspace)
+            .select_related("action", "session")
+            .order_by("-started_at")[:10]
+        )
 
     policy = workspace.default_policy or {}
     budget = policy.get("budget", {})
 
-    enabled_agents = list(
-        GameWorkspaceAgent.objects.filter(workspace=workspace, is_enabled=True).select_related("agent")
-    )
-    enabled_actions = list(
-        GameWorkspaceAction.objects.filter(workspace=workspace, is_enabled=True).select_related("action")
-    )
+    enabled_agents = []
+    if user is None or user.has_perm("ai_hub.view_gameworkspaceagent"):
+        enabled_agents = list(
+            GameWorkspaceAgent.objects.filter(workspace=workspace, is_enabled=True).select_related("agent")
+        )
+    enabled_actions = []
+    if user is None or user.has_perm("ai_hub.view_gameworkspaceaction"):
+        enabled_actions = list(
+            GameWorkspaceAction.objects.filter(workspace=workspace, is_enabled=True).select_related("action")
+        )
+
+    workspace_sessions = ExecutionSession.objects.filter(goal__workspace=workspace)
+    budget_consumption = {
+        "sessions": workspace_sessions.count(),
+        "iterations": ExecutionStepRun.objects.filter(session__goal__workspace=workspace).count(),
+        "action_runs": GameActionRun.objects.filter(session__goal__workspace=workspace).count(),
+        "delegations": GameDelegationRun.objects.filter(parent_goal__workspace=workspace).count(),
+        "configured_limits": budget,
+    }
+
+    from ai_hub.services.game_dependencies import get_goal_blockers
 
     return {
         "workspace": workspace,
@@ -160,38 +211,81 @@ def build_workspace_dashboard_context(workspace):
         "recent_sessions": recent_sessions,
         "recent_action_runs": recent_action_runs,
         "budget": budget,
+        "budget_consumption": budget_consumption,
         "policy": policy,
         "enabled_agents": enabled_agents,
         "enabled_actions": enabled_actions,
     }
 
 
-def build_goal_detail_context(goal):
+def build_goal_detail_context(goal, *, user=None):
     """Aggregate operational data scoped to one goal."""
     from django.core.exceptions import ObjectDoesNotExist
-    from ai_hub.models import ExecutionSession, GameActionRun, GameMemoryEntry
+    from ai_hub.services.game_dependencies import get_goal_blockers
+    from ai_hub.models import (
+        ExecutionSession,
+        GameActionApprovalRequest,
+        GameActionRun,
+        GameContinuationRequest,
+        GameMemoryEntry,
+    )
     from ai_hub.services.game_resume import _WAITING_GOAL_STATUSES
 
-    session_history = list(
-        ExecutionSession.objects.filter(goal=goal).select_related("entry_agent").order_by("-created_at")
-    )
-    action_runs = list(
-        GameActionRun.objects.filter(session__goal=goal)
-        .select_related("action", "session")
-        .order_by("started_at")
-    )
-    memory_entries = list(
-        GameMemoryEntry.objects.filter(goal=goal).order_by("-importance_score", "created_at")[:20]
-    )
+    session_history = []
+    if user is None or user.has_perm("ai_hub.view_executionsession"):
+        session_history = list(
+            ExecutionSession.objects.filter(goal=goal)
+            .select_related("entry_agent")
+            .order_by("-created_at")
+        )
+    action_runs = []
+    if user is None or user.has_perm("ai_hub.view_gameactionrun"):
+        action_runs = list(
+            GameActionRun.objects.filter(session__goal=goal)
+            .select_related("action", "session")
+            .order_by("started_at")
+        )
+    memory_entries = []
+    if user is None or user.has_perm("ai_hub.view_gamememoryentry"):
+        memory_entries = list(
+            GameMemoryEntry.objects.filter(goal=goal)
+            .order_by("-importance_score", "created_at")[:20]
+        )
 
     plan = None
     try:
-        plan = goal.plan
+        if user is None or user.has_perm("ai_hub.view_gamegoalplan"):
+            plan = goal.plan
     except ObjectDoesNotExist:
         pass
 
     waiting_sessions = [s for s in session_history if s.status == ExecutionSession.Status.WAITING_ASYNC]
-    is_resumable = goal.status in _WAITING_GOAL_STATUSES and bool(waiting_sessions)
+    is_resumable = False
+    for waiting_session in waiting_sessions:
+        continuation = (
+            GameContinuationRequest.objects.filter(
+                session=waiting_session,
+                status=GameContinuationRequest.Status.PENDING,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if continuation is None:
+            continue
+        if continuation.reason_code == GameContinuationRequest.ReasonCode.NEEDS_APPROVAL:
+            action_run_id = (continuation.payload or {}).get("action_run_id")
+            approval_status = GameActionApprovalRequest.objects.filter(
+                action_run_id=action_run_id,
+                action_run__session=waiting_session,
+            ).values_list("status", flat=True).first()
+            if approval_status not in {
+                GameActionApprovalRequest.Status.APPROVED,
+                GameActionApprovalRequest.Status.REJECTED,
+            }:
+                continue
+        is_resumable = goal.status in _WAITING_GOAL_STATUSES
+        if is_resumable:
+            break
 
     scheduler_explanation = None
     if goal.status in {GameGoal.Status.QUEUED, GameGoal.Status.RUNNING}:
@@ -204,4 +298,89 @@ def build_goal_detail_context(goal):
         "plan": plan,
         "is_resumable": is_resumable,
         "scheduler_explanation": scheduler_explanation,
+        "blockers": get_goal_blockers(goal),
     }
+
+
+def build_session_timeline(session, *, user=None):
+    """Build one permission-aware chronological timeline across GAME audit models."""
+    from ai_hub.models import (
+        GameActionApprovalRequest,
+        GameActionRun,
+        GameContinuationRequest,
+    )
+
+    events = []
+    if user is None or user.has_perm("ai_hub.view_executionsteprun"):
+        for step in session.step_runs.select_related("agent").order_by("created_at", "pk"):
+            observation = step.observation_payload or {}
+            decision = observation.get("decision", {}) if isinstance(observation, dict) else {}
+            events.append(
+                {
+                    "kind": "step",
+                    "pk": step.pk,
+                    "timestamp": step.created_at,
+                    "status": step.status,
+                    "agent": step.agent.name if step.agent_id else "",
+                    "action": step.action_name,
+                    "summary": redact_text(
+                        decision.get("message", "") if isinstance(decision, dict) else ""
+                    ),
+                    "latency_ms": step.latency_ms,
+                    "error": redact_text(step.error_detail),
+                }
+            )
+    if user is None or user.has_perm("ai_hub.view_gameactionrun"):
+        for run in GameActionRun.objects.filter(session=session).select_related("action"):
+            events.append(
+                {
+                    "kind": "action",
+                    "pk": run.pk,
+                    "timestamp": run.started_at or session.created_at,
+                    "status": run.status,
+                    "agent": session.entry_agent.name if session.entry_agent_id else "",
+                    "action": run.action_name,
+                    "summary": redact_text(
+                        (run.output_payload or {}).get("message", "")
+                        if isinstance(run.output_payload, dict)
+                        else ""
+                    ),
+                    "latency_ms": run.latency_ms,
+                    "error": redact_text(run.error_detail),
+                }
+            )
+    if user is None or user.has_perm("ai_hub.view_gamecontinuationrequest"):
+        for continuation in GameContinuationRequest.objects.filter(session=session):
+            events.append(
+                {
+                    "kind": "continuation",
+                    "pk": continuation.pk,
+                    "timestamp": continuation.created_at,
+                    "status": continuation.status,
+                    "agent": "",
+                    "action": continuation.reason_code,
+                    "summary": redact_text(continuation.detail),
+                    "latency_ms": None,
+                    "error": "",
+                }
+            )
+    can_view_approval = user is None or user.has_perm("ai_hub.approve_game_action")
+    if can_view_approval:
+        for approval in GameActionApprovalRequest.objects.filter(
+            action_run__session=session
+        ).select_related("action_run", "reviewed_by"):
+            events.append(
+                {
+                    "kind": "approval",
+                    "pk": approval.pk,
+                    "timestamp": approval.created_at,
+                    "status": approval.status,
+                    "agent": str(approval.reviewed_by or ""),
+                    "action": approval.action_run.action_name,
+                    "summary": redact_text(approval.review_note),
+                    "latency_ms": None,
+                    "error": "",
+                }
+            )
+    events.sort(key=lambda event: (event["timestamp"], event["kind"], event["pk"]))
+    return events

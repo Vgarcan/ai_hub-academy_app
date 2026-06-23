@@ -88,13 +88,19 @@
         <h2>{% translate "Blocked goals" %}</h2>
       </div>
       <div class="ai-run-list">
-        {% for goal in blocked_goals %}
-        <a class="ai-run-card ai-run-card--blocked" href="{% url 'admin:ai_hub_gamegoal_change' goal.pk %}">
+        {% for item in blocked_goals %}
+        <a class="ai-run-card ai-run-card--blocked" href="{% url 'admin:ai_hub_gamegoal_change' item.goal.pk %}">
           <header>
-            <strong>{{ goal.title }}</strong>
+            <strong>{{ item.goal.title }}</strong>
             <span class="ai-status-pill">{% translate "Blocked" %}</span>
           </header>
-          <small>{% translate "Unresolved required dependencies" %}</small>
+          <small>
+            {% for blocker in item.blockers %}
+              {{ blocker.title }} ({{ blocker.status }}){% if not forloop.last %}, {% endif %}
+            {% empty %}
+              {% translate "Blocked by policy or operator decision" %}
+            {% endfor %}
+          </small>
         </a>
         {% endfor %}
       </div>
@@ -156,6 +162,21 @@
       {% endif %}
       {% if budget %}
       <p><strong>{% translate "Budget" %}:</strong> {{ budget }}</p>
+      {% endif %}
+    </article>
+    {% endif %}
+
+    {% if budget_consumption %}
+    <article class="ai-control__panel">
+      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
+        <h2>{% translate "Budget consumption" %}</h2>
+      </div>
+      <p>{% translate "Sessions" %}: {{ budget_consumption.sessions }}</p>
+      <p>{% translate "Iterations" %}: {{ budget_consumption.iterations }}</p>
+      <p>{% translate "Action runs" %}: {{ budget_consumption.action_runs }}</p>
+      <p>{% translate "Delegations" %}: {{ budget_consumption.delegations }}</p>
+      {% if budget_consumption.configured_limits %}
+      <p><strong>{% translate "Configured limits" %}:</strong> {{ budget_consumption.configured_limits }}</p>
       {% endif %}
     </article>
     {% endif %}

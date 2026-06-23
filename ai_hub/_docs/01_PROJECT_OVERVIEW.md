@@ -46,10 +46,11 @@ The workspaces are visually separated in Admin, but they share the same technica
 - knowledge collections and documents,
 - tool definitions,
 - sequential pipeline orchestration,
-- GAME-style goal sessions,
+- autonomous GAME goals (durable goals, deterministic scheduling, action dispatch, scoped memory, approval/resume, policies, plans, and sub-agent delegation),
+- per-capability GAME feature flags,
 - staff-only execution endpoints,
 - execution sessions and step logs,
-- admin control center metrics,
+- admin control center metrics and operational GAME dashboards,
 - guided forms and examples.
 
 ## What The App Does Not Own

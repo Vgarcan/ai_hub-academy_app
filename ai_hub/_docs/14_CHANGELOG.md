@@ -218,9 +218,9 @@ Host-project features should be documented in the host project, not here.
 - GAME auto-executes only tools with an explicit `context_tool` classification;
   tools in missing or action categories are blocked by default.  Orchestrator
   retains its legacy broad-tool behaviour.
-- `run_doc_sync` command uses a temporary explicit legacy-action opt-in
+- Host doc-sync tooling may use a temporary explicit legacy-action opt-in
   (`allow_legacy_game_action_tools=True`) until a proper dispatcher definition
-  exists.
+  exists. (Doc-sync is a host-project command, not part of reusable `ai_hub`.)
 - Runtime audit records (lifecycle status, final context, outcome fingerprints,
   timing, and step audit fields) are now read-only in Admin.  Completed sessions
   also lock their runtime inputs.
@@ -255,6 +255,17 @@ Host-project features should be documented in the host project, not here.
 
 ### Fixed
 
+#### Post-Phase-12 stabilization
+
+- Delegated sessions now recover workspace policy from their durable delegation record, use strict least-privilege read actions, and cannot execute approval-gated child actions.
+- Self-delegation is denied by default; delegation budget reservation is serialized under the parent-goal lock.
+- Plan step ordering/cycles are validated from every model/Admin path; plans gain revision snapshots and database constraints for versions, orders and self-links.
+- Approval, continuation and delegation audit records are immutable in Admin. Dedicated CSRF-protected approval/rejection POST controls preserve review notes and call service functions.
+- Aggregated Admin views enforce related-model permissions; session, step, action, continuation and approval payloads share recursive redaction.
+- The execution timeline combines steps, action runs, continuations and approvals. Workspace/goal views expose usage counters, concrete blockers and resolvability based on a valid pending continuation.
+- GAME feature fallbacks are fail-closed; development enables them through DEBUG while production requires explicit opt-in. Goal execution and memory retrieval are gated in addition to creation/write paths.
+- Migration `0013_stabilize_phases_10_12` adds plan revision history and normalises legacy data before plan/delegation constraints.
+
 #### Post-implementation audit (Phases 11–12)
 
 - `redact_payload` is now actually applied: `GameActionRunAdmin` renders
@@ -277,6 +288,26 @@ Host-project features should be documented in the host project, not here.
   previously computed but never displayed.
 - `build_goal_detail_context` catches `ObjectDoesNotExist` for a missing goal plan
   instead of a bare `except Exception`.
+
+#### GAME execution-test report follow-up
+
+- `record_memory()` now coerces `importance_score` to `Decimal` via `Decimal(str(value))`,
+  so float callers (e.g. `0.9`) no longer hit the DecimalField 2-decimal-place
+  validator.
+- `ModelConfig.clean()` enforces the training-stub naming convention: a
+  Training-provider model must be named `training` or start with `training/`,
+  turning a previously silent runtime fall-through into a clear config-time error.
+  Admin help text documents the convention.
+- `ModelConfig.temperature_default` default changed from the float `0.70` to
+  `Decimal("0.70")`; the float default failed `full_clean()` on any instance that
+  did not set temperature explicitly. Migration `0014_alter_modelconfig_temperature_default`
+  (metadata-only, no data change).
+- Orphaned RUNNING goal cleanup: `find_orphaned_running_goals()` /
+  `cancel_orphaned_running_goals()` in `game_goals`, plus the
+  `cleanup_orphaned_goals` management command (supports `--workspace`,
+  `--older-than-hours`, `--dry-run`). A goal stuck in RUNNING with no active
+  session (interrupted runs, integration-suite stubs) is cancelled; goals with an
+  active session are never touched.
 
 ### Removed
 

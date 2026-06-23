@@ -35,12 +35,7 @@ Run the full project suite:
 python manage.py test
 ```
 
-In this project, use the virtual environment:
-
-```bash
-.venv/bin/python manage.py check
-.venv/bin/python manage.py test ai_hub
-```
+If the project uses a virtual environment, run these commands through it (for example `.venv/bin/python manage.py test ai_hub` on Unix, or the equivalent interpreter path on Windows).
 
 ## Test Layers
 
@@ -312,7 +307,9 @@ Each GAME subsystem has an env-var kill switch. Test that:
 - `run_delegated_agent` raises when `AI_HUB_GAME_DELEGATION_ENABLED=False`.
 - All functions behave normally when flags are True.
 
-Use `@override_settings(FLAG_NAME=False)` in the test. All flags default to True in `_core/settings.py`.
+Use `@override_settings(FLAG_NAME=False)` in tests. The reusable app fallback is fail-closed. `_core` enables GAME by default only in DEBUG development; production requires explicit environment opt-in for each flag.
+
+Feature tests cover whole boundaries rather than only one public function: goal-bound session creation/execution, memory read and write, action dispatch/approval, scheduler claims, resume and delegated child policy.
 
 ## Release Gates
 
@@ -327,6 +324,8 @@ Legacy GAME sessions continue to execute.
 A manual vertical-slice test succeeds (create workspace → goal → session → finish).
 Logs show no unhandled exceptions during the smoke test.
 Rollback path is confirmed: the feature flag can be set to False without a deploy.
+Delegated policy and budget concurrency are validated on PostgreSQL.
+Admin mutation-bypass and payload-redaction regressions are green.
 ```
 
 ## Test Data Rules

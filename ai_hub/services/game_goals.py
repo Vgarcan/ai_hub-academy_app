@@ -123,3 +123,62 @@ def update_goal_priority(goal: GameGoal, calculated_priority) -> GameGoal:
     locked_goal.full_clean()
     locked_goal.save(update_fields=["calculated_priority", "updated_at"])
     return locked_goal
+
+
+def find_orphaned_running_goals(*, workspace=None, older_than=None):
+    """Return RUNNING goals that have no active execution session.
+
+    A goal can stay stuck in RUNNING when its session(s) never reach a terminal
+    state — e.g. interrupted runs, or stub sessions created by integration suites.
+    A goal with any active session (pending/running/waiting_async) is never a
+    candidate.
+
+    Args:
+        workspace: optional GameWorkspace to scope the sweep.
+        older_than: optional timedelta; only goals whose ``updated_at`` predates
+            ``now - older_than`` are returned.
+
+    Returns a list of candidate GameGoal instances (no mutation).
+    """
+    from django.db.models import Exists, OuterRef
+    from ai_hub.models import ExecutionSession
+
+    active_session = ExecutionSession.objects.filter(
+        goal_id=OuterRef("pk"),
+        status__in=(
+            ExecutionSession.Status.PENDING,
+            ExecutionSession.Status.RUNNING,
+            ExecutionSession.Status.WAITING_ASYNC,
+        ),
+    )
+    qs = (
+        GameGoal.objects.filter(status=GameGoal.Status.RUNNING)
+        .annotate(has_active_session=Exists(active_session))
+        .filter(has_active_session=False)
+    )
+    if workspace is not None:
+        qs = qs.filter(workspace=workspace)
+    if older_than is not None:
+        qs = qs.filter(updated_at__lt=timezone.now() - older_than)
+    return list(qs)
+
+
+def cancel_orphaned_running_goals(*, workspace=None, older_than=None):
+    """Cancel RUNNING goals that have no active execution session.
+
+    See :func:`find_orphaned_running_goals` for the orphan definition. Each goal is
+    transitioned RUNNING → CANCELLED through ``transition_goal_status`` so the
+    lifecycle lock and transition metadata stay consistent. Best-effort: a goal
+    that gained an active session between selection and transition is still
+    cancelled, which is acceptable for a maintenance sweep.
+
+    Returns the list of goals that were cancelled.
+    """
+    cancelled = []
+    for goal in find_orphaned_running_goals(workspace=workspace, older_than=older_than):
+        cancelled.append(
+            transition_goal_status(
+                goal, GameGoal.Status.CANCELLED, reason="orphaned running goal cleanup"
+            )
+        )
+    return cancelled

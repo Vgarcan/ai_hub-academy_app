@@ -29,6 +29,7 @@ Important modules:
 - `ai_hub.services.game_plans`
 - `ai_hub.services.game_delegation`
 - `ai_hub.services.game_operational_ux`
+- `ai_hub.services.game_feature_flags`
 
 ## Contract Validation
 
@@ -144,6 +145,8 @@ Real row-lock concurrency must be verified on PostgreSQL. SQLite tests cover beh
 Workspace agent/action mappings become closed allow-lists once at least one mapping of that type exists. With no mappings, legacy-compatible behavior remains open. Disabled or absent entries in a configured list are rejected.
 
 External writes are closed by default and require an explicit workspace safety policy. Policy is checked when a goal session is created, again when it runs or resumes, and before each selected action. Iteration, action-count, and runtime budgets are enforced; token and cost limits remain declared but are not yet enforceable for every provider.
+
+Delegated goal-less sessions recover their authoritative workspace from `GameDelegationRun`; they do not bypass action policy or action budgets. Child runtimes use a strict contract and only policy-enabled read-only context actions. Self-delegation is denied unless `safety.allow_self_delegation=true`. Delegation budget reservation locks the parent goal before creating the run.
 
 ## Deterministic GAME scheduler
 

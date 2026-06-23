@@ -5,6 +5,7 @@ from django.db import IntegrityError, transaction
 
 from ai_hub.models import AgentProfile, ExecutionSession, GameGoal
 from ai_hub.services.game_goals import transition_goal_status
+from ai_hub.services.game_feature_flags import require_game_feature
 
 
 ACTIVE_SESSION_STATUSES = (
@@ -31,6 +32,7 @@ def create_goal_execution_session(
     triggered_by=None,
     runtime_config: dict | None = None,
 ) -> ExecutionSession:
+    require_game_feature("AI_HUB_GAME_GOALS_ENABLED")
     locked_goal = GameGoal.objects.select_for_update().select_related("workspace").get(pk=goal.pk)
     if not locked_goal.workspace.is_active:
         raise ValidationError("Cannot start a goal in an inactive GAME workspace.")

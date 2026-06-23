@@ -48,6 +48,44 @@ def run_document_ai_workflow(*, document, pipeline, user):
 
 The host project decides how to persist final business results.
 
+## GAME Integration
+
+The example above is an Orchestrator session. A host can also drive GAME goals.
+
+**Prerequisite — feature flags.** Every GAME service entry point is gated by a flag (see `03_CONFIGURATION.md`). The reusable default is fail-closed, so a host that calls a GAME service while its flag is disabled receives a `ValidationError`. Enable the capabilities you use, for example:
+
+```text
+AI_HUB_GAME_GOALS_ENABLED=True
+AI_HUB_GAME_SCHEDULER_ENABLED=True
+AI_HUB_GAME_ACTION_DISPATCH_ENABLED=True
+AI_HUB_GAME_MEMORY_ENABLED=True
+```
+
+**Typical GAME adapter flow:**
+
+```python
+from ai_hub.services.game_goals import create_goal
+from ai_hub.services.game_goal_execution import create_goal_execution_session
+from ai_hub.services.execution_runner import run_execution_session
+
+
+def run_support_triage_goal(*, workspace, agent, ticket):
+    goal = create_goal(
+        workspace=workspace,
+        title=f"Triage ticket #{ticket.pk}",
+        description="Classify the ticket and recommend the next response.",
+        context={"ticket_text": ticket.body},
+    )
+    session = create_goal_execution_session(goal=goal, entry_agent=agent)
+    run_execution_session(session.id)
+    session.refresh_from_db()
+    return session
+```
+
+The host stores the business outcome; `ai_hub` keeps the goal, session, and audit trail.
+
+**Operational maintenance.** A goal can stay stuck in `running` if a session never reaches a terminal state. The `cleanup_orphaned_goals` management command cancels such goals (those with no active session). Schedule it in long-running environments or run it with `--dry-run` to inspect first.
+
 ## Generic Source Linking
 
 `ExecutionSession` supports generic source fields:

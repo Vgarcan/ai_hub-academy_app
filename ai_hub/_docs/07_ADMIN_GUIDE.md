@@ -100,7 +100,14 @@ The control center shows global operational health:
 - average latency,
 - warnings.
 
-It also includes a visual connection graph.
+It also includes the Mission Deck visual console:
+
+- vitals and inventory,
+- a connection graph,
+- an operational attention inbox,
+- detail tabs for pipelines, models, sessions, critical nodes and checklist.
+
+### Connection graph
 
 Use the graph to inspect how:
 
@@ -109,6 +116,64 @@ provider -> model -> agent -> knowledge/tools -> pipeline -> step
 ```
 
 connects across the system.
+
+The graph is built from the existing Admin context. It does not call a separate
+API endpoint. Nodes appear only for object types that exist in the current
+configuration:
+
+- if there are no pipelines, the `Pipeline` column is absent;
+- if there are pipelines but no steps, the `Pipeline` column appears but the
+  `Step` column is absent;
+- if a pipeline is active without steps, the attention inbox raises a warning.
+
+Graph controls:
+
+- **Pipeline scope** filters the graph to one configured pipeline and its related
+  providers, models, agents, knowledge and tools.
+- **Search** filters nodes by label, kind and detail.
+- **Hop depth** controls how far selection focus expands.
+- **Isolate** hides nodes outside the selected node's hop neighborhood. It is off
+  by default so selection remains easy to understand on first load.
+- **Full screen** opens the graph as a page-level overlay. Use the same button or
+  `Esc` to exit.
+- Type chips show or hide node kinds.
+
+Hovering a node shows a compact status preview. Selecting a node opens a small
+draggable pop-up with the same node detail, relation counts, incoming/outgoing
+relations and a prominent **Open record in admin** action.
+
+### Needs attention inbox
+
+The **Needs attention** section normalizes configuration warnings and runtime
+failures into incident-like attention items. Each item includes:
+
+- severity,
+- source type,
+- incident date when the underlying record has one,
+- detail text,
+- hover detail,
+- a link to the relevant Admin record when available.
+
+Use **Open incident** to jump to the concrete record:
+
+- provider warnings open the provider;
+- missing-model warnings open the model;
+- empty knowledge warnings open the collection;
+- incomplete-agent-contract warnings open the agent;
+- active-pipeline-without-steps warnings open the pipeline;
+- failed pipeline-step incidents open the latest failed `ExecutionStepRun`.
+
+The inbox supports:
+
+- filter by severity or source type,
+- sort by newest, relevance or severity,
+- archived view,
+- restore,
+- silence for 24 hours.
+
+Archive and silence are non-destructive. They are stored in browser
+`localStorage` under `aiHubMissionDeckAttention:v1`. They do not delete or modify
+database records, and they are local to that browser/profile.
 
 ## Orchestrator Workspace
 
@@ -140,7 +205,7 @@ Use this when one agent receives a goal and decides the next action.
 The workspace shows:
 
 - GAME metrics,
-- a GAME visual map,
+- a GAME decision graph using the same Mission Deck graph engine,
 - recent GAME sessions,
 - recommended GAME agents.
 

@@ -236,6 +236,24 @@ Test expectations:
 - Forms include help text for important fields.
 - Layout does not depend on a desktop-only viewport.
 
+Control Center / Mission Deck expectations:
+
+- The page includes `admin_control_center.css` and `admin_control_center.js` with
+  the current cache-busting query string.
+- The graph renders from the embedded `ai-control-graph-data` JSON.
+- Control Center and GAME workspace both use the shared graph hooks:
+  `data-mc-graph`, `data-mc-stage-inner`, and `data-mc-edges`.
+- Hovering graph nodes should not isolate or hide other nodes.
+- Selecting a node opens the draggable detail pop-up and exposes an Admin record
+  link when the node has a URL.
+- `Isolate` is not checked by default.
+- Full-screen mode can be entered by button and exited by button or `Esc`.
+- Needs attention rows are rendered from `attention_items` with stable ids,
+  severity/source metadata, optional timestamps and Admin links.
+- The legacy warning list must not be visible.
+- Attention filters, sorting, archive/restore and 24-hour silence are client-side
+  behaviors backed by `localStorage`.
+
 ## Responsive QA
 
 Manual responsive checks should include:
@@ -251,6 +269,7 @@ Check:
 - Action buttons wrap cleanly.
 - Graph controls remain usable.
 - Long error text wraps.
+- Needs attention action buttons remain compact on small screens.
 - Tables remain readable or degrade gracefully.
 - The page does not create accidental horizontal scrolling.
 

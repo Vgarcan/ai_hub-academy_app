@@ -140,6 +140,21 @@ The workspace shows:
 
 The control center graph shows how providers, models, agents, knowledge, tools, pipelines, and steps connect.
 
+The graph is intentionally data-driven. Columns only appear when that node type
+exists in the current configuration. For example:
+
+- no pipelines means no `Pipeline` column;
+- pipelines with no configured steps means a `Pipeline` column can appear without
+  a `Step` column;
+- active pipelines without steps surface as warnings in **Needs attention**.
+
+Use node selection to inspect one-hop, two-hop or three-hop neighborhoods. When
+`Isolate` is enabled, nodes outside the selected neighborhood are hidden. Hovering
+a node only shows a brief status preview; it does not isolate the graph.
+
+The graph can be opened in full-screen mode from its toolbar. Selecting a node
+opens a small draggable detail pop-up with an **Open record in admin** action.
+
 ## Recommended Pattern
 
 Keep each agent narrow.

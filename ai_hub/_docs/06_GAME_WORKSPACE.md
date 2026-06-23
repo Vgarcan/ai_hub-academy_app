@@ -294,6 +294,15 @@ The workspace shows:
 - agents used in GAME,
 - agents that look prepared for GAME.
 
+The GAME graph uses the same Mission Deck graph engine as the global Control
+Center. It maps goal, agent, decision, action, memory and stop nodes when those
+records exist in the selected context. Graph controls support search, node-kind
+chips, hop depth, optional isolation, full-screen mode and a draggable node-detail
+pop-up with an Admin record link.
+
+Hovering a node is only a lightweight status preview. Selecting a node focuses
+the relevant neighborhood and opens the movable detail pop-up.
+
 ### Operational dashboard
 
 Each workspace row in the GAME workspaces changelist includes a **Dashboard** link. The dashboard is an operational control centre scoped to one workspace:

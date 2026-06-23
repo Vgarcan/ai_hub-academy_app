@@ -9,6 +9,22 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Mission Deck admin control center
+
+- Reworked the Control Center and GAME workspace graph UI around a shared
+  Mission Deck graph engine.
+- Added graph search, kind chips, pipeline scope filtering, hop-depth focus,
+  optional isolation, full-screen graph mode, hover previews and draggable
+  node-detail pop-ups.
+- Added a non-destructive **Needs attention** inbox that normalizes provider,
+  model, knowledge, agent, pipeline and failed-step signals into incident-like
+  rows with timestamps, relevance, filtering, sorting and Admin record links.
+- Added local browser archive, restore and 24-hour silence controls for attention
+  items. These controls use `localStorage` and never delete runtime or
+  configuration records.
+- Updated Control Center and GAME workspace static asset cache keys for the new
+  Mission Deck behavior.
+
 #### Tool platform foundation (Tools implementation phases 01-07)
 
 - Expanded `ToolDefinition` metadata with labels, descriptions, risk level,

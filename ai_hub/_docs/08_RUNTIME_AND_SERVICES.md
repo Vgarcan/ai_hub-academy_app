@@ -339,3 +339,35 @@ The host adapter is responsible for:
 - handling product-specific recovery logic.
 
 The runner should stay reusable.
+
+## Admin Control Center Context
+
+`ai_hub.services.admin_control_center.build_control_center_context()` builds the
+global Control Center page context. It is a query/aggregation service, not a
+runtime executor.
+
+It returns:
+
+- graph nodes and edges for providers, models, knowledge, tools, agents,
+  pipelines and steps,
+- pipeline scopes used by the graph filter,
+- model catalog rows,
+- pipeline summaries and step summaries,
+- recent sessions,
+- status summaries and checklist items,
+- `attention_items` for the **Needs attention** inbox.
+
+`attention_items` normalize different operational signals into one UI model:
+
+- provider health warnings and errors,
+- configured Ollama models missing from provider health,
+- active knowledge collections with no active documents,
+- active agents missing input or output contracts,
+- active pipelines with no steps,
+- failed pipeline step runs grouped by pipeline step, linked to the latest failed
+  `ExecutionStepRun`.
+
+Each attention item has a stable local id, severity, source type, relevance,
+optional incident timestamp, hover detail and optional Admin URL. The service does
+not archive or silence incidents. Archive and silence are UI preferences stored in
+the browser by the Mission Deck JavaScript.

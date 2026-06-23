@@ -3,6 +3,7 @@ Seed the database with training provider, models, agents, knowledge, and tutoria
 
 Run once after migrate to set up the demo environment:
     python manage.py seed_academy_training_data
+    python manage.py seed_academy_training_data --force-update
 """
 from django.core.management.base import BaseCommand
 
@@ -133,7 +134,7 @@ def _get_or_create_knowledge():
     return collection
 
 
-def _seed_tutorial_missions():
+def _seed_tutorial_missions(force_update=False):
     from academy.models import TutorialMission, TutorialModule
 
     modules_data = [
@@ -504,9 +505,184 @@ def _seed_tutorial_missions():
         },
     ]
 
-    created_count = 0
+    interface_mission = {
+        "order": 2,
+        "title": "Inspect The Mission Deck",
+        "slug": "inspect-the-mission-deck",
+        "goal": "Use the connection graph, node pop-up, full screen mode and Needs attention inbox.",
+        "validation_key": "visited_control_room",
+        "instructions": (
+            "## Inspect the Mission Deck\n\n"
+            "The Control Center is designed for answering one question quickly: "
+            "`what is connected, what is healthy, and where do I click next?`\n\n"
+            "### Steps\n\n"
+            "1. Open the [Control Center](/admin/ai_hub/pipelinedefinition/control-center/)\n"
+            "2. In **Connection graph**, hover over a node and read the compact status preview\n"
+            "3. Select a node and use the draggable detail pop-up\n"
+            "4. Click **Open record in admin** from the pop-up\n"
+            "5. Turn **Isolate** on only after selecting a node; it hides nodes outside the selected hop range\n"
+            "6. Use **Full screen**, then exit with the same button or `Esc`\n"
+            "7. In **Needs attention**, try the view tabs, severity/source filter and sort menu\n\n"
+            "### Operator rules\n\n"
+            "- Hover gives brief information only; it should not hide the rest of the graph\n"
+            "- Selection opens the detail pop-up and can drive hop isolation\n"
+            "- **Open record in admin** is the fastest path from a visual signal to the real object\n"
+            "- Archive, restore and **Silence 24h** are local browser controls; they do not delete database records\n"
+            "- The Pipeline and Step graph columns appear only when pipeline and step objects exist\n"
+        ),
+    }
+
+    mission_overrides = {
+        "enter-the-control-room": {
+            "instructions": (
+                "## Welcome to AI Hub!\n\n"
+                "Your first mission is to learn the shape of the new AI Hub Admin interface.\n\n"
+                "### Steps\n\n"
+                "1. Open [AI Hub Admin](/admin/ai_hub/)\n"
+                "2. Open the [Control Center](/admin/ai_hub/pipelinedefinition/control-center/)\n"
+                "3. Open [Orchestrator Workspace](/admin/ai_hub/workspaces/orchestrator/)\n"
+                "4. Open [GAME Workspace](/admin/ai_hub/workspaces/game/)\n"
+                "5. Return here and click **Check Mission**\n\n"
+                "### What you will find\n\n"
+                "- The **Control Center** is the Mission Deck for system health, graph inspection and attention items\n"
+                "- The **Orchestrator** workspace manages fixed sequential pipelines\n"
+                "- The **GAME** workspace manages autonomous goal-driven sessions\n"
+                "- Both runtimes share the same providers, models, agents, knowledge and tools\n"
+            ),
+        },
+        "build-your-first-conveyor-belt": {
+            "instructions": (
+                "## Create a Pipeline\n\n"
+                "A **Pipeline** is a sequence of agent steps that run in order.\n\n"
+                "### Steps\n\n"
+                "1. Go to [Admin - AI Hub - Pipeline definitions](/admin/ai_hub/pipelinedefinition/add/)\n"
+                "2. Name it `Ticket Triage Pipeline`\n"
+                "3. Save it as draft while you add steps\n"
+                "4. Add **Step 1**: agent = `Input Normalizer`, order = 1\n"
+                "5. Add **Step 2**: agent = `Ticket Classifier`, order = 2\n"
+                "6. Activate the pipeline and save\n"
+                "7. Open the [Control Center](/admin/ai_hub/pipelinedefinition/control-center/) and select the pipeline scope\n\n"
+                "### Reading the graph\n\n"
+                "- Pipeline columns appear only after pipeline records exist\n"
+                "- Step columns appear only after step records exist\n"
+                "- An active pipeline with no steps appears in **Needs attention** as a warning\n"
+                "- Use node selection plus **Isolate** to focus on one pipeline's neighborhood\n"
+            ),
+        },
+        "run-the-pipeline": {
+            "instructions": (
+                "## Run Your Pipeline\n\n"
+                "An **Execution Session** is a single run of a pipeline with specific input data.\n\n"
+                "### Steps\n\n"
+                "1. Go to [Admin - AI Hub - Execution sessions](/admin/ai_hub/executionsession/add/)\n"
+                "2. Set **Pipeline** to `Ticket Triage Pipeline`\n"
+                "3. Set **Runtime kind** to `Orchestrator`\n"
+                "4. Set **Initial context** to:\n"
+                "   ```json\n"
+                '   {"ticket_title": "Login broken", "ticket_text": "I cannot log in since the update."}\n'
+                "   ```\n"
+                "5. Save, then click **Run Session** from the session detail page\n"
+                "6. Refresh and check the status is `success`\n"
+                "7. Return to Control Center and check whether **Needs attention** changed\n\n"
+                "### Operator habit\n\n"
+                "Use **Open incident** on attention items and **Open record in admin** on graph nodes "
+                "to move from dashboard signal to the exact Admin record.\n"
+            ),
+        },
+        "launch-an-autonomous-session": {
+            "instructions": (
+                "## The GAME Workspace\n\n"
+                "**GAME** (Goal-Agent-Memory-Execute) is AI Hub's autonomous execution mode. "
+                "Instead of a fixed pipeline, one agent runs in a loop until it achieves a goal.\n\n"
+                "### Steps\n\n"
+                "1. Go to [Admin - AI Hub - GAME Workspace](/admin/ai_hub/workspaces/game/)\n"
+                "2. Create a new GAME session\n"
+                "3. Set **Runtime kind** to `GAME`\n"
+                "4. Set **Entry agent** to `AI Hub Documentation Assistant`\n"
+                "5. Set **Goal text** to: `Explain what AI Hub is in 3 bullet points`\n"
+                "6. Set **Runtime config** to: `{\"max_iterations\": 3}`\n"
+                "7. Save and run\n"
+                "8. Use the GAME graph to inspect the entry agent, model, knowledge and tool links\n\n"
+                "### Interface note\n\n"
+                "The GAME graph uses the same interaction model as the Control Center graph: "
+                "hover for a brief preview, select for the draggable detail pop-up and use full screen when the graph needs room.\n"
+            ),
+        },
+        "finish-the-goal": {
+            "instructions": (
+                "## Complete a GAME Session\n\n"
+                "A GAME session ends when the agent sets `complete: true` in its response.\n\n"
+                "### Steps\n\n"
+                "1. Run your GAME session from the previous mission\n"
+                "2. Check that the status is `success`\n"
+                "3. Open the session and expand **Final context**\n"
+                "4. Verify that `final_answer` contains text\n"
+                "5. Open the related records from the GAME graph when you need to verify configuration\n\n"
+                "### How GAME works\n\n"
+                "Each iteration, the agent receives:\n"
+                "- The original goal\n"
+                "- Memory from previous iterations\n"
+                "- Available actions and tools\n\n"
+                "The session ends when the agent returns `complete: true`.\n"
+            ),
+        },
+        "read-the-black-box": {
+            "instructions": (
+                "## Reading Execution Telemetry\n\n"
+                "Every AI Hub run leaves a complete audit trail.\n\n"
+                "### Steps\n\n"
+                "1. Open [Admin - AI Hub - Execution sessions](/admin/ai_hub/executionsession/)\n"
+                "2. Click on a successful or failed session\n"
+                "3. Scroll to **Execution step runs**\n"
+                "4. Expand a step run and read:\n"
+                "   - **Request payload**: what was sent to the model\n"
+                "   - **Response payload**: what the model returned\n"
+                "   - **Latency ms**: how long the call took\n"
+                "5. Return to Control Center and compare this with **Needs attention**\n\n"
+                "### Why this matters\n\n"
+                "Failed step runs surface as attention incidents with dates and an **Open incident** action. "
+                "Use the incident link to jump to the latest failed step run, then use telemetry to diagnose the cause.\n"
+            ),
+        },
+        "complete-workflow": {
+            "instructions": (
+                "## Capstone: Full Ticket Triage Workflow\n\n"
+                "This mission validates that your complete AI Hub setup works end-to-end.\n\n"
+                "### Checklist\n\n"
+                "- [ ] Academy Training Provider is active\n"
+                "- [ ] Academy Training Model is active\n"
+                "- [ ] Input Normalizer agent is active with contracts\n"
+                "- [ ] Ticket Classifier agent is active with contracts\n"
+                "- [ ] Ticket Triage Pipeline is active with 2 steps\n"
+                "- [ ] The Control Center graph shows provider, model, agent, pipeline and step links\n"
+                "- [ ] Any **Needs attention** item has been opened, understood, archived or silenced intentionally\n"
+                "- [ ] At least one SupportTicket exists in Support Demo\n"
+                "- [ ] Triage action has been run on the ticket\n"
+                "- [ ] Ticket shows a successful AI session\n\n"
+                "### Steps\n\n"
+                "1. Go to [Support Demo - Tickets](/admin/support_demo/supportticket/)\n"
+                "2. Create a ticket or use the seeded demo tickets\n"
+                "3. Select it and run **Run AI triage**\n"
+                "4. Verify the session completed with `success`\n"
+                "5. Open Control Center and confirm the graph and attention inbox match the workflow state\n"
+                "6. Click **Check Mission**\n"
+            ),
+        },
+    }
+
+    modules_data[0]["missions"].append(interface_mission)
     for mod_data in modules_data:
-        module, _ = TutorialModule.objects.get_or_create(
+        for index, mission in enumerate(mod_data["missions"]):
+            override = mission_overrides.get(mission["slug"])
+            if override:
+                updated = mission.copy()
+                updated.update(override)
+                mod_data["missions"][index] = updated
+
+    created_count = 0
+    updated_count = 0
+    for mod_data in modules_data:
+        module, module_created = TutorialModule.objects.get_or_create(
             slug=mod_data["slug"],
             defaults={
                 "title": mod_data["title"],
@@ -515,8 +691,24 @@ def _seed_tutorial_missions():
                 "is_active": True,
             },
         )
+        if not module_created and force_update:
+            module_fields = {
+                "title": mod_data["title"],
+                "order": mod_data["order"],
+                "description": mod_data.get("description", ""),
+                "is_active": True,
+            }
+            changed = False
+            for field, value in module_fields.items():
+                if getattr(module, field) != value:
+                    setattr(module, field, value)
+                    changed = True
+            if changed:
+                module.save(update_fields=list(module_fields.keys()))
+                updated_count += 1
+
         for m_data in mod_data["missions"]:
-            _, created = TutorialMission.objects.get_or_create(
+            mission, created = TutorialMission.objects.get_or_create(
                 slug=m_data["slug"],
                 defaults={
                     "module": module,
@@ -531,11 +723,37 @@ def _seed_tutorial_missions():
             if created:
                 created_count += 1
                 print(f"  Created mission: {m_data['title']}")
-    return created_count
+            elif force_update:
+                mission_fields = {
+                    "module": module,
+                    "title": m_data["title"],
+                    "order": m_data["order"],
+                    "goal": m_data["goal"],
+                    "instructions_markdown": m_data["instructions"],
+                    "validation_key": m_data["validation_key"],
+                    "is_active": True,
+                }
+                changed = False
+                for field, value in mission_fields.items():
+                    if getattr(mission, field) != value:
+                        setattr(mission, field, value)
+                        changed = True
+                if changed:
+                    mission.save(update_fields=list(mission_fields.keys()))
+                    updated_count += 1
+                    print(f"  Updated mission: {m_data['title']}")
+    return created_count, updated_count
 
 
 class Command(BaseCommand):
     help = "Seed training provider, models, agents, knowledge and tutorial missions."
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--force-update",
+            action="store_true",
+            help="Update existing tutorial modules and missions with the latest seeded content.",
+        )
 
     def handle(self, *args, **options):
         self.stdout.write("Seeding Academy training data...")
@@ -545,7 +763,8 @@ class Command(BaseCommand):
         _get_or_create_normalizer(model)
         _get_or_create_classifier(model)
         _get_or_create_knowledge()
-        n = _seed_tutorial_missions()
+        created, updated = _seed_tutorial_missions(force_update=options["force_update"])
         self.stdout.write(self.style.SUCCESS(
-            f"Done. Training provider, models, agents and {n} missions seeded."
+            "Done. Training provider, models, agents and tutorial content seeded "
+            f"({created} created, {updated} updated)."
         ))

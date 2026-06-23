@@ -50,7 +50,8 @@ The workspaces are visually separated in Admin, but they share the same technica
 - per-capability GAME feature flags,
 - staff-only execution endpoints,
 - execution sessions and step logs,
-- admin control center metrics and operational GAME dashboards,
+- Mission Deck control center metrics, graph inspection, attention inbox and
+  operational GAME dashboards,
 - guided forms and examples.
 
 ## What The App Does Not Own
@@ -75,7 +76,8 @@ The Admin experience is part of the product.
 - an AI Hub home dashboard,
 - separate Orchestrator and GAME workspaces,
 - shared resource sections,
-- a visual connection graph,
+- a visual connection graph with full-screen mode and draggable node details,
+- a non-destructive attention inbox for configuration and runtime incidents,
 - recent sessions and health metrics,
 - guided changelists,
 - guided forms with examples and placeholders,

@@ -10,7 +10,13 @@ python manage.py collectstatic
 
 Also confirm your web server serves Django admin static files.
 
-If the browser still shows old styles, hard refresh the page. Admin assets often use cache-busting query strings such as `guided-v8`.
+If the browser still shows old styles, hard refresh the page. Admin assets often
+use cache-busting query strings such as `guided-v8` or `missiondeck-v10`.
+
+If a development server keeps serving older Admin behavior after the files change,
+restart `runserver`. Django usually reloads templates and Python modules, but a
+stale autoreloader process can still leave you looking at an older in-memory
+version.
 
 ## Admin Form Looks Unguided
 
@@ -200,3 +206,34 @@ Common causes:
 - configured model is not reported by provider,
 - agent has missing or inactive dependencies,
 - pipeline contains inactive or misconfigured steps.
+
+## Control Center Attention Inbox Looks Wrong
+
+The **Needs attention** inbox should show enriched attention items, not the older
+plain warning list. Expected behavior:
+
+- `Open` count matches visible unsilenced/unarchived incidents.
+- Filtering by `Errors` hides warnings when there are no error incidents.
+- Sorting by newest, relevance or severity reorders the enriched incident rows.
+- `Archived` shows only locally archived incidents.
+- Hovering a row shows more detail.
+- `Open incident` links to the relevant Admin record when available.
+
+If filters or archive buttons do nothing:
+
+1. Confirm the page loaded the latest `missiondeck-v...` cache-busting value.
+2. Hard refresh the browser.
+3. Restart `runserver` if local development still shows stale counts.
+4. Inspect the rendered row markup. Current rows include `data-mc-attn-item`.
+   Legacy rows do not, and should be hidden.
+
+Archive and silence are intentionally local browser state. They are stored in
+`localStorage` under:
+
+```text
+aiHubMissionDeckAttention:v1
+```
+
+Clearing site data removes archived/silenced state and makes all current
+incidents visible again. This never deletes the underlying provider, model,
+agent, knowledge, pipeline or execution records.

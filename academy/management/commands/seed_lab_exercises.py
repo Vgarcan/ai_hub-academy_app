@@ -35,6 +35,45 @@ Always be encouraging and educational, never harsh."""
 
 # Keyed by module ORDER number → list of exercise dicts
 EXERCISES = {
+    0: [  # Orientation and Mission Deck
+        {
+            "title": "Mission Deck Interface Audit",
+            "slug": "mission-deck-interface-audit",
+            "order": 1,
+            "difficulty": "beginner",
+            "requires_api": False,
+            "prompt": (
+                "Open the AI Hub Control Center and write a short operator note for a teammate "
+                "who has never used the new interface. "
+                "Your note must explain: "
+                "1) how hover differs from selecting a graph node, "
+                "2) how the draggable node pop-up helps you reach the real Admin record, "
+                "3) when to use Isolate and hop depth, "
+                "4) how to enter and exit full screen, "
+                "5) how to use Needs attention filters, sorting, archive/restore and Silence 24h safely."
+            ),
+            "context": (
+                "The Control Center includes the Mission Deck graph and the Needs attention inbox. "
+                "Hovering a graph node only shows a compact preview. Selecting a node opens a draggable "
+                "detail pop-up with relation counts and an Open record in admin action. "
+                "Isolate is off by default and only hides nodes outside the selected hop range after a node is selected. "
+                "Full screen gives the graph more space and can be exited with the same button or Esc. "
+                "Archive and Silence 24h are stored locally in the browser; they do not delete or modify database records."
+            ),
+            "evaluation_rubric": (
+                "Score PASS if the answer clearly covers all five required points and states that archive/silence "
+                "are non-destructive local browser actions. It must mention Open record in admin as the main route "
+                "from graph detail to the real Admin object. "
+                "Score PARTIAL if it covers 3-4 points but misses either full screen or non-destructive attention handling. "
+                "Score FAIL if it confuses hover with selection, says Isolate is automatic, or suggests archive/silence "
+                "delete database records."
+            ),
+            "hint": (
+                "Think like an operator: first inspect lightly, then select, then open the exact record only when needed."
+            ),
+        },
+    ],
+
     1: [  # Provider & Model Configuration
         {
             "title": "Provider Config Design",
@@ -297,6 +336,33 @@ EXERCISES = {
                 "Score FAIL if they suggest disabling contract validation or renaming the field in step 2's system prompt only."
             ),
             "hint": "The contracts define the 'API contract' between pipeline steps. Both sides of the contract must match.",
+        },
+        {
+            "title": "Explain Missing Graph Columns",
+            "slug": "explain-missing-graph-columns",
+            "order": 3,
+            "difficulty": "beginner",
+            "requires_api": False,
+            "prompt": (
+                "A teammate opens the Control Center graph and says: "
+                "'I can see providers, models and agents, but I do not see Pipeline or Step columns. Is this broken?' "
+                "Write the explanation you would give them. Include when Pipeline and Step columns appear, "
+                "what warning should appear for an active pipeline with no steps, and what Admin records they should check."
+            ),
+            "context": (
+                "The Mission Deck graph is built from actual AI Hub Admin records. "
+                "If no PipelineDefinition records exist, the Pipeline column is absent. "
+                "If pipelines exist but have no PipelineStep records, the Step column is absent. "
+                "If a pipeline is active with no steps, Needs attention should show a warning that links to the pipeline record."
+            ),
+            "evaluation_rubric": (
+                "Score PASS if the student says this is expected when the records do not exist yet, "
+                "correctly distinguishes PipelineDefinition from PipelineStep, mentions the active-pipeline-without-steps warning, "
+                "and tells the teammate to check Pipeline definitions and Pipeline steps in Admin. "
+                "Score PARTIAL if they explain missing records but miss the Needs attention warning. "
+                "Score FAIL if they say the graph should always show empty columns or that the only fix is refreshing cookies/cache."
+            ),
+            "hint": "The graph is data-driven: no record usually means no column.",
         },
     ],
 

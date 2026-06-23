@@ -13,6 +13,7 @@ from academy.models import (
     DocumentationChatSession,
     DocumentationPage,
     DocumentationSource,
+    LabExercise,
     TutorialMission,
     TutorialModule,
     UserMissionProgress,
@@ -208,6 +209,39 @@ class TutorialTest(TestCase):
         data = response.json()
         # visited_control_room always passes
         self.assertTrue(data["passed"])
+
+
+class AcademySeedCommandTests(TestCase):
+    def test_seed_force_update_refreshes_existing_mission_text(self):
+        with patch("builtins.print"):
+            call_command("seed_academy_training_data", stdout=StringIO())
+
+        mission = TutorialMission.objects.get(slug="enter-the-control-room")
+        mission.instructions_markdown = "old interface copy"
+        mission.save(update_fields=["instructions_markdown"])
+
+        with patch("builtins.print"):
+            call_command("seed_academy_training_data", "--force-update", stdout=StringIO())
+
+        mission.refresh_from_db()
+        self.assertIn("Mission Deck", mission.instructions_markdown)
+        self.assertTrue(
+            TutorialMission.objects.filter(slug="inspect-the-mission-deck").exists()
+        )
+
+    def test_seed_lab_exercises_adds_mission_deck_interface_lab(self):
+        TutorialModule.objects.create(
+            title="Orientation",
+            slug="orientation",
+            order=0,
+        )
+
+        call_command("seed_lab_exercises", "--force", stdout=StringIO())
+
+        exercise = LabExercise.objects.get(slug="mission-deck-interface-audit")
+        self.assertEqual(exercise.module.slug, "orientation")
+        self.assertFalse(exercise.requires_api)
+        self.assertIn("Open record in admin", exercise.context)
 
 
 class TrainingProviderTest(TestCase):

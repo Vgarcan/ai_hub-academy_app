@@ -551,10 +551,9 @@ class Command(BaseCommand):
             agent, created = AgentProfile.objects.update_or_create(
                 name="Lab Exercise Evaluator",
                 defaults={
-                    "description": "Evaluates student answers for Academy Lab exercises. Do not modify the system prompt.",
+                    "role": "Evaluates student answers for Academy Lab exercises. Do not modify the system prompt.",
                     "model_config": model,
                     "system_prompt": EVALUATOR_SYSTEM_PROMPT,
-                    "temperature": 0.3,
                     "is_active": True,
                 },
             )

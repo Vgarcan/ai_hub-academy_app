@@ -7,9 +7,11 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from ai_hub.models import ExecutionSession, GameActionDefinition, GameActionRun
+from ai_hub.models import ExecutionSession, GameActionDefinition, GameActionRun, ToolExecutionRun
 from ai_hub.services.contracts import validate_payload
-from ai_hub.services.game_feature_flags import require_game_feature
+from ai_hub.services.game_feature_flags import is_game_feature_enabled, require_game_feature
+from ai_hub.services.tool_resolution import resolve_agent_tools
+from ai_hub.services.tools_runtime import execute_tool
 
 
 def _resolve_action_definition(action_name: str) -> GameActionDefinition:
@@ -278,6 +280,66 @@ _HANDLER_REGISTRY = {
 }
 
 
+def _dispatch_unified_tool_action(
+    *,
+    action_run: GameActionRun,
+    workspace,
+    payload: dict,
+) -> dict:
+    action_definition = action_run.action
+    tool = action_definition.tool
+    if tool is None:
+        raise ValidationError(f"Action '{action_definition.name}' is not linked to a reusable tool.")
+    if not is_game_feature_enabled("AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED"):
+        raise ValidationError(
+            "Unified tool runtime is disabled. Set AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True "
+            "to execute GAME actions linked to reusable tools."
+        )
+
+    agent = action_run.session.entry_agent
+    if agent is not None:
+        resolution = resolve_agent_tools(agent, workspace=workspace, execution_context={"session": action_run.session})
+        allowed_tools = {resolved.tool.pk: resolved for resolved in resolution.tools}
+        if tool.pk not in allowed_tools:
+            raise ValidationError(
+                f"Tool '{tool.name}' is not available to agent '{agent.name}' in this GAME session."
+            )
+
+    tool_run = ToolExecutionRun.objects.create(
+        session=action_run.session,
+        step_run=action_run.step_run,
+        agent=agent,
+        tool=tool,
+        status=ToolExecutionRun.Status.RUNNING,
+        input_payload=payload,
+        risk_level=tool.risk_level,
+        approval_state=ToolExecutionRun.ApprovalState.NOT_REQUIRED,
+        started_at=timezone.now(),
+    )
+    start = time.perf_counter()
+    try:
+        result = execute_tool(tool, payload)
+    except Exception as exc:
+        tool_run.status = ToolExecutionRun.Status.FAILED
+        tool_run.error_detail = str(exc)
+        tool_run.finished_at = timezone.now()
+        tool_run.latency_ms = int((time.perf_counter() - start) * 1000)
+        tool_run.save(update_fields=["status", "error_detail", "finished_at", "latency_ms"])
+        raise
+
+    tool_run.status = ToolExecutionRun.Status.SUCCESS
+    tool_run.output_payload = result
+    tool_run.finished_at = timezone.now()
+    tool_run.latency_ms = int((time.perf_counter() - start) * 1000)
+    tool_run.save(update_fields=["status", "output_payload", "finished_at", "latency_ms"])
+    return {
+        "action_name": action_definition.name,
+        "tool_name": tool.name,
+        "tool_execution_run_id": tool_run.pk,
+        "tool_result": result,
+    }
+
+
 def dispatch_game_action(
     *,
     action_run: GameActionRun,
@@ -287,6 +349,15 @@ def dispatch_game_action(
 ) -> dict:
     """Execute one action and return the output dict. Caller manages audit record lifecycle."""
     action_definition = action_run.action
+
+    if action_definition.tool_id:
+        output = _dispatch_unified_tool_action(
+            action_run=action_run,
+            workspace=workspace,
+            payload=payload,
+        )
+        _validate_action_output(action_definition, output)
+        return output
 
     type_handlers = _HANDLER_REGISTRY.get(action_definition.action_type)
     if type_handlers is None:

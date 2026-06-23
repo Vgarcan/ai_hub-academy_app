@@ -21,6 +21,8 @@ AI Hub already has the core platform pieces:
 - Execution sessions and step runs.
 - Admin workspaces, control center, guided forms and changelists.
 - Runtime services and the host adapter pattern.
+- Toolboxes, per-agent tool grants, deliberate tool execution, and starter tool seeds.
+- Knowledge document chunks with read-only browse/search/read/citation services.
 
 The GAME subsystem is now a full feature line, not just a session mode:
 
@@ -118,7 +120,7 @@ Slow two-minute model runs do not block the user interface and do not create dup
 
 Tools are powerful and need strict controls.
 
-Delivered: explicit allow-lists (callable registry, HTTP allowed-hosts, GET/HEAD context rule), tool/action audit logs via `GameActionRun`, and timeout clamping.
+Delivered: explicit allow-lists (callable registry, HTTP allowed-hosts, GET/HEAD context rule), toolbox/grant resolution, model-facing manifest redaction, deliberate tool execution audit via `ToolExecutionRun`, tool/action audit logs via `GameActionRun`, optional unified GAME tool dispatch, starter toolboxes, and timeout clamping.
 
 Still recommended:
 
@@ -134,16 +136,22 @@ Agents can use tools only when the app, model and runtime all allow it.
 
 ## Priority 5: Better Knowledge And RAG
 
-Current knowledge is curated text. The next step is stronger retrieval.
+Current knowledge supports curated text plus retrieval chunks and read-only
+retrieval tools. The next step is stronger automated indexing and ranking.
 
-Recommended work:
+Delivered:
 
 - Chunking strategy.
+- Per-agent retrieval scoping.
+- Source citation metadata.
+- Retrieval-first context mode.
+
+Still recommended:
+
 - Embedding provider configuration.
 - Retrieval query logs.
 - Per-agent retrieval limits.
 - Knowledge freshness status.
-- Source citation metadata.
 - Admin preview of injected context.
 
 Target outcome:

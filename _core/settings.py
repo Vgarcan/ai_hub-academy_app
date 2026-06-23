@@ -127,7 +127,14 @@ AI_HUB_ALLOWED_TOOL_CALLABLES = tuple(
     item.strip()
     for item in os.environ.get(
         "AI_HUB_ALLOWED_TOOL_CALLABLES",
-        "academy.tools.doc_sync.sync_all_docs,academy.tools.doc_search.search_docs",
+        "academy.tools.doc_sync.sync_all_docs,"
+        "academy.tools.doc_search.search_docs,"
+        "ai_hub.tools.knowledge.list_knowledge_libraries,"
+        "ai_hub.tools.knowledge.browse_knowledge_index,"
+        "ai_hub.tools.knowledge.search_knowledge,"
+        "ai_hub.tools.knowledge.read_knowledge_chunk,"
+        "ai_hub.tools.knowledge.read_document_section,"
+        "ai_hub.tools.knowledge.cite_knowledge_source",
     ).split(",")
     if item.strip()
 )
@@ -157,3 +164,6 @@ AI_HUB_GAME_ACTION_DISPATCH_ENABLED = _env_bool("AI_HUB_GAME_ACTION_DISPATCH_ENA
 AI_HUB_GAME_MEMORY_ENABLED = _env_bool("AI_HUB_GAME_MEMORY_ENABLED", DEBUG)
 AI_HUB_GAME_RESUME_ENABLED = _env_bool("AI_HUB_GAME_RESUME_ENABLED", DEBUG)
 AI_HUB_GAME_DELEGATION_ENABLED = _env_bool("AI_HUB_GAME_DELEGATION_ENABLED", DEBUG)
+AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED = _env_bool("AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED", False)
+AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED = _env_bool("AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", True)
+AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL = int(os.environ.get("AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL", "3"))

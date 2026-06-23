@@ -233,7 +233,7 @@ The GAME subsystem is gated by per-capability flags read from Django settings (o
 
 Behaviour:
 
-- In this repo's settings each flag defaults to `True`.
+- In this repo's settings each flag defaults to the value of `DEBUG`; development is open, production is fail-closed unless explicitly enabled.
 - The reusable safety default is **fail-closed**: when a flag is disabled, the matching service raises a `ValidationError` rather than running.
 - Flags gate the **service layer** only. The Django admin writes through the model directly, so the "Add GAME goal" form and the goal bulk actions are not blocked by a disabled flag. To hard-stop an operation in an environment, also remove the relevant admin permissions.
 
@@ -242,6 +242,18 @@ Set a flag to `False` to disable a capability without a code change:
 ```text
 AI_HUB_GAME_DELEGATION_ENABLED=False
 ```
+
+## Tool Runtime And Retrieval Flags
+
+| Setting | Default | Use |
+| --- | --- | --- |
+| `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED` | `False` | Enables GAME actions linked to reusable `ToolDefinition` records. |
+| `AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED` | `True` | Keeps legacy full-document knowledge injection. Set `False` to use retrieval-first indexes and tools. |
+| `AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL` | `3` | Caps deliberate tool-call loops per agent call. |
+
+For automated testing of the new tool platform, explicitly set the unified tool
+runtime flag when testing GAME reusable-tool actions, and explicitly disable
+legacy eager knowledge when testing retrieval-first behavior.
 
 ## Runtime Modes
 

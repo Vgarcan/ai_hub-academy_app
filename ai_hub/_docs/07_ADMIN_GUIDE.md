@@ -42,8 +42,10 @@ Guided sections exist for:
 - Providers,
 - Models,
 - Tools,
+- Toolboxes,
 - Knowledge collections,
 - Knowledge documents,
+- Knowledge document chunks,
 - Agents,
 - Pipeline steps,
 - Execution step runs.
@@ -248,6 +250,31 @@ The agent list shows workspace usage:
 It also shows counts for pipeline usage and GAME sessions.
 
 Use this to avoid losing track of which agents are operational and which are only drafts.
+
+## Tools And Toolboxes
+
+Use `Tools` for the underlying reusable capability and `Toolboxes` for role-level
+bundles. Assign toolboxes to agents first, then use individual grants only for
+exceptions.
+
+Recommended setup:
+
+1. Create or seed safe tool definitions.
+2. Group them into a toolbox.
+3. Assign the toolbox to a specific agent role.
+4. Add deny grants for any capability the role should not inherit.
+5. Keep external-write tools inactive or approval-gated until workspace policy is ready.
+
+Starter configuration can be created from the command line:
+
+```text
+python manage.py seed_ai_hub_starter_toolboxes
+python manage.py seed_ai_hub_starter_demo
+```
+
+The demo seed creates a small knowledge library, starter agents, a safe GAME
+workspace, and an approval-gated `submit_for_approval` action. Re-run with
+`--force-update` to refresh seed-owned labels, descriptions and policies.
 
 ## Execution Sessions
 

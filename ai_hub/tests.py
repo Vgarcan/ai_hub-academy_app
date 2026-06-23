@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
@@ -7,6 +8,7 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.cache import cache
+from django.core.management import call_command
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.test import Client, TestCase, TransactionTestCase, override_settings
@@ -15,6 +17,8 @@ from django.utils import timezone
 
 from ai_hub.models import (
     AgentProfile,
+    AgentToolGrant,
+    AgentToolboxAssignment,
     ExecutionSession,
     ExecutionStepRun,
     GameActionDefinition,
@@ -23,20 +27,37 @@ from ai_hub.models import (
     GameGoalDependency,
     GameMemoryEntry,
     GameWorkspace,
+    GameWorkspaceAction,
+    GameWorkspaceAgent,
     KnowledgeCollection,
     KnowledgeDocument,
+    KnowledgeDocumentChunk,
     ModelConfig,
     PipelineDefinition,
     PipelineStep,
     ProviderConfig,
     ToolDefinition,
+    Toolbox,
+    ToolboxTool,
+    ToolExecutionRun,
 )
 from ai_hub.services.litellm_client import completion_call
 from ai_hub.services.admin_control_center import build_control_center_context
 from ai_hub.services.execution_sessions import create_execution_session
-from ai_hub.services.agent_runtime import build_agent_knowledge_context
+from ai_hub.services.agent_runtime import build_agent_knowledge_context, execute_agent_deliberate
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.execution_runner import run_execution_session
+from ai_hub.services.tool_resolution import resolve_agent_tools
+from ai_hub.services.knowledge_retrieval import (
+    browse_knowledge_index,
+    cite_knowledge_source,
+    list_knowledge_libraries,
+    read_document_section,
+    read_knowledge_chunk,
+    search_knowledge,
+)
+from ai_hub.services.starter_demo import seed_starter_demo
+from ai_hub.services.starter_toolboxes import ROLE_TOOLBOXES, seed_starter_toolboxes
 from ai_hub.services.game_dependencies import add_goal_dependency, get_goal_blockers
 from ai_hub.services.game_goals import create_goal, reopen_goal, transition_goal_status, update_goal_priority
 from ai_hub.services.game_workspaces import create_workspace
@@ -51,6 +72,7 @@ from ai_hub.services.game_goal_outcomes import apply_session_outcome_to_goal, re
 from ai_hub.services.tools_runtime import (
     GAME_ACTION_TOOL,
     GAME_CONTEXT_TOOL,
+    execute_tool,
     execute_tools,
     get_game_tool_category,
 )
@@ -175,6 +197,827 @@ class HubModelValidationTests(TestCase):
         self.assertContains(provider_response, "Open control center")
         self.assertContains(agent_response, "Define a specialist once")
         self.assertContains(agent_response, "Open GAME")
+
+    def test_toolbox_can_group_tools_and_be_assigned_to_agent(self):
+        provider = ProviderConfig.objects.create(name="toolbox-provider", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(name="toolbox-agent", role="Toolbox tester", model_config=model)
+        tool = ToolDefinition.objects.create(
+            name="search_knowledge",
+            label="Search knowledge",
+            description="Search authorized knowledge libraries.",
+            tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            risk_level=ToolDefinition.RiskLevel.LOW,
+        )
+        toolbox = Toolbox.objects.create(
+            name="Knowledge Retrieval",
+            slug="knowledge-retrieval",
+            label="Knowledge Retrieval",
+        )
+
+        membership = ToolboxTool.objects.create(toolbox=toolbox, tool=tool, display_order=10)
+        assignment = AgentToolboxAssignment.objects.create(agent=agent, toolbox=toolbox)
+
+        self.assertEqual(toolbox.tool_entries.get(), membership)
+        self.assertEqual(agent.toolbox_assignments.get(), assignment)
+        self.assertTrue(membership.is_enabled)
+        self.assertTrue(assignment.is_enabled)
+
+    def test_agent_admin_shows_safe_resolved_tool_manifest(self):
+        admin_user = get_user_model().objects.create_user(
+            username="tool-admin",
+            password="testpass123",
+            is_staff=True,
+            is_superuser=True,
+        )
+        provider = ProviderConfig.objects.create(name="admin-tool-provider", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(name="admin-tool-agent", role="Tool manifest tester", model_config=model)
+        tool = ToolDefinition.objects.create(
+            name="admin_safe_tool",
+            label="Admin safe tool",
+            description="Visible admin manifest description.",
+            tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            risk_level=ToolDefinition.RiskLevel.LOW,
+            config={"callable": "ai_hub.tools.knowledge.search_knowledge"},
+        )
+        toolbox = Toolbox.objects.create(name="Admin Toolbox", slug="admin-toolbox", label="Admin Toolbox")
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=agent, toolbox=toolbox)
+        client = Client()
+        client.force_login(admin_user)
+
+        response = client.get(reverse("admin:ai_hub_agentprofile_change", args=[agent.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Resolved tool access")
+        self.assertContains(response, "admin_safe_tool")
+        self.assertContains(response, "Visible admin manifest description.")
+        self.assertNotContains(response, "ai_hub.tools.knowledge.search_knowledge")
+
+    def test_agent_toolbox_assignment_can_be_disabled(self):
+        provider = ProviderConfig.objects.create(name="toolbox-provider-disabled", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(name="toolbox-agent-disabled", role="Toolbox tester", model_config=model)
+        toolbox = Toolbox.objects.create(name="Core Foundation", slug="core-foundation", label="Core Foundation")
+
+        assignment = AgentToolboxAssignment.objects.create(agent=agent, toolbox=toolbox, is_enabled=False)
+
+        self.assertFalse(assignment.is_enabled)
+
+    def test_agent_tool_grant_can_allow_or_deny_specific_tool(self):
+        provider = ProviderConfig.objects.create(name="grant-provider", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(name="grant-agent", role="Grant tester", model_config=model)
+        allowed_tool = ToolDefinition.objects.create(
+            name="create_draft",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            operation_mode=ToolDefinition.OperationMode.DRAFT_WRITE,
+        )
+        denied_tool = ToolDefinition.objects.create(
+            name="send_email",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.EXTERNAL_WRITE,
+            risk_level=ToolDefinition.RiskLevel.HIGH,
+            requires_approval=True,
+        )
+
+        allow_grant = AgentToolGrant.objects.create(
+            agent=agent,
+            tool=allowed_tool,
+            permission_level=AgentToolGrant.PermissionLevel.DRAFT_WRITE,
+        )
+        deny_grant = AgentToolGrant.objects.create(agent=agent, tool=denied_tool, is_enabled=False)
+
+        self.assertTrue(allow_grant.is_enabled)
+        self.assertEqual(allow_grant.permission_level, AgentToolGrant.PermissionLevel.DRAFT_WRITE)
+        self.assertFalse(deny_grant.is_enabled)
+
+    def test_duplicate_toolbox_membership_is_rejected(self):
+        tool = ToolDefinition.objects.create(name="duplicate-tool", tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO)
+        toolbox = Toolbox.objects.create(name="Duplicate Toolbox", slug="duplicate-toolbox", label="Duplicate Toolbox")
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+
+    def test_duplicate_agent_toolbox_assignment_is_rejected(self):
+        provider = ProviderConfig.objects.create(name="duplicate-assignment-provider", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(name="duplicate-assignment-agent", role="Tester", model_config=model)
+        toolbox = Toolbox.objects.create(
+            name="Duplicate Assignment",
+            slug="duplicate-assignment",
+            label="Duplicate Assignment",
+        )
+        AgentToolboxAssignment.objects.create(agent=agent, toolbox=toolbox)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            AgentToolboxAssignment.objects.create(agent=agent, toolbox=toolbox)
+
+    def test_duplicate_agent_tool_grant_is_rejected(self):
+        provider = ProviderConfig.objects.create(name="duplicate-grant-provider", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(name="duplicate-grant-agent", role="Tester", model_config=model)
+        tool = ToolDefinition.objects.create(name="duplicate-grant-tool", tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO)
+        AgentToolGrant.objects.create(agent=agent, tool=tool)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            AgentToolGrant.objects.create(agent=agent, tool=tool)
+
+    def test_tool_definition_rejects_invalid_risk_level_or_operation_mode(self):
+        bad_risk = ToolDefinition(
+            name="bad-risk-tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            risk_level="unknown",
+        )
+        with self.assertRaises(ValidationError):
+            bad_risk.full_clean()
+
+        bad_mode = ToolDefinition(
+            name="bad-mode-tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            operation_mode="silent_write",
+        )
+        with self.assertRaises(ValidationError):
+            bad_mode.full_clean()
+
+    def test_tool_execution_run_accepts_generic_audit_payload(self):
+        tool = ToolDefinition.objects.create(
+            name="audited-tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            risk_level=ToolDefinition.RiskLevel.MEDIUM,
+        )
+
+        run = ToolExecutionRun.objects.create(
+            tool=tool,
+            status=ToolExecutionRun.Status.SUCCESS,
+            input_payload={"query": "baseline"},
+            output_payload={"result": "ok"},
+            risk_level=tool.risk_level,
+            approval_state=ToolExecutionRun.ApprovalState.NOT_REQUIRED,
+            latency_ms=12,
+        )
+
+        self.assertEqual(run.tool, tool)
+        self.assertEqual(run.output_payload["result"], "ok")
+        self.assertEqual(run.risk_level, ToolDefinition.RiskLevel.MEDIUM)
+
+
+class ToolResolutionTests(TestCase):
+    def setUp(self):
+        self.provider = ProviderConfig.objects.create(name="resolver-provider", provider_type="training")
+        self.model = ModelConfig.objects.create(provider=self.provider, model_name="training")
+        self.agent = AgentProfile.objects.create(
+            name="resolver-agent",
+            role="Resolver tester",
+            model_config=self.model,
+        )
+
+    def make_tool(self, name, **kwargs):
+        defaults = {
+            "tool_kind": ToolDefinition.ToolKind.PROMPT_MACRO,
+            "input_schema": {"required": ["query"]},
+            "output_schema": {"required": ["result"]},
+            "config": {"template": "secret implementation detail"},
+        }
+        defaults.update(kwargs)
+        return ToolDefinition.objects.create(name=name, **defaults)
+
+    def test_resolves_tools_from_active_toolbox_assignment(self):
+        tool = self.make_tool("toolbox-search", label="Toolbox Search")
+        toolbox = Toolbox.objects.create(name="Resolver Toolbox", slug="resolver-toolbox", label="Resolver Toolbox")
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=toolbox)
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), ["toolbox-search"])
+        self.assertEqual(resolution.tools[0].source, "toolbox")
+
+    def test_agent_deny_override_removes_toolbox_tool(self):
+        tool = self.make_tool("denied-tool")
+        toolbox = Toolbox.objects.create(name="Deny Toolbox", slug="deny-toolbox", label="Deny Toolbox")
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=toolbox)
+        AgentToolGrant.objects.create(agent=self.agent, tool=tool, is_enabled=False)
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), [])
+
+    def test_agent_allow_override_adds_extra_tool(self):
+        tool = self.make_tool(
+            "grant-draft",
+            operation_mode=ToolDefinition.OperationMode.DRAFT_WRITE,
+        )
+        AgentToolGrant.objects.create(
+            agent=self.agent,
+            tool=tool,
+            permission_level=AgentToolGrant.PermissionLevel.DRAFT_WRITE,
+            requires_approval_override=True,
+        )
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), ["grant-draft"])
+        self.assertEqual(resolution.tools[0].source, "agent_grant")
+        self.assertEqual(resolution.tools[0].permission_level, AgentToolGrant.PermissionLevel.DRAFT_WRITE)
+        self.assertTrue(resolution.tools[0].requires_approval)
+
+    def test_agent_grant_permission_level_filters_operation_mode(self):
+        read_tool = self.make_tool("grant-read-tool", operation_mode=ToolDefinition.OperationMode.READ)
+        draft_tool = self.make_tool("grant-draft-tool", operation_mode=ToolDefinition.OperationMode.DRAFT_WRITE)
+        AgentToolGrant.objects.create(
+            agent=self.agent,
+            tool=read_tool,
+            permission_level=AgentToolGrant.PermissionLevel.READ_ONLY,
+        )
+        AgentToolGrant.objects.create(
+            agent=self.agent,
+            tool=draft_tool,
+            permission_level=AgentToolGrant.PermissionLevel.READ_ONLY,
+        )
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), ["grant-read-tool"])
+
+    def test_restrictive_agent_grant_overrides_toolbox_access(self):
+        tool = self.make_tool(
+            "toolbox-draft-restricted",
+            operation_mode=ToolDefinition.OperationMode.DRAFT_WRITE,
+        )
+        toolbox = Toolbox.objects.create(
+            name="Restricted Toolbox",
+            slug="restricted-toolbox",
+            label="Restricted Toolbox",
+        )
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=toolbox)
+        AgentToolGrant.objects.create(
+            agent=self.agent,
+            tool=tool,
+            permission_level=AgentToolGrant.PermissionLevel.READ_ONLY,
+        )
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), [])
+
+    def test_legacy_direct_tools_remain_compatible(self):
+        tool = self.make_tool("legacy-direct")
+        self.agent.tools.add(tool)
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), ["legacy-direct"])
+        self.assertEqual(resolution.tools[0].source, "legacy_direct")
+
+    def test_inactive_tools_and_toolboxes_are_filtered(self):
+        active_tool = self.make_tool("active-tool")
+        inactive_tool = self.make_tool("inactive-tool", is_active=False)
+        inactive_toolbox_tool = self.make_tool("inactive-toolbox-tool")
+        disabled_membership_tool = self.make_tool("disabled-membership-tool")
+
+        active_toolbox = Toolbox.objects.create(name="Active Toolbox", slug="active-toolbox", label="Active Toolbox")
+        inactive_toolbox = Toolbox.objects.create(
+            name="Inactive Toolbox",
+            slug="inactive-toolbox",
+            label="Inactive Toolbox",
+            is_active=False,
+        )
+        ToolboxTool.objects.create(toolbox=active_toolbox, tool=active_tool)
+        ToolboxTool.objects.create(toolbox=active_toolbox, tool=inactive_tool)
+        ToolboxTool.objects.create(toolbox=inactive_toolbox, tool=inactive_toolbox_tool)
+        ToolboxTool.objects.create(toolbox=active_toolbox, tool=disabled_membership_tool, is_enabled=False)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=active_toolbox)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=inactive_toolbox)
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), ["active-tool"])
+
+    def test_inactive_assignment_is_filtered(self):
+        tool = self.make_tool("assignment-disabled-tool")
+        toolbox = Toolbox.objects.create(
+            name="Assignment Disabled Toolbox",
+            slug="assignment-disabled-toolbox",
+            label="Assignment Disabled Toolbox",
+        )
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=toolbox, is_enabled=False)
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), [])
+
+    def test_workspace_policy_filters_allowed_and_blocked_tools(self):
+        allowed = self.make_tool("allowed-tool")
+        blocked = self.make_tool("blocked-tool")
+        absent = self.make_tool("absent-tool")
+        for tool in (allowed, blocked, absent):
+            self.agent.tools.add(tool)
+        workspace = GameWorkspace.objects.create(
+            name="resolver-workspace",
+            default_policy={
+                "allowed_tools": ["allowed-tool", "blocked-tool"],
+                "blocked_tools": ["blocked-tool"],
+            },
+        )
+
+        resolution = resolve_agent_tools(self.agent, workspace=workspace)
+
+        self.assertEqual(resolution.tool_names(), ["allowed-tool"])
+
+    def test_workspace_policy_blocks_external_writes_by_default(self):
+        read_tool = self.make_tool("read-tool")
+        external_tool = self.make_tool(
+            "external-tool",
+            operation_mode=ToolDefinition.OperationMode.EXTERNAL_WRITE,
+        )
+        self.agent.tools.add(read_tool, external_tool)
+        workspace = GameWorkspace.objects.create(name="resolver-external-workspace")
+
+        resolution = resolve_agent_tools(self.agent, workspace=workspace)
+
+        self.assertEqual(resolution.tool_names(), ["read-tool"])
+
+    def test_workspace_policy_can_mark_medium_or_high_risk_as_approval_required(self):
+        medium_tool = self.make_tool("medium-tool", risk_level=ToolDefinition.RiskLevel.MEDIUM)
+        high_tool = self.make_tool("high-tool", risk_level=ToolDefinition.RiskLevel.HIGH)
+        self.agent.tools.add(medium_tool, high_tool)
+        workspace = GameWorkspace.objects.create(
+            name="resolver-approval-workspace",
+            default_policy={
+                "safety": {
+                    "require_approval_for_medium_risk": True,
+                    "require_approval_for_high_risk": True,
+                }
+            },
+        )
+
+        resolution = resolve_agent_tools(self.agent, workspace=workspace)
+
+        self.assertEqual(resolution.tool_names(), ["high-tool", "medium-tool"])
+        self.assertTrue(all(resolved_tool.requires_approval for resolved_tool in resolution.tools))
+
+    def test_manifest_is_safe_and_omits_runtime_config(self):
+        tool = self.make_tool(
+            "safe-manifest-tool",
+            label="Safe Manifest Tool",
+            description="Visible model description.",
+            config={
+                "callable": "private.module.fn",
+                "headers": {"Authorization": "Bearer secret"},
+            },
+        )
+        self.agent.tools.add(tool)
+
+        manifest = resolve_agent_tools(self.agent).manifest()
+
+        self.assertEqual(
+            manifest,
+            [
+                {
+                    "name": "safe-manifest-tool",
+                    "label": "Safe Manifest Tool",
+                    "description": "Visible model description.",
+                    "operation_mode": ToolDefinition.OperationMode.READ,
+                    "risk_level": ToolDefinition.RiskLevel.LOW,
+                    "requires_approval": False,
+                    "input_schema": {"required": ["query"]},
+                    "output_schema": {"required": ["result"]},
+                }
+            ],
+        )
+        self.assertNotIn("config", manifest[0])
+        self.assertNotIn("callable", str(manifest[0]))
+        self.assertNotIn("Authorization", str(manifest[0]))
+
+
+class StarterToolboxSeedTests(TestCase):
+    def test_seed_creates_starter_toolboxes_roles_and_assignments(self):
+        stats = seed_starter_toolboxes()
+
+        self.assertEqual(Toolbox.objects.count(), 5)
+        self.assertEqual(AgentProfile.objects.filter(name__in=ROLE_TOOLBOXES.keys()).count(), 5)
+        self.assertGreaterEqual(ToolDefinition.objects.count(), 20)
+        self.assertEqual(
+            AgentToolboxAssignment.objects.filter(agent__name="Developer Assistant").count(),
+            4,
+        )
+        self.assertEqual(
+            set(
+                AgentToolboxAssignment.objects.filter(agent__name="Developer Assistant")
+                .values_list("toolbox__slug", flat=True)
+            ),
+            {
+                "core-foundation",
+                "knowledge-discovery-retrieval",
+                "development-code-assistance",
+                "workspace-draft-artifacts",
+            },
+        )
+        self.assertGreater(stats["tools_created"], 0)
+        self.assertGreater(stats["assignments_created"], 0)
+
+    def test_seed_is_idempotent(self):
+        first = seed_starter_toolboxes()
+        second = seed_starter_toolboxes()
+
+        self.assertGreater(first["tools_created"], 0)
+        self.assertEqual(second["tools_created"], 0)
+        self.assertEqual(second["toolboxes_created"], 0)
+        self.assertEqual(second["agents_created"], 0)
+        self.assertEqual(second["assignments_created"], 0)
+        self.assertEqual(Toolbox.objects.count(), 5)
+        self.assertEqual(AgentProfile.objects.filter(name__in=ROLE_TOOLBOXES.keys()).count(), 5)
+
+    def test_knowledge_retrieval_toolbox_uses_real_read_only_callables(self):
+        seed_starter_toolboxes()
+
+        toolbox = Toolbox.objects.get(slug="knowledge-discovery-retrieval")
+        tool_names = set(toolbox.tool_entries.values_list("tool__name", flat=True))
+        self.assertEqual(
+            tool_names,
+            {
+                "browse_knowledge_index",
+                "search_knowledge",
+                "read_knowledge_chunk",
+                "read_document_section",
+                "cite_knowledge_source",
+            },
+        )
+        search_tool = ToolDefinition.objects.get(name="search_knowledge")
+        self.assertEqual(search_tool.tool_kind, ToolDefinition.ToolKind.PYTHON_CALLABLE)
+        self.assertTrue(search_tool.config["read_only"])
+        self.assertEqual(search_tool.operation_mode, ToolDefinition.OperationMode.READ)
+
+    def test_seed_command_runs(self):
+        call_command("seed_ai_hub_starter_toolboxes", verbosity=0)
+
+        self.assertTrue(Toolbox.objects.filter(slug="core-foundation").exists())
+        self.assertTrue(AgentProfile.objects.filter(name="General Assistant").exists())
+
+
+class StarterDemoSeedTests(TestCase):
+    def test_demo_seed_creates_safe_workspace_knowledge_and_approval_action(self):
+        stats = seed_starter_demo()
+
+        workspace = GameWorkspace.objects.get(name="AI Hub Starter GAME Workspace")
+        collection = KnowledgeCollection.objects.get(name="AI Hub Starter Knowledge")
+        action = GameActionDefinition.objects.get(name="submit_for_approval")
+
+        self.assertEqual(stats["workspaces_created"], 1)
+        self.assertEqual(collection.documents.count(), 1)
+        self.assertEqual(
+            KnowledgeDocumentChunk.objects.filter(document__collection=collection).count(),
+            1,
+        )
+        self.assertEqual(action.action_type, GameActionDefinition.ActionType.TOOL)
+        self.assertEqual(action.tool.name, "submit_for_approval")
+        self.assertTrue(action.requires_approval)
+        self.assertTrue(
+            GameWorkspaceAction.objects.filter(
+                workspace=workspace,
+                action=action,
+                is_enabled=True,
+                requires_approval_override=True,
+            ).exists()
+        )
+        self.assertEqual(
+            set(
+                GameWorkspaceAgent.objects.filter(workspace=workspace)
+                .values_list("agent__name", flat=True)
+            ),
+            {"Business Analyst Agent", "Developer Assistant"},
+        )
+        self.assertFalse(workspace.default_policy["safety"]["allow_external_writes"])
+
+    def test_demo_seed_is_idempotent(self):
+        first = seed_starter_demo()
+        second = seed_starter_demo()
+
+        self.assertEqual(first["workspaces_created"], 1)
+        self.assertEqual(second["collections_created"], 0)
+        self.assertEqual(second["documents_created"], 0)
+        self.assertEqual(second["chunks_created"], 0)
+        self.assertEqual(second["workspaces_created"], 0)
+        self.assertEqual(second["actions_created"], 0)
+        self.assertEqual(second["workspace_actions_created"], 0)
+        self.assertEqual(second["workspace_agents_created"], 0)
+
+    def test_demo_seed_command_runs(self):
+        call_command("seed_ai_hub_starter_demo", verbosity=0)
+
+        self.assertTrue(GameWorkspace.objects.filter(name="AI Hub Starter GAME Workspace").exists())
+        self.assertTrue(KnowledgeCollection.objects.filter(name="AI Hub Starter Knowledge").exists())
+
+
+class KnowledgeRetrievalTests(TestCase):
+    def setUp(self):
+        self.provider = ProviderConfig.objects.create(name="knowledge-provider", provider_type="training")
+        self.model = ModelConfig.objects.create(provider=self.provider, model_name="training")
+        self.agent = AgentProfile.objects.create(
+            name="knowledge-agent",
+            role="Knowledge tester",
+            model_config=self.model,
+            knowledge_max_chars=50,
+        )
+        self.collection = KnowledgeCollection.objects.create(
+            name="Policies",
+            description="Approved support policies.",
+        )
+        self.other_collection = KnowledgeCollection.objects.create(name="Private policies")
+        self.agent.knowledge_collections.add(self.collection)
+        self.document = KnowledgeDocument.objects.create(
+            collection=self.collection,
+            title="Refund policy",
+            curated_text="Full refund policy text that should not be injected when retrieval-only mode is active.",
+            tags=["refunds", "support"],
+            language="en",
+            status=KnowledgeDocument.Status.ACTIVE,
+        )
+        self.chunk = KnowledgeDocumentChunk.objects.create(
+            document=self.document,
+            chunk_index=1,
+            section_title="Eligibility",
+            content="Refunds are available within 30 days when the order is unused.",
+            token_estimate=14,
+            metadata={"source_path": "refunds.md"},
+        )
+        KnowledgeDocumentChunk.objects.create(
+            document=self.document,
+            chunk_index=2,
+            section_title="Exceptions",
+            content="Digital gift cards are not refundable.",
+            token_estimate=8,
+        )
+        self.private_document = KnowledgeDocument.objects.create(
+            collection=self.other_collection,
+            title="Private refund policy",
+            curated_text="Private refund instructions.",
+            status=KnowledgeDocument.Status.ACTIVE,
+        )
+        self.private_chunk = KnowledgeDocumentChunk.objects.create(
+            document=self.private_document,
+            chunk_index=1,
+            section_title="Private",
+            content="Private refund escalation instructions.",
+        )
+
+    def test_agent_can_list_allowed_knowledge_libraries(self):
+        result = list_knowledge_libraries(self.agent)
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["libraries"][0]["name"], "Policies")
+        self.assertEqual(result["libraries"][0]["active_documents"], 1)
+        self.assertEqual(result["libraries"][0]["chunk_count"], 2)
+
+    def test_agent_can_browse_knowledge_index(self):
+        result = browse_knowledge_index(self.agent)
+
+        self.assertEqual(result["total"], 1)
+        document = result["collections"][0]["documents"][0]
+        self.assertEqual(document["title"], "Refund policy")
+        self.assertEqual([chunk["section_title"] for chunk in document["chunks"]], ["Eligibility", "Exceptions"])
+
+    def test_search_returns_only_accessible_active_chunk_results(self):
+        result = search_knowledge(self.agent, query="unused", limit=5)
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["chunk_id"], self.chunk.pk)
+        self.assertEqual(result["results"][0]["section_title"], "Eligibility")
+        self.assertIn("30 days", result["results"][0]["snippet"])
+        self.assertEqual(result["results"][0]["citation"]["document_title"], "Refund policy")
+
+    def test_search_rejects_unauthorised_collection(self):
+        with self.assertRaisesMessage(ValidationError, "not accessible"):
+            search_knowledge(self.agent, query="refund", collection_id=self.other_collection.pk)
+
+    def test_read_returns_only_selected_chunk_content(self):
+        result = read_knowledge_chunk(self.agent, chunk_id=self.chunk.pk)
+
+        self.assertEqual(result["content"], self.chunk.content)
+        self.assertNotIn("Digital gift cards", result["content"])
+        self.assertEqual(result["metadata"], {"source_path": "refunds.md"})
+
+    def test_read_blocks_unauthorised_chunk(self):
+        with self.assertRaisesMessage(ValidationError, "not accessible"):
+            read_knowledge_chunk(self.agent, chunk_id=self.private_chunk.pk)
+
+    def test_read_document_section_by_title_or_index(self):
+        by_title = read_document_section(
+            self.agent,
+            document_id=self.document.pk,
+            section_title="Exceptions",
+        )
+        by_index = read_document_section(
+            self.agent,
+            document_id=self.document.pk,
+            chunk_index=2,
+        )
+
+        self.assertEqual(by_title["section_title"], "Exceptions")
+        self.assertEqual(by_index["section_title"], "Exceptions")
+
+    def test_citations_include_useful_source_metadata(self):
+        result = cite_knowledge_source(self.agent, chunk_id=self.chunk.pk)
+
+        self.assertEqual(result["citation"]["collection"], "Policies")
+        self.assertEqual(result["citation"]["document_title"], "Refund policy")
+        self.assertEqual(result["citation"]["section_title"], "Eligibility")
+        self.assertEqual(result["citation"]["tags"], ["refunds", "support"])
+
+    @override_settings(AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=False)
+    def test_retrieval_only_context_does_not_inject_large_documents(self):
+        context = build_agent_knowledge_context(self.agent)
+
+        self.assertTrue(context["retrieval_required"])
+        self.assertEqual(context["documents"], [])
+        self.assertEqual(context["text"], "")
+        self.assertEqual(context["collections"], ["Policies"])
+        self.assertEqual(context["collection_indexes"][0]["documents"][0]["chunk_count"], 2)
+        self.assertIn("search_knowledge", context["available_retrieval_tools"])
+        self.assertNotIn("Full refund policy text", str(context))
+
+    @override_settings(AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=True)
+    def test_legacy_eager_context_remains_available(self):
+        context = build_agent_knowledge_context(self.agent)
+
+        self.assertEqual(len(context["documents"]), 1)
+        self.assertIn("Full refund policy text", context["text"])
+
+    def test_search_knowledge_python_callable_tool_uses_agent_access(self):
+        tool = ToolDefinition.objects.create(
+            name="search_knowledge_tool",
+            tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+            input_schema={"required": ["agent_id", "query"]},
+            output_schema={"required": ["query", "results", "total"]},
+            config={"callable": "ai_hub.tools.knowledge.search_knowledge"},
+        )
+
+        result = execute_tool(tool, {"agent_id": self.agent.pk, "query": "unused"})
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["results"][0]["chunk_id"], self.chunk.pk)
+
+
+class DeliberateToolRuntimeTests(TestCase):
+    def setUp(self):
+        self.provider = ProviderConfig.objects.create(name="deliberate-provider", provider_type="training")
+        self.model = ModelConfig.objects.create(provider=self.provider, model_name="training")
+        self.agent = AgentProfile.objects.create(
+            name="deliberate-agent",
+            role="Deliberate runtime tester",
+            model_config=self.model,
+            input_contract={"required": ["query"]},
+            output_contract={"required": ["agent", "tools", "llm"]},
+        )
+
+    def make_prompt_tool(self, name="deliberate-tool", **kwargs):
+        defaults = {
+            "tool_kind": ToolDefinition.ToolKind.PROMPT_MACRO,
+            "input_schema": {"required": ["query"]},
+            "output_schema": {"required": ["macro"]},
+            "config": {"template": "macro result"},
+        }
+        defaults.update(kwargs)
+        tool = ToolDefinition.objects.create(name=name, **defaults)
+        self.agent.tools.add(tool)
+        return tool
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_final_response_does_not_execute_available_tools(self, mocked_call):
+        self.make_prompt_tool()
+        mocked_call.return_value = {
+            "status": "ok",
+            "content": '{"type": "final", "answer": "done"}',
+        }
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["status"], "final")
+        self.assertEqual(output["final_answer"], "done")
+        self.assertEqual(output["tools"], {})
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+        sent_user_payload = json.loads(mocked_call.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual(sent_user_payload["available_tools"][0]["name"], "deliberate-tool")
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_agent_requests_one_valid_tool_then_finalises(self, mocked_call):
+        self.make_prompt_tool()
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": '{"type": "tool_call", "tool_name": "deliberate-tool", "arguments": {"query": "hello"}}',
+            },
+            {
+                "status": "ok",
+                "content": '{"type": "final", "answer": "used tool"}',
+            },
+        ]
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["status"], "final")
+        self.assertEqual(output["tools"], {"deliberate-tool": {"macro": "macro result"}})
+        run = ToolExecutionRun.objects.get()
+        self.assertEqual(run.status, ToolExecutionRun.Status.SUCCESS)
+        self.assertEqual(run.input_payload, {"query": "hello"})
+        self.assertEqual(run.output_payload, {"macro": "macro result"})
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_unknown_or_unauthorised_tool_is_blocked(self, mocked_call):
+        mocked_call.return_value = {
+            "status": "ok",
+            "content": '{"type": "tool_call", "tool_name": "missing-tool", "arguments": {}}',
+        }
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["status"], "unauthorised_tool")
+        self.assertIn("missing-tool", output["error"])
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_invalid_tool_arguments_are_audited_as_failed(self, mocked_call):
+        self.make_prompt_tool()
+        mocked_call.return_value = {
+            "status": "ok",
+            "content": '{"type": "tool_call", "tool_name": "deliberate-tool", "arguments": {}}',
+        }
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["status"], "tool_error")
+        run = ToolExecutionRun.objects.get()
+        self.assertEqual(run.status, ToolExecutionRun.Status.FAILED)
+        self.assertIn("missing required keys", run.error_detail)
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_tool_output_contract_violation_is_audited_as_failed(self, mocked_call):
+        self.make_prompt_tool(output_schema={"required": ["result"]})
+        mocked_call.return_value = {
+            "status": "ok",
+            "content": '{"type": "tool_call", "tool_name": "deliberate-tool", "arguments": {"query": "hello"}}',
+        }
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["status"], "tool_error")
+        run = ToolExecutionRun.objects.get()
+        self.assertEqual(run.status, ToolExecutionRun.Status.FAILED)
+        self.assertIn("missing required keys", run.error_detail)
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_approval_required_tool_pauses_without_execution(self, mocked_call):
+        self.make_prompt_tool(requires_approval=True)
+        mocked_call.return_value = {
+            "status": "ok",
+            "content": '{"type": "tool_call", "tool_name": "deliberate-tool", "arguments": {"query": "hello"}}',
+        }
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["status"], "waiting_approval")
+        self.assertEqual(output["tools"], {})
+        run = ToolExecutionRun.objects.get()
+        self.assertEqual(run.status, ToolExecutionRun.Status.WAITING_APPROVAL)
+        self.assertEqual(run.approval_state, ToolExecutionRun.ApprovalState.REQUIRED)
+        self.assertEqual(run.output_payload, {})
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_max_tool_rounds_stops_uncontrolled_chains(self, mocked_call):
+        self.make_prompt_tool()
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": '{"type": "tool_call", "tool_name": "deliberate-tool", "arguments": {"query": "one"}}',
+            },
+            {
+                "status": "ok",
+                "content": '{"type": "tool_call", "tool_name": "deliberate-tool", "arguments": {"query": "two"}}',
+            },
+        ]
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"}, max_tool_rounds=1)
+
+        self.assertEqual(output["status"], "max_tool_rounds")
+        self.assertEqual(ToolExecutionRun.objects.count(), 1)
+        self.assertEqual(ToolExecutionRun.objects.get().status, ToolExecutionRun.Status.SUCCESS)
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_invalid_model_tool_response_is_blocked(self, mocked_call):
+        mocked_call.return_value = {"status": "ok", "content": "not json"}
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["status"], "invalid_model_response")
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
 
 
 class GameWorkspaceGoalTests(TestCase):
@@ -2053,6 +2896,114 @@ class GameActionDispatcherTests(TestCase):
         )
         with self.assertRaisesMessage(ValidationError, "not found or not accessible"):
             self._dispatch("read_document", {"document_id": other_doc.pk})
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=False)
+    def test_unified_game_tool_action_is_blocked_when_flag_disabled(self):
+        tool = ToolDefinition.objects.create(
+            name="game_common_context",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            input_schema={"required": ["query"]},
+            output_schema={"required": ["macro"]},
+            config={"template": "common context"},
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="common_context",
+            label="Common context",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            input_contract={"required": ["query"]},
+        )
+
+        with self.assertRaisesMessage(ValidationError, "Unified tool runtime is disabled"):
+            self._dispatch("common_context", {"query": "policy"})
+
+        failed_run = GameActionRun.objects.get(action_name="common_context")
+        self.assertEqual(failed_run.status, GameActionRun.Status.FAILED)
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_unified_game_tool_action_executes_common_tool_and_audits_both_layers(self):
+        tool = ToolDefinition.objects.create(
+            name="game_common_context_enabled",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            input_schema={"required": ["query"]},
+            output_schema={"required": ["macro"]},
+            config={"template": "common context enabled"},
+            operation_mode=ToolDefinition.OperationMode.READ,
+            risk_level=ToolDefinition.RiskLevel.LOW,
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="common_context_enabled",
+            label="Common context enabled",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            input_contract={"required": ["query"]},
+        )
+
+        action_run = self._dispatch("common_context_enabled", {"query": "policy"})
+
+        self.assertEqual(action_run.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(action_run.output_payload["tool_name"], "game_common_context_enabled")
+        self.assertEqual(action_run.output_payload["tool_result"], {"macro": "common context enabled"})
+        tool_run = ToolExecutionRun.objects.get()
+        self.assertEqual(tool_run.status, ToolExecutionRun.Status.SUCCESS)
+        self.assertEqual(tool_run.session, self.session)
+        self.assertEqual(tool_run.agent, self.agent)
+        self.assertEqual(tool_run.tool, tool)
+        self.assertEqual(tool_run.input_payload, {"query": "policy"})
+        self.assertEqual(tool_run.output_payload, {"macro": "common context enabled"})
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_unified_game_tool_action_requires_agent_tool_permission(self):
+        tool = ToolDefinition.objects.create(
+            name="game_common_context_unassigned",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            input_schema={"required": ["query"]},
+            output_schema={"required": ["macro"]},
+            config={"template": "not assigned"},
+        )
+        GameActionDefinition.objects.create(
+            name="common_context_unassigned",
+            label="Common context unassigned",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            input_contract={"required": ["query"]},
+        )
+
+        with self.assertRaisesMessage(ValidationError, "not available to agent"):
+            self._dispatch("common_context_unassigned", {"query": "policy"})
+
+        failed_run = GameActionRun.objects.get(action_name="common_context_unassigned")
+        self.assertEqual(failed_run.status, GameActionRun.Status.FAILED)
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_approval_required_unified_tool_action_pauses_before_tool_execution(self):
+        transition_goal_status(self.goal, GameGoal.Status.RUNNING, reason="start approval test")
+        tool = ToolDefinition.objects.create(
+            name="game_common_approval_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            input_schema={"required": ["query"]},
+            output_schema={"required": ["macro"]},
+            config={"template": "approval gated"},
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="common_context_approval",
+            label="Common context approval",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            input_contract={"required": ["query"]},
+            requires_approval=True,
+        )
+
+        action_run = self._dispatch("common_context_approval", {"query": "policy"})
+
+        self.assertEqual(action_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertTrue(GameActionApprovalRequest.objects.filter(action_run=action_run).exists())
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
 
     def test_idempotency_key_unique_db_constraint(self):
         import hashlib, json

@@ -13,6 +13,8 @@ Important modules:
 - `ai_hub.services.execution_runner`
 - `ai_hub.services.execution_sessions`
 - `ai_hub.services.tools_runtime`
+- `ai_hub.services.tool_resolution`
+- `ai_hub.services.knowledge_retrieval`
 - `ai_hub.services.admin_control_center`
 - `ai_hub.services.game_workspaces`
 - `ai_hub.services.game_goals`
@@ -30,6 +32,8 @@ Important modules:
 - `ai_hub.services.game_delegation`
 - `ai_hub.services.game_operational_ux`
 - `ai_hub.services.game_feature_flags`
+- `ai_hub.services.starter_toolboxes`
+- `ai_hub.services.starter_demo`
 
 ## Contract Validation
 
@@ -67,6 +71,49 @@ The output normally contains:
   }
 }
 ```
+
+`execute_agent_deliberate()` adds a controlled tool loop for agents whose model
+returns structured JSON. The model may return either a final answer or one
+tool-call request. The runtime resolves the allowed tool manifest, executes at
+most the configured number of tool rounds, records tool observations, and stops
+instead of improvising when the response contract is invalid.
+
+## Tool Resolution And Execution
+
+`resolve_agent_tools()` builds the final capability set for an agent from:
+
+- active toolbox assignments,
+- explicit allow and deny grants,
+- legacy direct agent tools,
+- workspace policy `allowed_tools` / `blocked_tools`,
+- side-effect policy for external writes.
+
+The model-facing manifest includes labels, descriptions, risk, operation mode and
+schemas, but never exposes callable paths or private config. `execute_tool()`
+then enforces the resolved permission, callable allow-list, approval requirement
+and runtime safety checks before dispatching Python tools.
+
+`ToolExecutionRun` records deliberate reusable tool calls. GAME selected actions
+continue to record `GameActionRun`; when a GAME action is linked to a
+`ToolDefinition`, the adapter can additionally route through the unified tool
+runtime behind `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED`.
+
+## Knowledge Retrieval
+
+`knowledge_retrieval` exposes read-only services:
+
+- `list_knowledge_libraries()`
+- `browse_knowledge_index()`
+- `search_knowledge()`
+- `read_knowledge_chunk()`
+- `read_document_section()`
+- `cite_knowledge_source()`
+
+The public wrappers in `ai_hub.tools.knowledge` require an agent identifier and
+only search collections attached to that agent. When
+`AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=false`, the normal agent context
+contains collection and document indexes rather than full document text, and the
+agent is expected to use the retrieval tools for precise sections.
 
 ## Orchestrator Runtime
 
@@ -127,6 +174,11 @@ Tool definitions use `config.game_tool_category`:
 - `action_tool`: never auto-executed by GAME under the default policy.
 
 Missing or invalid categories are treated as action tools. Python context tools also require `read_only=true`; HTTP context tools require GET or HEAD. Python callables must be present in `AI_HUB_ALLOWED_TOOL_CALLABLES`, and HTTP hosts must be explicitly listed in the tool configuration. Orchestrator keeps its legacy selection behavior but still receives these callable and host protections. The legacy action-tool opt-in remains restricted to explicitly trusted integrations; goal-bound GAME actions use the auditable dispatcher.
+
+GAME actions can now optionally link to a `ToolDefinition`. With the unified tool
+runtime flag enabled, `action_type=tool` dispatches through the same resolver and
+tool executor used by deliberate agents, while still preserving GAME policy,
+approval and `GameActionRun` audit.
 
 ### Actions, approval, and idempotency
 
@@ -227,6 +279,24 @@ If `final_output` is malformed or truncated:
 - `final_output_parse_error` is stored in context,
 - the generic runner may mark the session failed if required output keys are missing,
 - host adapters may recover domain-specific output from earlier drafts if they have enough data.
+
+## Starter Seeds
+
+`seed_starter_toolboxes()` creates a safe starter catalog: core foundation,
+knowledge retrieval, file-intake planning, workspace draft artifacts, and
+developer-assistance toolboxes. Only knowledge retrieval tools are executable
+read-only callables by default; the rest are prompt macros or approval-oriented
+draft helpers.
+
+`seed_starter_demo()` builds on those seeds with a small knowledge library, a
+safe GAME workspace, a `submit_for_approval` action linked to its tool
+definition, and starter workspace-agent mappings. The matching management
+commands are:
+
+```bash
+python manage.py seed_ai_hub_starter_toolboxes
+python manage.py seed_ai_hub_starter_demo
+```
 
 This keeps `ai_hub` generic while allowing host-specific resilience.
 

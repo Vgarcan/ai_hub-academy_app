@@ -169,6 +169,19 @@ Tool implementations may live in:
 
 If a tool reads host data, expose it through a small allowlisted adapter.
 
+Recommended host flow:
+
+1. Create a reusable `ToolDefinition` with explicit `operation_mode`, `risk_level`, contracts, and config.
+2. Put related tools into a `Toolbox`.
+3. Assign the toolbox to agents through `AgentToolboxAssignment`.
+4. Use `AgentToolGrant` only for explicit exceptions or restrictions.
+5. Keep callable implementations in `AI_HUB_ALLOWED_TOOL_CALLABLES`.
+6. For external writes, require workspace policy and/or approval before execution.
+
+For GAME, create a `GameActionDefinition` only when the tool should be available as a governed selected action. Link that action to the reusable `ToolDefinition`; GAME will still enforce action policy, approval, budget and audit through `GameActionRun`, while the reusable tool execution is recorded in `ToolExecutionRun` when the unified runtime flag is enabled.
+
+Host adapters that call the deliberate agent runtime should use the resolved manifest and let the agent request one tool at a time. Avoid calling `execute_tool()` directly from product code unless the host has already enforced the same permission, approval and policy checks.
+
 ## Knowledge Integration
 
 Use `KnowledgeCollection` for reusable knowledge.
@@ -176,6 +189,8 @@ Use `KnowledgeCollection` for reusable knowledge.
 Use host-specific context in `initial_context`.
 
 Avoid mixing private user data into global knowledge documents unless that is intentional and safe.
+
+For larger reusable knowledge, split documents into `KnowledgeDocumentChunk` records and give agents the retrieval toolbox. Retrieval tools list libraries, browse document/chunk indexes, search chunks, read selected sections and return citation metadata. This keeps large documents out of prompts until the agent asks for relevant evidence.
 
 ## Migration From A Product-Specific AI App
 

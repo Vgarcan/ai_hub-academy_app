@@ -8,7 +8,7 @@ The easiest mental model is:
 ```text
 Providers give access to models.
 Models power agents.
-Agents use knowledge and tools.
+Agents receive knowledge access and toolboxes.
 Agents run through either Orchestrator or GAME.
 Execution sessions record what happened.
 The host app owns domain-specific persistence.
@@ -75,7 +75,7 @@ An agent combines:
 - A role.
 - A system prompt.
 - Optional knowledge collections.
-- Optional tools.
+- Optional toolboxes, grants, and legacy direct tools.
 - Optional input and output contracts.
 - Runtime settings.
 
@@ -103,13 +103,34 @@ Knowledge answers the question:
 What should the agent know before it answers?
 ```
 
-AI Hub stores knowledge as collections and documents. A collection groups related
-documents. A document stores curated text, optional source files, tags, language
-and notes.
+AI Hub stores knowledge as collections, documents, and document chunks. A
+collection groups related documents. A document stores curated text, optional
+source files, tags, language and notes. Chunks are retrieval units used when the
+runtime should browse or search knowledge instead of injecting whole documents.
 
 Knowledge is not the same as user input. User input belongs to the execution
 context. Knowledge is stable context that can be reused by many agents and
 sessions.
+
+The legacy eager knowledge context can still inject curated text for small
+libraries. Retrieval-first mode exposes library indexes and retrieval tools so
+large documents stay outside the prompt until an agent requests a specific
+section.
+
+## Toolbox
+
+A toolbox is a named bundle of tool definitions.
+
+Toolboxes answer the question:
+
+```text
+Which capabilities should this type of agent normally have?
+```
+
+Toolboxes are assigned to agents with an optional priority and active flag.
+Agent-level grants can explicitly allow or deny individual tools on top of those
+assignments. This keeps broad role setup simple while still allowing precise
+exceptions.
 
 ## Tool
 
@@ -132,13 +153,18 @@ Examples:
 Tool use depends on several gates:
 
 - The tool must exist and be active.
-- The agent must have the tool attached.
+- The agent must receive the tool through a toolbox, an allow grant, or a legacy
+  direct attachment.
+- A deny grant must not block the tool.
+- Workspace policy must not block the tool.
 - The runtime must support that tool kind.
 - The selected model/provider must be compatible with the tool strategy.
 - The host project must allow the side effect.
 
-Tools remain associated with agents, not workspaces. A GAME agent and an
-Orchestrator agent can both use tools when the runtime allows it.
+Tools remain associated with agents and policy, not with arbitrary model output.
+A GAME agent and an Orchestrator agent can both use tools when the runtime allows
+it. Higher-risk tools may require approval, and external writes remain closed
+unless workspace policy explicitly permits them.
 
 ## Contract
 

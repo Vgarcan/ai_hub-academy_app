@@ -43,6 +43,8 @@ Here is the goal. Decide what to do next until the goal is complete or the sessi
 - `GameWorkspaceAction` and `GameWorkspaceAgent`
 - `GameGoalPlan` and `GameGoalPlanStep`
 - `GameDelegationRun`
+- `ToolDefinition`, when a GAME action wraps a reusable tool
+- `ToolExecutionRun`, when the unified tool runtime executes that wrapped tool
 
 A workspace contains durable goals. A goal describes what must be achieved; an execution session records one particular run. Creating a workspace or goal does not start work automatically.
 
@@ -58,6 +60,7 @@ The whole GAME subsystem is gated by feature flags so a host project can adopt i
 | `AI_HUB_GAME_MEMORY_ENABLED` | `record_memory` |
 | `AI_HUB_GAME_RESUME_ENABLED` | `resume_goal_execution` |
 | `AI_HUB_GAME_DELEGATION_ENABLED` | `run_delegated_agent` |
+| `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED` | GAME actions linked to reusable `ToolDefinition` records |
 
 Flags gate the service layer only. Direct Django admin model edits (for example the "Add GAME goal" form, or the goal bulk actions) write through the model and bypass the flags. To hard-stop creation in an environment, also remove the relevant admin add/change permissions. See `03_CONFIGURATION.md` for the settings and `12_TROUBLESHOOTING.md` for the disabled-feature error.
 
@@ -199,6 +202,10 @@ These values appear in the session's final context together with `finish_reason`
 GAME automatically prepares context only with tools explicitly classified as read-only context tools. Tools that perform actions, and tools without a valid category, are not run automatically.
 
 When the explicit dispatcher is enabled, GAME executes only the action selected in the validated model decision. Known attempts are audited, workspace policy and budgets run before execution, and approval-required work pauses immediately. External writes are disabled unless workspace policy explicitly enables them.
+
+Reusable capabilities should be defined as `ToolDefinition` records and grouped through toolboxes/grants on the agent. A `GameActionDefinition` may then link to one of those reusable tools as a governed GAME wrapper. With `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=true`, GAME validates the workspace action policy, creates a `GameActionRun`, resolves the agent's tool access, executes the linked tool through the generic tool runtime, and records the reusable call in `ToolExecutionRun`.
+
+Keep GAME control actions separate from ordinary tools. Actions such as `finish_goal`, `record_memory`, `update_goal_status`, and `delegate_to_agent` remain GAME control flow and should not be replaced by generic tool records.
 
 If workspace agent or action mappings are configured, they operate as closed allow-lists: entries absent from the configured list are not permitted. With no mappings, legacy sessions retain their previous behavior.
 

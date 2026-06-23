@@ -83,6 +83,11 @@ Test:
 - incomplete goals at the iteration cap,
 - GAME Hybrid rejection without affecting Orchestrator Hybrid,
 - context-tool execution and action-tool blocking in GAME,
+- toolbox resolution, explicit grant allow/deny behavior, and workspace tool policy,
+- deliberate tool-call rounds with final-answer and tool-observation paths,
+- unified GAME tool adapter behavior with the kill-switch disabled and enabled,
+- retrieval-only knowledge context with browse/search/read/citation tools,
+- starter toolbox and starter demo seeds, including idempotency,
 - legacy Orchestrator tool behavior,
 - deterministic GAME priority for a fixed time,
 - scheduler eligibility and dependency blocking,
@@ -190,7 +195,10 @@ Test:
 - Timeout handling.
 - JSON parsing.
 - Tool gating.
+- Tool manifest redaction.
+- Tool execution audit records.
 - Knowledge injection limits.
+- Knowledge retrieval scoping by assigned agent collections.
 - Latency recording.
 - Error serialization.
 

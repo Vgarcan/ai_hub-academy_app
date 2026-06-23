@@ -1,4 +1,5 @@
 import importlib
+import json
 from urllib.parse import urlparse
 
 import requests
@@ -75,6 +76,38 @@ def _execute_http_tool(tool: ToolDefinition, payload: dict) -> dict:
     return {"status_code": response.status_code, "body": response.text[:4000]}
 
 
+def _ensure_json_serializable(result: dict, tool_name: str) -> dict:
+    # Fix #5: reject non-serializable results at the tool boundary so they never
+    # reach json.dumps() further up the call stack (e.g. ToolExecutionRun.output_payload
+    # or the LLM message), where the failure would be harder to diagnose.
+    try:
+        json.dumps(result)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(
+            f"Tool '{tool_name}' returned a non-JSON-serializable result: {exc}"
+        ) from exc
+    return result
+
+
+def execute_tool(tool: ToolDefinition, payload: dict) -> dict:
+    if tool.tool_kind not in ALLOWED_TOOL_KINDS:
+        raise ValidationError(f"Tool kind '{tool.tool_kind}' is not allowed.")
+    validate_payload(payload, tool.input_schema or {}, f"Tool '{tool.name}' input")
+
+    if tool.tool_kind == ToolDefinition.ToolKind.PYTHON_CALLABLE:
+        tool_result = _execute_python_callable(tool, payload)
+    elif tool.tool_kind == ToolDefinition.ToolKind.HTTP:
+        tool_result = _execute_http_tool(tool, payload)
+    elif tool.tool_kind == ToolDefinition.ToolKind.PROMPT_MACRO:
+        macro_text = (tool.config or {}).get("template", "")
+        tool_result = {"macro": macro_text}
+    else:
+        tool_result = {"status": "unsupported_kind", "tool_kind": tool.tool_kind}
+
+    validate_payload(tool_result, tool.output_schema or {}, f"Tool '{tool.name}' output")
+    return _ensure_json_serializable(tool_result, tool.name)
+
+
 def execute_tools(tools, payload: dict, *, policy: str = TOOL_POLICY_ALL) -> dict:
     if policy not in {TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY}:
         raise ValidationError(f"Unknown tool execution policy '{policy}'.")
@@ -83,20 +116,5 @@ def execute_tools(tools, payload: dict, *, policy: str = TOOL_POLICY_ALL) -> dic
     for tool in tools:
         if policy == TOOL_POLICY_GAME_CONTEXT_ONLY and get_game_tool_category(tool) != GAME_CONTEXT_TOOL:
             continue
-        if tool.tool_kind not in ALLOWED_TOOL_KINDS:
-            raise ValidationError(f"Tool kind '{tool.tool_kind}' is not allowed.")
-        validate_payload(payload, tool.input_schema or {}, f"Tool '{tool.name}' input")
-
-        if tool.tool_kind == ToolDefinition.ToolKind.PYTHON_CALLABLE:
-            tool_result = _execute_python_callable(tool, payload)
-        elif tool.tool_kind == ToolDefinition.ToolKind.HTTP:
-            tool_result = _execute_http_tool(tool, payload)
-        elif tool.tool_kind == ToolDefinition.ToolKind.PROMPT_MACRO:
-            macro_text = (tool.config or {}).get("template", "")
-            tool_result = {"macro": macro_text}
-        else:
-            tool_result = {"status": "unsupported_kind", "tool_kind": tool.tool_kind}
-
-        validate_payload(tool_result, tool.output_schema or {}, f"Tool '{tool.name}' output")
-        output[tool.name] = tool_result
+        output[tool.name] = execute_tool(tool, payload)
     return output

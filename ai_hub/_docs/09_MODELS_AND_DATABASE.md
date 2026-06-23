@@ -67,8 +67,13 @@ Defines a reusable tool capability.
 Important fields:
 
 - `name`: friendly tool name.
-- `tool_kind`: runtime tool category.
+- `label`: admin-facing and model-facing display label.
 - `description`: what the tool does.
+- `tool_kind`: runtime tool category.
+- `risk_level`: low, medium or high operational risk.
+- `operation_mode`: read, write, external write or prompt macro.
+- `requires_approval`: whether execution should pause for review.
+- `is_system_tool`: marks built-in platform tools.
 - `input_schema`: expected input shape.
 - `output_schema`: expected output shape.
 - `config`: tool-specific settings.
@@ -77,6 +82,24 @@ Important fields:
 Tools should be treated as controlled capabilities. A tool attached to an agent
 does not mean every model can automatically use it. The runtime still decides
 whether that tool kind is available and safe.
+
+## `Toolbox`, `ToolboxTool`, `AgentToolboxAssignment`, and `AgentToolGrant`
+
+Toolboxes group related tools for a role or workflow.
+
+Important fields:
+
+- `Toolbox.slug`: stable toolbox identifier.
+- `ToolboxTool.display_order`: ordering within the toolbox.
+- `ToolboxTool.is_enabled`: whether that toolbox currently exposes the tool.
+- `AgentToolboxAssignment.is_enabled`: whether the agent currently receives the toolbox.
+- `AgentToolGrant.permission_level`: explicit operation allowance for one agent/tool pair.
+- `AgentToolGrant.is_enabled`: enabled means allow/override; disabled means deny.
+
+The resolver combines active toolbox assignments, grants, legacy direct tools and
+workspace policy into a final per-agent manifest. Disabled grants win over
+allows, and restrictive permission levels can remove broader toolbox access for
+that tool.
 
 ## `KnowledgeCollection`
 
@@ -112,6 +135,22 @@ Operational note:
 ```text
 Keep curated_text concise. Very large documents should be summarized or retrieved selectively.
 ```
+
+## `KnowledgeDocumentChunk`
+
+Stores one retrievable section of a knowledge document.
+
+Important fields:
+
+- `document`: parent knowledge document.
+- `chunk_index`: stable one-based position in the document.
+- `section_title`: optional human-readable heading.
+- `content`: chunk text returned by retrieval tools.
+- `token_estimate`: approximate size for prompt budgeting.
+- `metadata`: source or extraction details.
+
+Chunks let agents browse, search, read and cite knowledge without injecting the
+entire document into every prompt.
 
 ## `AgentProfile`
 
@@ -227,7 +266,7 @@ Deleting a workspace intentionally cascades to its goals and their dependency re
 
 ## GAME actions, memory, and policy records
 
-`GameActionDefinition` is the allow-listed action registry. It stores action type, contracts, adapter configuration, risk level, approval requirement, and active state. Executable Python remains registered in code rather than stored as arbitrary database source.
+`GameActionDefinition` is the allow-listed action registry. It stores action type, optional linked `ToolDefinition`, contracts, adapter configuration, risk level, approval requirement, and active state. Executable Python remains registered in code rather than stored as arbitrary database source.
 
 `GameActionRun` is one durable selected-action attempt. Its unique idempotency key includes session, step, action, and canonical input. Status, payloads, observation, error, latency, and timestamps form the action audit trail. Known contract, policy, budget, and handler failures are retained as failed runs.
 
@@ -294,6 +333,24 @@ Important fields:
 - `error_detail`: failure details.
 
 Step runs are the primary audit trail for debugging model behavior.
+
+## `ToolExecutionRun`
+
+Stores one deliberate tool execution through the unified runtime.
+
+Important fields:
+
+- `session`: optional execution session context.
+- `step_run`: optional parent step.
+- `agent`: agent that requested the tool.
+- `tool`: tool definition executed.
+- `status`: success, failure or waiting-approval outcome.
+- `input_payload`, `output_payload`, `error_detail`: audit payloads.
+- `latency_ms`: measured execution time.
+
+GAME action runs remain the durable audit record for selected GAME actions.
+`ToolExecutionRun` records reusable tool runtime calls so non-GAME and GAME
+adapter usage share the same execution trail.
 
 ## Host Adapter Models
 

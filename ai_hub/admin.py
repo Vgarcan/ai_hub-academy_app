@@ -13,6 +13,8 @@ from django.utils.translation import gettext_lazy as _
 
 from .models import (
     AgentProfile,
+    AgentToolGrant,
+    AgentToolboxAssignment,
     ExecutionSession,
     ExecutionStepRun,
     GameActionApprovalRequest,
@@ -30,11 +32,15 @@ from .models import (
     GameWorkspaceAgent,
     KnowledgeCollection,
     KnowledgeDocument,
+    KnowledgeDocumentChunk,
     ModelConfig,
     PipelineDefinition,
     PipelineStep,
     ProviderConfig,
     ToolDefinition,
+    Toolbox,
+    ToolboxTool,
+    ToolExecutionRun,
 )
 from .services.admin_control_center import (
     build_ai_hub_home_context,
@@ -44,6 +50,7 @@ from .services.admin_control_center import (
 from .services.execution_runner import run_execution_session
 from .services.game_operational_ux import redact_payload, redact_text
 from .services.game_resume import approve_action_run, reject_action_run
+from .services.tool_resolution import resolve_agent_tools
 
 
 ACTIVE_EXECUTION_STATUSES = (
@@ -351,6 +358,16 @@ class KnowledgeDocumentInline(AIHubFormHelpMixin, admin.TabularInline):
     }
 
 
+class KnowledgeDocumentChunkInline(AIHubFormHelpMixin, admin.TabularInline):
+    model = KnowledgeDocumentChunk
+    extra = 0
+    fields = ("chunk_index", "section_title", "token_estimate", "updated_at")
+    readonly_fields = ("updated_at",)
+    show_change_link = True
+    verbose_name = "Knowledge chunk"
+    verbose_name_plural = "1.2 Knowledge chunks - retrievable sections"
+
+
 @admin.register(ProviderConfig)
 class ProviderConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Providers")
@@ -476,6 +493,29 @@ class ModelConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
     )
 
 
+class ToolboxToolInline(AIHubFormHelpMixin, admin.TabularInline):
+    model = ToolboxTool
+    extra = 0
+    autocomplete_fields = ("tool",)
+    fields = ("tool", "is_enabled", "default_enabled", "display_order")
+
+
+class AgentToolboxAssignmentInline(AIHubFormHelpMixin, admin.TabularInline):
+    model = AgentToolboxAssignment
+    extra = 0
+    autocomplete_fields = ("toolbox",)
+    fields = ("toolbox", "is_enabled", "created_at")
+    readonly_fields = ("created_at",)
+
+
+class AgentToolGrantInline(AIHubFormHelpMixin, admin.TabularInline):
+    model = AgentToolGrant
+    extra = 0
+    autocomplete_fields = ("tool",)
+    fields = ("tool", "is_enabled", "permission_level", "requires_approval_override", "notes", "created_at")
+    readonly_fields = ("created_at",)
+
+
 @admin.register(ToolDefinition)
 class ToolDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Tools")
@@ -491,9 +531,9 @@ class ToolDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
         {"label": _("Add tool"), "url": lambda self: reverse("admin:ai_hub_tooldefinition_add"), "default": True},
         {"label": _("Open agents"), "url": lambda self: reverse("admin:ai_hub_agentprofile_changelist")},
     )
-    list_display = ("name", "tool_kind", "is_active", "updated_at")
-    list_filter = ("tool_kind", "is_active")
-    search_fields = ("name",)
+    list_display = ("name", "label", "tool_kind", "operation_mode", "risk_level", "requires_approval", "is_active")
+    list_filter = ("tool_kind", "operation_mode", "risk_level", "requires_approval", "is_system_tool", "is_active")
+    search_fields = ("name", "label", "description")
     ai_hub_field_guidance = {
         "name": {
             "placeholder": "Example: fetch_customer_profile",
@@ -501,6 +541,15 @@ class ToolDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
         },
         "tool_kind": {
             "help_text": _("HTTP for API calls, Python callable for internal functions, Prompt macro for reusable prompt snippets."),
+        },
+        "operation_mode": {
+            "help_text": _("Classify side effects: read, draft write, state write, external write or execute."),
+        },
+        "risk_level": {
+            "help_text": _("Risk classification used by future permission and approval checks."),
+        },
+        "requires_approval": {
+            "help_text": _("Marks this capability as approval-gated when the unified runtime is enabled."),
         },
         "input_schema": {
             "rows": 8,
@@ -520,10 +569,17 @@ class ToolDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     }
     fieldsets = (
         ("2.0 Tool core", {
-            "fields": ("name", "tool_kind", "is_active"),
+            "fields": ("name", "label", "description", "tool_kind", "is_active"),
             "description": _(
                 "Optional capabilities that agents may use. Runtime execution is intentionally controlled; "
                 "only activate tools you expect an agent to call."
+            ),
+        }),
+        ("Safety metadata", {
+            "fields": ("operation_mode", "risk_level", "requires_approval", "is_system_tool"),
+            "description": _(
+                "Classify operational behavior before a runtime uses this tool. "
+                "Side-effecting tools should not be treated as read-only."
             ),
         }),
         ("Tool contracts", {
@@ -541,6 +597,47 @@ class ToolDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
             ),
         }),
     )
+
+
+@admin.register(Toolbox)
+class ToolboxAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("Toolboxes")
+    ai_hub_section_description = _(
+        "Group reusable tools into named bundles that can be assigned to many agents."
+    )
+    ai_hub_section_note = _("Toolboxes are additive access groups; agent grants can still allow or deny individual tools.")
+    ai_hub_section_accent = "tool"
+    list_display = ("name", "label", "is_active", "tool_count", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("name", "slug", "label", "description")
+    prepopulated_fields = {"slug": ("name",)}
+    inlines = [ToolboxToolInline]
+
+    fieldsets = (
+        ("2.1 Toolbox identity", {
+            "fields": ("name", "slug", "label", "description", "is_active"),
+            "description": _("Create a reusable group of related tools for agent roles."),
+        }),
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(tools_total=Count("tool_entries", distinct=True))
+
+    def tool_count(self, obj):
+        return obj.tools_total
+
+    tool_count.short_description = _("tools")
+
+
+@admin.register(ToolboxTool)
+class ToolboxToolAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("Toolbox tools")
+    ai_hub_section_description = _("Membership records connecting tools to toolboxes.")
+    ai_hub_section_accent = "tool"
+    list_display = ("toolbox", "tool", "display_order", "is_enabled", "default_enabled", "created_at")
+    list_filter = ("is_enabled", "default_enabled", "toolbox")
+    search_fields = ("toolbox__name", "toolbox__label", "tool__name", "tool__label")
+    autocomplete_fields = ("toolbox", "tool")
 
 
 @admin.register(KnowledgeCollection)
@@ -610,6 +707,7 @@ class KnowledgeDocumentAdmin(AIHubListPageMixin, admin.ModelAdmin):
     list_filter = ("status", "collection", "language")
     search_fields = ("title", "curated_text", "notes", "tags", "collection__name")
     autocomplete_fields = ("collection",)
+    inlines = [KnowledgeDocumentChunkInline]
     ai_hub_field_guidance = {
         "title": {
             "placeholder": "Example: Refund policy summary",
@@ -666,6 +764,30 @@ class KnowledgeDocumentAdmin(AIHubListPageMixin, admin.ModelAdmin):
     )
 
 
+@admin.register(KnowledgeDocumentChunk)
+class KnowledgeDocumentChunkAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("Knowledge chunks")
+    ai_hub_section_description = _("Retrievable sections inside knowledge documents.")
+    ai_hub_section_note = _(
+        "Agents should search and read selected chunks instead of receiving entire documents by default."
+    )
+    ai_hub_section_accent = "knowledge"
+    list_display = ("document", "chunk_index", "section_title", "token_estimate", "updated_at")
+    list_filter = ("document__collection", "document__status")
+    search_fields = ("document__title", "section_title", "content")
+    autocomplete_fields = ("document",)
+    fieldsets = (
+        ("1.2 Chunk identity", {
+            "fields": ("document", "chunk_index", "section_title", "token_estimate"),
+            "description": _("One retrievable section of a knowledge document."),
+        }),
+        ("Content", {
+            "fields": ("content", "metadata"),
+            "description": _("Chunk content and source metadata used for retrieval and citation."),
+        }),
+    )
+
+
 @admin.register(AgentProfile)
 class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Agents")
@@ -701,6 +823,8 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
     search_fields = ("name", "role", "model_config__model_name", "knowledge_collections__name")
     autocomplete_fields = ("model_config", "tools", "knowledge_collections")
     filter_horizontal = ("tools", "knowledge_collections")
+    inlines = [AgentToolboxAssignmentInline, AgentToolGrantInline]
+    readonly_fields = ("resolved_tool_manifest",)
     ai_hub_field_guidance = {
         "name": {
             "placeholder": "Example: support_ticket_triage or symbol_extractor",
@@ -717,7 +841,9 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "help_text": _("The model this agent calls. Choose a reliable model for JSON/contract-heavy agents."),
         },
         "tools": {
-            "help_text": _("Optional capabilities this specific agent can use. Leave empty for normal text-only agents."),
+            "help_text": _(
+                "Legacy direct tools for this agent. Prefer reusable toolboxes and grants for new access."
+            ),
         },
         "knowledge_collections": {
             "help_text": _("Optional knowledge groups injected into this agent's prompt context."),
@@ -758,6 +884,13 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "description": _(
                 "Choose the model and optional tools this agent can use. Inherit means the pipeline/run mode "
                 "decides whether the step is sync or async."
+            ),
+        }),
+        ("Resolved tool access", {
+            "fields": ("resolved_tool_manifest",),
+            "description": _(
+                "Read-only view of the effective tool manifest after toolboxes, grants, legacy direct tools "
+                "and safety metadata have been applied. Workspace policy may restrict this further at runtime."
             ),
         }),
         ("Knowledge", {
@@ -838,6 +971,47 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
         if game_total is None:
             game_total = obj.entry_execution_sessions.filter(runtime_kind=ExecutionSession.RuntimeKind.GAME).count()
         return game_total
+
+    @admin.display(description="Resolved tool manifest")
+    def resolved_tool_manifest(self, obj):
+        if not obj or not obj.pk:
+            return _("Save the agent before inspecting resolved tools.")
+        manifest = resolve_agent_tools(obj).manifest()
+        if not manifest:
+            return _("No active tools are currently resolved for this agent.")
+        return format_html(
+            "<pre>{}</pre>",
+            json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
+        )
+
+
+@admin.register(AgentToolboxAssignment)
+class AgentToolboxAssignmentAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("Agent toolbox assignments")
+    ai_hub_section_description = _("Attach reusable toolboxes to agents without duplicating direct tool lists.")
+    ai_hub_section_accent = "agent"
+    list_display = ("agent", "toolbox", "is_enabled", "created_at")
+    list_filter = ("is_enabled", "toolbox")
+    search_fields = ("agent__name", "agent__role", "toolbox__name", "toolbox__label")
+    autocomplete_fields = ("agent", "toolbox")
+
+
+@admin.register(AgentToolGrant)
+class AgentToolGrantAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("Agent tool grants")
+    ai_hub_section_description = _("Allow or deny one specific tool for one agent as an explicit override.")
+    ai_hub_section_accent = "agent"
+    list_display = (
+        "agent",
+        "tool",
+        "is_enabled",
+        "permission_level",
+        "requires_approval_override",
+        "created_at",
+    )
+    list_filter = ("is_enabled", "permission_level", "requires_approval_override")
+    search_fields = ("agent__name", "agent__role", "tool__name", "tool__label")
+    autocomplete_fields = ("agent", "tool")
 
 
 @admin.register(PipelineDefinition)
@@ -1733,6 +1907,81 @@ class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
     )
 
 
+@admin.register(ToolExecutionRun)
+class ToolExecutionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    ai_hub_section_title = _("Tool execution runs")
+    ai_hub_section_description = _("Generic audit records for individual reusable tool calls.")
+    ai_hub_section_note = _("Future runtimes write these records; inspect them here rather than editing them.")
+    ai_hub_section_accent = "tool"
+    list_display = ("tool", "agent", "session", "status", "risk_level", "approval_state", "latency_ms", "created_at")
+    list_filter = ("status", "risk_level", "approval_state", "tool")
+    search_fields = ("tool__name", "tool__label", "agent__name", "session__source_label", "error_detail")
+    autocomplete_fields = ("session", "step_run", "agent", "tool")
+    readonly_fields = (
+        "session",
+        "step_run",
+        "agent",
+        "tool",
+        "status",
+        "input_payload_redacted",
+        "output_payload_redacted",
+        "error_detail_redacted",
+        "latency_ms",
+        "risk_level",
+        "approval_state",
+        "idempotency_key",
+        "started_at",
+        "finished_at",
+        "created_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description=_("Input payload (redacted)"))
+    def input_payload_redacted(self, obj):
+        return _render_redacted_json(obj.input_payload)
+
+    @admin.display(description=_("Output payload (redacted)"))
+    def output_payload_redacted(self, obj):
+        return _render_redacted_json(obj.output_payload)
+
+    @admin.display(description=_("Error detail (redacted)"))
+    def error_detail_redacted(self, obj):
+        return _render_redacted_text(obj.error_detail)
+
+    fieldsets = (
+        ("5.2 Tool call", {
+            "fields": (
+                "session",
+                "step_run",
+                "agent",
+                "tool",
+                "status",
+                "risk_level",
+                "approval_state",
+                "latency_ms",
+                "idempotency_key",
+                "started_at",
+                "finished_at",
+                "created_at",
+            ),
+            "description": _("One reusable tool call, independent from GAME action history."),
+        }),
+        ("Payloads", {
+            "fields": ("input_payload_redacted", "output_payload_redacted"),
+            "description": _("Input and output are redacted for safer inspection."),
+        }),
+        ("Error", {
+            "fields": ("error_detail_redacted",),
+            "description": _("Failure details for this tool execution, if any."),
+        }),
+    )
+
+
 @admin.register(GameActionDefinition)
 class GameActionDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME action definitions")
@@ -1755,6 +2004,7 @@ class GameActionDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     list_display = ("name", "label", "action_type", "risk_level", "is_active", "updated_at")
     list_filter = ("action_type", "risk_level", "requires_approval", "is_active")
     search_fields = ("name", "label", "description")
+    autocomplete_fields = ("tool",)
     readonly_fields = ("created_at", "updated_at")
     ai_hub_field_guidance = {
         "name": {
@@ -1772,6 +2022,11 @@ class GameActionDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "help_text": _(
                 "Execution mechanism: internal runs built-in Python, context_tool reads knowledge, "
                 "tool/http/sub_agent are reserved for future phases."
+            ),
+        },
+        "tool": {
+            "help_text": _(
+                "Optional reusable ToolDefinition for unified runtime rollout. Leave empty for built-in GAME control actions."
             ),
         },
         "input_contract": {
@@ -1808,7 +2063,7 @@ class GameActionDefinitionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     }
     fieldsets = (
         ("4.8 Action identity", {
-            "fields": ("name", "label", "description", "action_type", "is_active"),
+            "fields": ("name", "label", "description", "action_type", "tool", "is_active"),
             "description": _(
                 "Define one dispatchable action. The name is what the LLM writes; "
                 "action_type routes to the correct execution adapter."

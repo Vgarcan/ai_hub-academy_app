@@ -9,6 +9,23 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Tool platform foundation (Tools implementation phases 01-07)
+
+- Expanded `ToolDefinition` metadata with labels, descriptions, risk level,
+  operation mode, approval requirement, and system-tool marker.
+- Added toolboxes, toolbox-tool entries, agent toolbox assignments, explicit
+  agent tool grants, and `ToolExecutionRun` audit records.
+- Added `resolve_agent_tools()` for toolbox/grant/legacy/workspace-policy
+  resolution with redacted model-facing manifests.
+- Added deliberate agent tool execution with bounded tool rounds and reusable
+  `execute_tool()` dispatch.
+- Added optional GAME action-to-tool adapter behind
+  `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED`.
+- Added `KnowledgeDocumentChunk` plus read-only browse, search, read and cite
+  retrieval services under agent collection scope.
+- Added starter toolbox and starter demo management commands:
+  `seed_ai_hub_starter_toolboxes` and `seed_ai_hub_starter_demo`.
+
 #### GAME domain models (Phase 03)
 
 - `GameWorkspace` model — owns a set of goals, holds default runtime config and

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}AI Hub — Enterprise AI Orchestration Platform{% endblock %}
+{% block title %}AI Hub — Intelligent Workflow Platform{% endblock %}
 
 {% block content %}
 
@@ -20,27 +20,28 @@
     <div class="lp-hero-left reveal">
       <div class="lp-eyebrow">
         <span class="lp-eyebrow-dot"></span>
-        Enterprise AI Orchestration
+        Intelligent work, made practical
       </div>
 
       <h1 class="lp-hero-title">
-        The platform that<br>
-        <span class="lp-grad-text">thinks, acts,</span><br>
-        and audits itself.
+        Make intelligent<br>
+        <span class="lp-grad-text">technology work</span><br>
+        better for you.
       </h1>
 
       <p class="lp-hero-desc">
-        AI Hub is a reusable Django framework for production-grade AI pipelines.
-        Every agent call, every decision, every tool execution &mdash; fully logged and inspectable.
+        AI Hub is a platform for designing, running and understanding intelligent workflows. It brings agents, tools, memory, decisions and governance into one clear system, so AI can support real work without becoming a black box.
       </p>
 
       <div class="lp-hero-actions">
         <a href="{% url 'academy:tutorial_list' %}" class="lp-btn-primary lp-btn-lg">
-          Start Learning
+          Explore AI Hub Academy
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
         </a>
-        <a href="{% url 'dashboard_overview' %}" class="lp-btn-ghost lp-btn-lg">Explore Dashboard</a>
+        <a href="{% url 'dashboard_overview' %}" class="lp-btn-ghost lp-btn-lg">See what AI Hub does</a>
       </div>
+
+      <p style="font-size:0.78rem;opacity:0.55;margin-top:0.9rem;max-width:420px;line-height:1.5;">Academy is not the product. It is the guided environment where people learn, test and gain confidence using AI Hub before taking it into real projects.</p>
 
       <div class="lp-hero-stats">
         <div class="lp-stat">
@@ -69,47 +70,47 @@
             <span class="lp-dot lp-dot-yellow"></span>
             <span class="lp-dot lp-dot-green"></span>
           </div>
-          <div class="lp-session-title">ExecutionSession · GAME loop</div>
+          <div class="lp-session-title">AI Hub workflow &middot; active session</div>
           <div class="lp-session-live"><span class="lp-live-pulse"></span>LIVE</div>
         </div>
         <div class="lp-session-body">
           <div class="lp-session-row lp-srow-1">
             <span class="lp-row-badge lp-badge-g">G</span>
-            <span class="lp-row-text">Goals defined · 3 tools loaded</span>
+            <span class="lp-row-text">Goal understood &middot; classify request</span>
             <span class="lp-row-status lp-status-done">✓</span>
           </div>
           <div class="lp-session-row lp-srow-2">
             <span class="lp-row-badge lp-badge-a">A</span>
-            <span class="lp-row-text">Action: <code>search_docs</code></span>
+            <span class="lp-row-text">Action: <code>search_knowledge</code></span>
             <span class="lp-row-status lp-status-done">✓</span>
           </div>
           <div class="lp-session-row lp-srow-3">
             <span class="lp-row-badge lp-badge-m">M</span>
-            <span class="lp-row-text">Memory updated · schema OK</span>
+            <span class="lp-row-text">Memory updated &middot; context retained</span>
             <span class="lp-row-status lp-status-done">✓</span>
           </div>
           <div class="lp-session-row lp-srow-4">
             <span class="lp-row-badge lp-badge-e">E</span>
-            <span class="lp-row-text">Environment check · complete: false</span>
+            <span class="lp-row-text">Check result &middot; confidence verified</span>
             <span class="lp-row-status lp-status-running">
               <span class="lp-spin"></span>
             </span>
           </div>
           <div class="lp-session-row lp-srow-5">
             <span class="lp-row-badge lp-badge-g">G</span>
-            <span class="lp-row-text">Iteration 2 — goals refined…</span>
+            <span class="lp-row-text">Goal refined &middot; prepare response</span>
             <span class="lp-row-status lp-status-done">✓</span>
           </div>
           <div class="lp-session-row lp-srow-6">
             <span class="lp-row-badge lp-badge-e lp-badge-final">E</span>
-            <span class="lp-row-text lp-text-final">complete: true · answer extracted</span>
+            <span class="lp-row-text lp-text-final">Outcome ready &middot; audit trail stored</span>
             <span class="lp-row-status lp-status-complete">⚡</span>
           </div>
         </div>
         <div class="lp-session-footer">
-          <span class="lp-footer-meta">Provider: <strong>Ollama/qwen3:8b</strong></span>
-          <span class="lp-footer-meta">Latency: <strong class="lp-text-teal">1.24 s</strong></span>
-          <span class="lp-footer-meta">Audited</span>
+          <span class="lp-footer-meta">Provider: <strong>your model, your choice</strong></span>
+          <span class="lp-footer-meta">State: <strong class="lp-text-teal">fully inspectable</strong></span>
+          <span class="lp-footer-meta">Mode: AI Hub</span>
         </div>
       </div>
     </div><!-- /right -->
@@ -123,27 +124,27 @@
 ══════════════════════════════════════════════ -->
 <div class="lp-ticker-wrap" aria-hidden="true">
   <div class="lp-ticker-track">
-    <span class="lp-ticker-item">GAME Loop</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Full Auditability</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Input Contracts</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Plug-and-Play Django App</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Training Mode</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Zero-Trust Contracts</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Provider Agnostic</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Schema-Validated</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Orchestrator Pipelines</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">ExecutionSession Logs</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">AI HUB PLATFORM</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">INTELLIGENT WORKFLOWS</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">TOOLS &amp; AGENTS</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">MEMORY WITH CONTEXT</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">HUMAN APPROVAL</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">FULL AUDITABILITY</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">GUIDED LEARNING</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">AI HUB ACADEMY</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">KNOWLEDGE CONNECTED</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">VISIBLE DECISIONS</span><span class="lp-ticker-sep">·</span>
     <!-- duplicate for seamless loop -->
-    <span class="lp-ticker-item">GAME Loop</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Full Auditability</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Input Contracts</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Plug-and-Play Django App</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Training Mode</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Zero-Trust Contracts</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Provider Agnostic</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Schema-Validated</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">Orchestrator Pipelines</span><span class="lp-ticker-sep">·</span>
-    <span class="lp-ticker-item">ExecutionSession Logs</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">AI HUB PLATFORM</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">INTELLIGENT WORKFLOWS</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">TOOLS &amp; AGENTS</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">MEMORY WITH CONTEXT</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">HUMAN APPROVAL</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">FULL AUDITABILITY</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">GUIDED LEARNING</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">AI HUB ACADEMY</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">KNOWLEDGE CONNECTED</span><span class="lp-ticker-sep">·</span>
+    <span class="lp-ticker-item">VISIBLE DECISIONS</span><span class="lp-ticker-sep">·</span>
   </div>
 </div>
 
@@ -153,31 +154,31 @@
 ══════════════════════════════════════════════ -->
 <section class="lp-section lp-section-dark">
   <div class="container">
-    <div class="lp-section-label">Platform</div>
-    <h2 class="lp-section-title lp-title-light">Everything you need.<br><span class="lp-grad-text">Nothing you don&rsquo;t.</span></h2>
+    <div class="lp-section-label">The platform</div>
+    <h2 class="lp-section-title lp-title-light">AI Hub turns AI from a chat window into<br><span class="lp-grad-text">a system that can do useful work.</span></h2>
 
     <div class="lp-bento">
 
       <!-- TALL: Auditability -->
       <div class="lp-bento-card lp-bento-tall reveal">
         <div class="lp-bento-icon lp-icon-teal">&#128203;</div>
-        <h3 class="lp-bento-heading">Full Auditability</h3>
-        <p class="lp-bento-desc">Every session captured. Nothing slips through.</p>
+        <h3 class="lp-bento-heading">Intelligence you can inspect</h3>
+        <p class="lp-bento-desc">Every run is more than an answer. It is a record of the goal, the actions taken, the information used and the outcome reached.</p>
         <div class="lp-mini-table">
           <div class="lp-mt-header">
             <span>Session ID</span><span>Agent</span><span>Status</span>
           </div>
           <div class="lp-mt-row lp-mtr-1">
-            <span class="lp-monospace">a1b2c3</span><span>doc-sync</span><span class="lp-badge-ok">OK</span>
+            <span class="lp-monospace">a1b2c3</span><span>goal-planner</span><span class="lp-badge-ok">OK</span>
           </div>
           <div class="lp-mt-row lp-mtr-2">
-            <span class="lp-monospace">d4e5f6</span><span>qa-agent</span><span class="lp-badge-ok">OK</span>
+            <span class="lp-monospace">d4e5f6</span><span>tool-runner</span><span class="lp-badge-ok">OK</span>
           </div>
           <div class="lp-mt-row lp-mtr-3">
-            <span class="lp-monospace">g7h8i9</span><span>classifier</span><span class="lp-badge-warn">ERR</span>
+            <span class="lp-monospace">g7h8i9</span><span>memory-store</span><span class="lp-badge-warn">ERR</span>
           </div>
           <div class="lp-mt-row lp-mtr-4">
-            <span class="lp-monospace">j0k1l2</span><span>doc-sync</span><span class="lp-badge-ok">OK</span>
+            <span class="lp-monospace">j0k1l2</span><span>goal-planner</span><span class="lp-badge-ok">OK</span>
           </div>
         </div>
       </div>
@@ -185,8 +186,8 @@
       <!-- WIDE: GAME loop steps -->
       <div class="lp-bento-card lp-bento-wide reveal reveal-delay-1">
         <div class="lp-bento-icon lp-icon-orange">&#129504;</div>
-        <h3 class="lp-bento-heading">GAME Autonomous Loop</h3>
-        <p class="lp-bento-desc">Agents iterate until they decide they&rsquo;re done. No hardcoded steps.</p>
+        <h3 class="lp-bento-heading">One workflow, many intelligent capabilities</h3>
+        <p class="lp-bento-desc">Connect agents, tools, knowledge and approvals into a process that can reason through a goal, act safely and explain what it did.</p>
         <div class="lp-game-flow">
           <div class="lp-game-step lp-game-step-active" data-step="0">
             <div class="lp-game-letter">G</div>
@@ -210,19 +211,19 @@
         </div>
       </div>
 
-      <!-- SMALL: Training mode -->
+      <!-- SMALL: Provider flexible -->
       <div class="lp-bento-card lp-bento-small reveal reveal-delay-2">
-        <div class="lp-bento-icon lp-icon-orange">&#127774;</div>
-        <h3 class="lp-bento-heading">Training Mode</h3>
+        <div class="lp-bento-icon lp-icon-orange">&#127760;</div>
+        <h3 class="lp-bento-heading">Provider flexible</h3>
         <div class="lp-big-stat">0</div>
-        <p class="lp-bento-desc">API keys required to start</p>
+        <p class="lp-bento-desc">black-box steps</p>
       </div>
 
-      <!-- SMALL: Contracts -->
+      <!-- SMALL: Human control -->
       <div class="lp-bento-card lp-bento-small reveal reveal-delay-3">
-        <div class="lp-bento-icon lp-icon-teal">&#128274;</div>
-        <h3 class="lp-bento-heading">Contracts</h3>
-        <p class="lp-bento-desc lp-desc-lg">Schema-validated<br>at every step</p>
+        <div class="lp-bento-icon lp-icon-teal">&#128100;</div>
+        <h3 class="lp-bento-heading">Human control</h3>
+        <p class="lp-bento-desc lp-desc-lg">AI proposes.<br>People decide.</p>
       </div>
 
       <!-- MEDIUM: Counter -->
@@ -245,16 +246,15 @@
         </div>
       </div>
 
-      <!-- MEDIUM: Code snippet -->
+      <!-- MEDIUM: Workflow config snippet -->
       <div class="lp-bento-card lp-bento-medium reveal reveal-delay-2">
-        <div class="lp-bento-icon lp-icon-orange">&#128279;</div>
-        <h3 class="lp-bento-heading">Agent Config</h3>
+        <div class="lp-bento-icon lp-icon-orange">&#128640;</div>
+        <h3 class="lp-bento-heading">Designed to grow</h3>
         <pre class="lp-code-block"><span class="c-brace">{</span>
-  <span class="c-key">"name"</span>: <span class="c-str">"doc-sync"</span>,
-  <span class="c-key">"provider"</span>: <span class="c-str">"ollama"</span>,
-  <span class="c-key">"model"</span>: <span class="c-str">"qwen3:8b"</span>,
-  <span class="c-key">"mode"</span>: <span class="c-str">"GAME"</span>,
-  <span class="c-key">"contracts"</span>: <span class="c-bool">true</span>
+  <span class="c-key">"goal"</span>: <span class="c-str">"summarise reports"</span>,
+  <span class="c-key">"provider"</span>: <span class="c-str">"your choice"</span>,
+  <span class="c-key">"tools"</span>: <span class="c-str">["search", "write"]</span>,
+  <span class="c-key">"approval"</span>: <span class="c-bool">true</span>
 <span class="c-brace">}</span></pre>
       </div>
 
@@ -268,14 +268,14 @@
 ══════════════════════════════════════════════ -->
 <section class="lp-section lp-section-dark">
   <div class="container">
-    <div class="lp-section-label">Real-world collaboration</div>
+    <div class="lp-section-label">Built for real work</div>
     <h2 class="lp-section-title lp-title-light">Built for teams.<br><span class="lp-grad-text">Designed for trust.</span></h2>
-    <p class="lp-photo-intro">AI Hub integrates into the tools and workflows your team already uses — with full traceability at every step. From the developer configuring an agent to the manager reviewing the audit trail.</p>
+    <p class="lp-photo-intro">AI Hub gives teams a structured and visible way to build and run intelligent workflows, without losing control of what happens between the input and the final outcome.</p>
     <div class="lp-photo-grid reveal">
       <!-- left column: one tall card -->
       <div class="lp-photo-col">
         <div class="lp-photo-card lp-photo-tall">
-          <img src="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=700&h=860&auto=format&fit=crop&q=80" alt="Enterprise team collaborating around a screen" loading="lazy">
+          <img src="https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=700&h=860&auto=format&fit=crop&q=80" alt="Team collaborating around an intelligent workflow platform" loading="lazy">
           <div class="lp-photo-overlay">
             <div class="lp-photo-badge">Collaboration</div>
             <p>One shared platform. Every agent, every run, every decision — visible to the whole team.</p>
@@ -285,17 +285,17 @@
       <!-- right column: two stacked cards -->
       <div class="lp-photo-col">
         <div class="lp-photo-card">
-          <img src="https://images.unsplash.com/photo-1551434678-e076c223a692?w=700&h=420&auto=format&fit=crop&q=80" alt="Developer working on AI configuration" loading="lazy">
+          <img src="https://images.unsplash.com/photo-1551434678-e076c223a692?w=700&h=420&auto=format&fit=crop&q=80" alt="Team designing intelligent workflows with confidence" loading="lazy">
           <div class="lp-photo-overlay">
-            <div class="lp-photo-badge">Developer-first</div>
-            <p>Drop into <code>INSTALLED_APPS</code>, run migrations, configure from Admin — no boilerplate.</p>
+            <div class="lp-photo-badge">Practical adoption</div>
+            <p>Design intelligent workflows in a structured environment, then apply them to real projects with confidence.</p>
           </div>
         </div>
         <div class="lp-photo-card">
-          <img src="https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=700&h=420&auto=format&fit=crop&q=80" alt="Analytics dashboard with data visualisation" loading="lazy">
+          <img src="https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=700&h=420&auto=format&fit=crop&q=80" alt="Workflow audit trail and execution records" loading="lazy">
           <div class="lp-photo-overlay">
             <div class="lp-photo-badge">Full Auditability</div>
-            <p>Every LLM call logged with payload, latency, and provider metadata. Nothing is implicit.</p>
+            <p>Every workflow step recorded. Goals, actions, decisions and outcomes — all traceable and understandable.</p>
           </div>
         </div>
       </div>
@@ -319,53 +319,52 @@
             <span class="lp-dot lp-dot-yellow"></span>
             <span class="lp-dot lp-dot-green"></span>
           </div>
-          <span class="lp-terminal-title">ai_hub — doc-sync-agent</span>
+          <span class="lp-terminal-title">AI Hub &mdash; workflow execution</span>
         </div>
         <div class="lp-terminal-body">
-          <div class="lp-tline lp-tline-1"><span class="lp-prompt">$</span> python manage.py run_agent doc-sync</div>
-          <div class="lp-tline lp-tline-2"><span class="lp-t-teal">[INFO]</span> Booting AgentProfile: doc-sync-agent</div>
-          <div class="lp-tline lp-tline-3"><span class="lp-t-teal">[INFO]</span> Provider: Ollama · qwen3:8b</div>
-          <div class="lp-tline lp-tline-4"><span class="lp-t-teal">[GAME]</span> Goals — defining objective…</div>
-          <div class="lp-tline lp-tline-5"><span class="lp-t-muted">       </span> tools: search_docs, fetch_url</div>
-          <div class="lp-tline lp-tline-6"><span class="lp-t-teal">[GAME]</span> Actions → action: "search_docs"</div>
-          <div class="lp-tline lp-tline-7"><span class="lp-t-teal">[GAME]</span> Memory · context stored · schema ✓</div>
-          <div class="lp-tline lp-tline-8"><span class="lp-t-teal">[GAME]</span> Environment · complete: false</div>
-          <div class="lp-tline lp-tline-9"><span class="lp-t-teal">[GAME]</span> Goals — iteration 2 · refined…</div>
-          <div class="lp-tline lp-tline-10"><span class="lp-t-orange">[GAME]</span> Environment · complete: <span class="lp-t-teal">true</span></div>
-          <div class="lp-tline lp-tline-11"><span class="lp-t-orange">[DONE]</span> Session <span class="lp-t-teal">a1b2c3</span> closed · 1.24 s</div>
-          <div class="lp-tline lp-tline-12 lp-cursor-line"><span class="lp-prompt">$</span> <span class="lp-cursor"></span></div>
+          <div class="lp-tline lp-tline-1"><span class="lp-prompt">$</span> ai_hub run "summarise customer reports"</div>
+          <div class="lp-tline lp-tline-2"><span class="lp-t-teal">[INFO]</span> Goal understood &middot; classify request</div>
+          <div class="lp-tline lp-tline-3"><span class="lp-t-teal">[INFO]</span> Provider: your model &middot; your choice</div>
+          <div class="lp-tline lp-tline-4"><span class="lp-t-teal">[STEP]</span> Action &rarr; search_knowledge</div>
+          <div class="lp-tline lp-tline-5"><span class="lp-t-muted">       </span> sources: reports_kb, context_store</div>
+          <div class="lp-tline lp-tline-6"><span class="lp-t-teal">[STEP]</span> Memory updated &middot; context retained</div>
+          <div class="lp-tline lp-tline-7"><span class="lp-t-teal">[STEP]</span> Check result &middot; confidence verified</div>
+          <div class="lp-tline lp-tline-8"><span class="lp-t-teal">[STEP]</span> Goal refined &middot; prepare response</div>
+          <div class="lp-tline lp-tline-9"><span class="lp-t-orange">[DONE]</span> Outcome ready &middot; audit trail stored</div>
+          <div class="lp-tline lp-tline-10"><span class="lp-t-orange">[DONE]</span> Session <span class="lp-t-teal">a1b2c3</span> closed &middot; <span class="lp-t-teal">0</span> black-box steps</div>
+          <div class="lp-tline lp-tline-11 lp-cursor-line"><span class="lp-prompt">$</span> <span class="lp-cursor"></span></div>
         </div>
       </div>
     </div>
 
     <!-- Copy side -->
     <div class="lp-split-copy reveal reveal-delay-2">
-      <div class="lp-section-label">Developer Experience</div>
-      <h2 class="lp-section-title">This is a program.<br>Not a webpage.</h2>
-      <p class="lp-section-desc">AI Hub runs as a Django management command, a REST call, or inline Python. The same audit trail appears in Admin no matter how you invoke it.</p>
+      <div class="lp-section-label">How AI Hub works</div>
+      <h2 class="lp-section-title">Intelligence that stays<br>visible at every step.</h2>
+      <p class="lp-section-desc">AI Hub runs intelligent workflows that can understand a goal, select tools, retain context, validate outcomes and produce an auditable result &mdash; all in a structure you can inspect.</p>
 
       <ul class="lp-feature-list">
         <li>
           <span class="lp-feat-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-          <span>Drop <code>ai_hub</code> into <code>INSTALLED_APPS</code>, run migrations, done</span>
+          <span>Every workflow step is logged, inspectable and traceable</span>
         </li>
         <li>
           <span class="lp-feat-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-          <span>Swap providers from Django Admin — no redeploys</span>
+          <span>Swap AI providers without changing how the workflow runs</span>
         </li>
         <li>
           <span class="lp-feat-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-          <span>Every GAME iteration stored as an <code>ExecutionSession</code></span>
+          <span>Memory and context carry forward between steps, not just within a single response</span>
         </li>
         <li>
           <span class="lp-feat-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-          <span>Training provider lets teams build without API keys</span>
+          <span>Human approval can be required before any action is taken or decision confirmed</span>
         </li>
       </ul>
 
       <div class="lp-split-actions">
-        <a href="{% url 'academy:docs_list' %}" class="lp-btn-primary">Read the Docs</a>
-        <a href="{% url 'academy:tutorial_list' %}" class="lp-btn-ghost">Try a Tutorial &rarr;</a>
+        <a href="{% url 'academy:docs_list' %}" class="lp-btn-primary">Explore AI Hub</a>
+        <a href="{% url 'academy:tutorial_list' %}" class="lp-btn-ghost">Start with Academy &rarr;</a>
       </div>
     </div>
 
@@ -378,15 +377,15 @@
 ══════════════════════════════════════════════ -->
 <section class="lp-section lp-section-light">
   <div class="container">
-    <div class="lp-section-label">Architecture</div>
-    <h2 class="lp-section-title">From provider to <span class="lp-accent-text">audited answer</span></h2>
-    <p class="lp-section-desc">Every component is configurable from Django Admin. No code changes needed to swap models, providers, or agent logic.</p>
+    <div class="lp-section-label">Under the hood</div>
+    <h2 class="lp-section-title">From goal to <span class="lp-accent-text">audited outcome</span></h2>
+    <p class="lp-section-desc">Every step between the input and the final outcome is structured, inspectable and configurable &mdash; without losing sight of what the system is doing.</p>
 
     <div class="lp-arch-flow reveal">
       <div class="lp-arch-node lp-arch-node-plain">
         <div class="lp-arch-icon">&#9899;</div>
         <div class="lp-arch-label">Provider</div>
-        <div class="lp-arch-sub">OpenAI · Ollama<br>Anthropic · Training</div>
+        <div class="lp-arch-sub">OpenAI &middot; Ollama<br>Anthropic &middot; Training</div>
       </div>
       <div class="lp-arch-arrow">
         <svg width="32" height="16" viewBox="0 0 32 16" fill="none"><path d="M0 8 H28 M22 2 L30 8 L22 14" stroke="#00C9B1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -402,14 +401,14 @@
       <div class="lp-arch-node lp-arch-node-highlight">
         <div class="lp-arch-icon">&#129504;</div>
         <div class="lp-arch-label">AgentProfile</div>
-        <div class="lp-arch-sub">prompt · tools · contracts</div>
+        <div class="lp-arch-sub">prompt &middot; tools &middot; goals</div>
       </div>
       <div class="lp-arch-arrow">
         <svg width="32" height="16" viewBox="0 0 32 16" fill="none"><path d="M0 8 H28 M22 2 L30 8 L22 14" stroke="#00C9B1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
       <div class="lp-arch-node lp-arch-node-plain">
         <div class="lp-arch-icon">&#128260;</div>
-        <div class="lp-arch-label">Pipeline / GAME</div>
+        <div class="lp-arch-label">Workflow / GAME</div>
         <div class="lp-arch-sub">runtime &amp; sequencing</div>
       </div>
       <div class="lp-arch-arrow">
@@ -426,6 +425,75 @@
 
 
 <!-- ══════════════════════════════════════════════
+     ACADEMY SECTION
+══════════════════════════════════════════════ -->
+<section class="lp-section lp-section-dark">
+  <div class="container">
+    <div class="lp-section-label">Why Academy exists</div>
+    <h2 class="lp-section-title lp-title-light">Learn the platform by<br><span class="lp-grad-text">using the platform.</span></h2>
+    <p class="lp-section-desc" style="max-width:600px;margin-left:auto;margin-right:auto;text-align:center;">AI Hub Academy is the practical learning and exploration layer built around AI Hub. It helps new users understand what the platform can do, test it in a safe environment and gain the confidence to apply it to real work.</p>
+
+    <!-- 3-stage journey -->
+    <div class="lp-caps-row" style="margin-top:3rem;">
+      <div class="lp-cap-item reveal">
+        <div class="lp-cap-icon">&#128218;</div>
+        <div class="lp-cap-stat">Understand</div>
+        <div class="lp-cap-stat-sub">the building blocks</div>
+        <p class="lp-cap-desc">Learn how agents, workflows, tools, memory and execution sessions fit together through clear examples.</p>
+      </div>
+      <div class="lp-cap-divider"></div>
+      <div class="lp-cap-item reveal reveal-delay-1">
+        <div class="lp-cap-icon">&#127919;</div>
+        <div class="lp-cap-stat">Practise</div>
+        <div class="lp-cap-stat-sub">without pressure</div>
+        <p class="lp-cap-desc">Use guided missions and a training environment to experiment before introducing real providers, credentials or project data.</p>
+      </div>
+      <div class="lp-cap-divider"></div>
+      <div class="lp-cap-item reveal reveal-delay-2">
+        <div class="lp-cap-icon">&#128640;</div>
+        <div class="lp-cap-stat">Move</div>
+        <div class="lp-cap-stat-sub">into real projects</div>
+        <p class="lp-cap-desc">Once the concepts make sense, take the same AI Hub patterns into your own processes, teams and products.</p>
+      </div>
+    </div>
+
+    <!-- Academy mission cards -->
+    <div class="lp-bento" style="grid-template-columns:repeat(3,1fr);margin-top:2.5rem;">
+
+      <div class="lp-bento-card reveal">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:0.75rem;">
+          <h3 class="lp-bento-heading" style="margin:0;">Build your first trusted workflow</h3>
+          <span class="lp-badge-ok" style="font-size:0.65rem;padding:0.2rem 0.55rem;white-space:nowrap;margin-left:0.75rem;">START</span>
+        </div>
+        <p class="lp-bento-desc">Guided mission that walks you through designing, running and inspecting a complete AI Hub workflow from scratch.</p>
+        <a href="{% url 'academy:tutorial_list' %}" class="lp-btn-ghost" style="margin-top:1.25rem;font-size:0.8rem;display:inline-block;">Begin &rarr;</a>
+      </div>
+
+      <div class="lp-bento-card reveal reveal-delay-1">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:0.75rem;">
+          <h3 class="lp-bento-heading" style="margin:0;">Ask how AI Hub works, in context</h3>
+          <span class="lp-badge-warn" style="font-size:0.65rem;padding:0.2rem 0.55rem;white-space:nowrap;margin-left:0.75rem;">ASK AI</span>
+        </div>
+        <p class="lp-bento-desc">Explore with the platform assistant. Ask questions about agents, tools, memory or workflows and get answers grounded in the product.</p>
+        <a href="#" id="open-chat-cta-academy" class="lp-btn-ghost" style="margin-top:1.25rem;font-size:0.8rem;display:inline-block;">Open assistant &rarr;</a>
+      </div>
+
+      <div class="lp-bento-card reveal reveal-delay-2">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:0.75rem;">
+          <h3 class="lp-bento-heading" style="margin:0;">Review an execution, understand every step</h3>
+          <span class="lp-badge-ok" style="font-size:0.65rem;padding:0.2rem 0.55rem;white-space:nowrap;margin-left:0.75rem;">EXPLORE</span>
+        </div>
+        <p class="lp-bento-desc">Open a real execution session and trace the goal, actions, memory updates and final outcome &mdash; step by step.</p>
+        <a href="{% url 'dashboard_overview' %}" class="lp-btn-ghost" style="margin-top:1.25rem;font-size:0.8rem;display:inline-block;">See the platform &rarr;</a>
+      </div>
+
+    </div>
+
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════
      SOCIAL PROOF / CAPABILITIES ROW
 ══════════════════════════════════════════════ -->
 <section class="lp-section lp-section-dark lp-caps-section">
@@ -433,23 +501,23 @@
     <div class="lp-caps-row">
       <div class="lp-cap-item reveal">
         <div class="lp-cap-icon">&#128274;</div>
-        <div class="lp-cap-stat">Every call</div>
-        <div class="lp-cap-stat-sub">audited</div>
-        <p class="lp-cap-desc">Full request/response payload, latency, and provider metadata in every <code>ExecutionSession</code>. Nothing is implicit.</p>
+        <div class="lp-cap-stat">Every step</div>
+        <div class="lp-cap-stat-sub">inspectable</div>
+        <p class="lp-cap-desc">Every workflow step is recorded with its goal, action, context and outcome. Nothing happens in the background without a trace.</p>
       </div>
       <div class="lp-cap-divider"></div>
       <div class="lp-cap-item reveal reveal-delay-1">
         <div class="lp-cap-icon">&#128683;</div>
         <div class="lp-cap-stat">Zero</div>
-        <div class="lp-cap-stat-sub">data leakage</div>
-        <p class="lp-cap-desc">Contracts enforce schema at both input and output. Bad data fails loudly at the boundary — not silently downstream.</p>
+        <div class="lp-cap-stat-sub">black-box steps</div>
+        <p class="lp-cap-desc">AI Hub keeps every step of intelligent execution visible and understandable. No hidden logic, no opaque decisions, no unexplained outcomes.</p>
       </div>
       <div class="lp-cap-divider"></div>
       <div class="lp-cap-item reveal reveal-delay-2">
         <div class="lp-cap-icon">&#127760;</div>
         <div class="lp-cap-stat">Any</div>
         <div class="lp-cap-stat-sub">LLM provider</div>
-        <p class="lp-cap-desc">OpenAI, Anthropic, Ollama, or your own endpoint. Switch providers from Admin without touching a line of application code.</p>
+        <p class="lp-cap-desc">OpenAI, Anthropic, Ollama, or your own endpoint. Use the model that matches your needs &mdash; commercial API, local model or training environment.</p>
       </div>
     </div>
   </div>
@@ -462,18 +530,18 @@
 <section class="lp-section lp-final-cta">
   <div class="lp-final-bg"></div>
   <div class="container lp-final-inner reveal">
-    <div class="lp-section-label lp-label-center">Ready to ship</div>
+    <div class="lp-section-label lp-label-center">Start with confidence</div>
     <h2 class="lp-final-title">
-      The future of enterprise AI<br>
-      is <span class="lp-grad-text">auditable.</span>
+      AI Hub is built to make<br>
+      intelligent technology <span class="lp-grad-text">practical.</span>
     </h2>
-    <p class="lp-final-desc">Every decision logged. Every contract enforced. Every provider swappable &mdash; no redeploys.</p>
+    <p class="lp-final-desc">Academy is the guided path in. Start by understanding the platform, practise in a safe environment, then take what you have learned into your own projects.</p>
     <div class="lp-final-actions">
       <a href="{% url 'academy:tutorial_list' %}" class="lp-btn-primary lp-btn-lg">
-        Start the Tutorials
+        Explore AI Hub Academy
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
       </a>
-      <a href="{% url 'academy:docs_list' %}" class="lp-btn-outline lp-btn-lg">Read the Docs</a>
+      <a href="{% url 'academy:docs_list' %}" class="lp-btn-outline lp-btn-lg">Explore AI Hub</a>
     </div>
     <p class="lp-final-small">
       <a href="#" id="open-chat-cta">Or ask the AI assistant anything &rarr;</a>
@@ -486,15 +554,17 @@
 {% block extra_scripts %}
 <script>
 (function () {
-  /* open chat widget */
-  var cta = document.getElementById('open-chat-cta');
-  if (cta) {
-    cta.addEventListener('click', function (e) {
-      e.preventDefault();
-      var btn = document.getElementById('chat-toggle-btn');
-      if (btn) btn.click();
-    });
-  }
+  /* open chat widget — main CTA and academy CTA */
+  ['open-chat-cta', 'open-chat-cta-academy'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        var btn = document.getElementById('chat-toggle-btn');
+        if (btn) btn.click();
+      });
+    }
+  });
 
   /* GAME step highlight loop — moves turquoise pulse G→A→M→E */
   var steps = document.querySelectorAll('.lp-game-step');

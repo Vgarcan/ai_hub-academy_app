@@ -84,11 +84,29 @@ class ToolDefinition(models.Model):
         PYTHON_CALLABLE = "python_callable", "Python Callable"
         PROMPT_MACRO = "prompt_macro", "Prompt Macro"
 
+    class RiskLevel(models.TextChoices):
+        LOW = "low", "Low"
+        MEDIUM = "medium", "Medium"
+        HIGH = "high", "High"
+
+    class OperationMode(models.TextChoices):
+        READ = "read", "Read"
+        DRAFT_WRITE = "draft_write", "Draft write"
+        STATE_WRITE = "state_write", "State write"
+        EXTERNAL_WRITE = "external_write", "External write"
+        EXECUTE = "execute", "Execute"
+
     name = models.CharField(max_length=120, unique=True)
+    label = models.CharField(max_length=160, blank=True)
+    description = models.TextField(blank=True)
     tool_kind = models.CharField(max_length=30, choices=ToolKind.choices)
     input_schema = models.JSONField(default=dict, blank=True)
     output_schema = models.JSONField(default=dict, blank=True)
     config = models.JSONField(default=dict, blank=True)
+    risk_level = models.CharField(max_length=20, choices=RiskLevel.choices, default=RiskLevel.LOW)
+    operation_mode = models.CharField(max_length=30, choices=OperationMode.choices, default=OperationMode.READ)
+    requires_approval = models.BooleanField(default=False)
+    is_system_tool = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -100,6 +118,50 @@ class ToolDefinition(models.Model):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        for field_name in ("input_schema", "output_schema", "config"):
+            if not isinstance(getattr(self, field_name), dict):
+                raise ValidationError({field_name: "Must be a JSON object."})
+
+
+class Toolbox(models.Model):
+    name = models.CharField(max_length=140, unique=True)
+    slug = models.SlugField(max_length=140, unique=True)
+    label = models.CharField(max_length=160)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "2.1 Toolbox"
+        verbose_name_plural = "2.1 Toolboxes - reusable tool groups"
+
+    def __str__(self):
+        return self.label or self.name
+
+
+class ToolboxTool(models.Model):
+    toolbox = models.ForeignKey(Toolbox, on_delete=models.CASCADE, related_name="tool_entries")
+    tool = models.ForeignKey(ToolDefinition, on_delete=models.CASCADE, related_name="toolbox_entries")
+    is_enabled = models.BooleanField(default=True)
+    default_enabled = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["toolbox__name", "display_order", "tool__name"]
+        verbose_name = "2.2 Toolbox tool"
+        verbose_name_plural = "2.2 Toolbox tools - toolbox membership"
+        constraints = [
+            models.UniqueConstraint(fields=["toolbox", "tool"], name="ai_hub_unique_toolbox_tool"),
+        ]
+
+    def __str__(self):
+        status = "enabled" if self.is_enabled else "disabled"
+        return f"{self.toolbox} -> {self.tool.name} ({status})"
 
 
 class KnowledgeCollection(models.Model):
@@ -148,6 +210,37 @@ class KnowledgeDocument(models.Model):
         return f"{self.title} ({self.collection.name})"
 
 
+class KnowledgeDocumentChunk(models.Model):
+    document = models.ForeignKey(KnowledgeDocument, on_delete=models.CASCADE, related_name="chunks")
+    chunk_index = models.PositiveIntegerField()
+    section_title = models.CharField(max_length=240, blank=True)
+    content = models.TextField()
+    token_estimate = models.PositiveIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["document__collection__name", "document__title", "chunk_index"]
+        verbose_name = "1.2 Knowledge document chunk"
+        verbose_name_plural = "1.2 Knowledge document chunks - retrievable sections"
+        constraints = [
+            models.UniqueConstraint(fields=["document", "chunk_index"], name="ai_hub_unique_doc_chunk_index"),
+        ]
+        indexes = [
+            models.Index(fields=["document", "chunk_index"], name="aihub_kchunk_doc_idx"),
+            models.Index(fields=["section_title"], name="aihub_kchunk_section_idx"),
+        ]
+
+    def __str__(self):
+        label = self.section_title or f"Chunk {self.chunk_index}"
+        return f"{self.document.title} - {label}"
+
+    def clean(self):
+        if not isinstance(self.metadata, dict):
+            raise ValidationError({"metadata": "Chunk metadata must be a JSON object."})
+
+
 class AgentProfile(models.Model):
     class ExecutionMode(models.TextChoices):
         SYNC = "sync", "Sync"
@@ -179,6 +272,55 @@ class AgentProfile(models.Model):
     def clean(self):
         if self.is_active and (not self.model_config.is_active or not self.model_config.provider.is_active):
             raise ValidationError("Cannot activate an agent with inactive model/provider.")
+
+
+class AgentToolboxAssignment(models.Model):
+    agent = models.ForeignKey(AgentProfile, on_delete=models.CASCADE, related_name="toolbox_assignments")
+    toolbox = models.ForeignKey(Toolbox, on_delete=models.CASCADE, related_name="agent_assignments")
+    is_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["agent__name", "toolbox__name"]
+        verbose_name = "3.1 Agent toolbox assignment"
+        verbose_name_plural = "3.1 Agent toolbox assignments - reusable access"
+        constraints = [
+            models.UniqueConstraint(fields=["agent", "toolbox"], name="ai_hub_unique_agent_toolbox"),
+        ]
+
+    def __str__(self):
+        status = "enabled" if self.is_enabled else "disabled"
+        return f"{self.agent.name} -> {self.toolbox} ({status})"
+
+
+class AgentToolGrant(models.Model):
+    class PermissionLevel(models.TextChoices):
+        USE = "use", "Use"
+        READ_ONLY = "read_only", "Read only"
+        DRAFT_WRITE = "draft_write", "Draft write"
+        STATE_WRITE = "state_write", "State write"
+        EXTERNAL_WRITE = "external_write", "External write"
+        EXECUTE = "execute", "Execute"
+
+    agent = models.ForeignKey(AgentProfile, on_delete=models.CASCADE, related_name="tool_grants")
+    tool = models.ForeignKey(ToolDefinition, on_delete=models.CASCADE, related_name="agent_grants")
+    is_enabled = models.BooleanField(default=True)
+    permission_level = models.CharField(max_length=30, choices=PermissionLevel.choices, default=PermissionLevel.USE)
+    requires_approval_override = models.BooleanField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["agent__name", "tool__name"]
+        verbose_name = "3.2 Agent tool grant"
+        verbose_name_plural = "3.2 Agent tool grants - individual overrides"
+        constraints = [
+            models.UniqueConstraint(fields=["agent", "tool"], name="ai_hub_unique_agent_tool_grant"),
+        ]
+
+    def __str__(self):
+        status = "allowed" if self.is_enabled else "denied"
+        return f"{self.agent.name} -> {self.tool.name} ({status})"
 
 
 class PipelineDefinition(models.Model):
@@ -394,6 +536,13 @@ class GameActionDefinition(models.Model):
     label = models.CharField(max_length=160)
     description = models.TextField(blank=True)
     action_type = models.CharField(max_length=30, choices=ActionType.choices)
+    tool = models.ForeignKey(
+        ToolDefinition,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="game_action_definitions",
+    )
     input_contract = models.JSONField(default=dict, blank=True)
     output_contract = models.JSONField(default=dict, blank=True)
     config = models.JSONField(default=dict, blank=True)
@@ -569,6 +718,78 @@ class ExecutionStepRun(models.Model):
 
     def __str__(self):
         return f"Session #{self.session_id} - step {self.order}"
+
+
+class ToolExecutionRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        WAITING_APPROVAL = "waiting_approval", "Waiting approval"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+
+    class ApprovalState(models.TextChoices):
+        NOT_REQUIRED = "not_required", "Not required"
+        REQUIRED = "required", "Required"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    session = models.ForeignKey(
+        ExecutionSession,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="tool_execution_runs",
+    )
+    step_run = models.ForeignKey(
+        ExecutionStepRun,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="tool_execution_runs",
+    )
+    agent = models.ForeignKey(
+        AgentProfile,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="tool_execution_runs",
+    )
+    tool = models.ForeignKey(ToolDefinition, on_delete=models.PROTECT, related_name="execution_runs")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    input_payload = models.JSONField(default=dict, blank=True)
+    output_payload = models.JSONField(default=dict, blank=True)
+    error_detail = models.TextField(blank=True)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    risk_level = models.CharField(max_length=20, choices=ToolDefinition.RiskLevel.choices, default=ToolDefinition.RiskLevel.LOW)
+    approval_state = models.CharField(
+        max_length=30,
+        choices=ApprovalState.choices,
+        default=ApprovalState.NOT_REQUIRED,
+    )
+    idempotency_key = models.CharField(max_length=255, blank=True, db_index=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "5.2 Tool execution run"
+        verbose_name_plural = "5.2 Tool execution runs - generic tool audit"
+        indexes = [
+            models.Index(fields=["session", "status"], name="aihub_tool_run_sess_status_idx"),
+            models.Index(fields=["agent", "status"], name="aihub_tool_run_agent_stat_idx"),
+            models.Index(fields=["tool", "status"], name="aihub_tool_run_tool_stat_idx"),
+        ]
+
+    def __str__(self):
+        return f"Tool '{self.tool.name}' - {self.status}"
+
+    def clean(self):
+        for field_name in ("input_payload", "output_payload"):
+            if not isinstance(getattr(self, field_name), dict):
+                raise ValidationError({field_name: "Must be a JSON object."})
 
 
 class GameActionRun(models.Model):

@@ -3,148 +3,298 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260624-mission-home-v1">
 {% endblock %}
 
 {% block content %}
-<div class="ai-control ai-hub-home">
-  <section class="ai-app-hero ai-app-hero--home">
+<div class="ai-console">
+
+  {# ═══ Header ══════════════════════════════════════════════════════ #}
+  <header class="mc-head">
     <div>
-      <span>{% translate "AI Hub" %}</span>
-      <h1>{% translate "Build AI workflows without touching code" %}</h1>
-      <p>{% translate "Start with a provider, choose a model, create focused agents, then run either fixed Orchestrator workflows or autonomous GAME sessions." %}</p>
+      <div class="mc-eyebrow">// <b>AI Hub</b> · {% translate "mission control" %}</div>
+      <h1>{% translate "AI Hub" %}</h1>
+      <p>{% translate "See what is live, handle what needs a human, and jump into your workspace. The Control Center has the deep diagnostics — this is the cockpit." %}</p>
     </div>
-    <nav class="ai-control__actions" aria-label="{% translate 'Primary AI Hub actions' %}">
-      <a class="button default" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Build Orchestrator" %}</a>
-      <a class="button" href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "Open GAME" %}</a>
-      <a class="button" href="{% url 'admin:ai_hub_control_center' %}">{% translate "Control center" %}</a>
+    <nav class="mc-head__actions" aria-label="{% translate 'Primary actions' %}">
+      <a class="mc-btn mc-btn--primary" href="{% url 'admin:ai_hub_control_center' %}">{% translate "Control Center" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Orchestrator" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_workspace_game' %}">GAME</a>
     </nav>
-  </section>
+  </header>
 
-  <section class="ai-home-metrics" aria-label="{% translate 'AI Hub snapshot' %}">
-    <article class="ai-home-metric ai-home-metric--providers"><span>{% translate "Providers" %}</span><strong>{{ ai_hub_home.metrics.providers }}</strong></article>
-    <article class="ai-home-metric ai-home-metric--models"><span>{% translate "Models" %}</span><strong>{{ ai_hub_home.metrics.models }}</strong></article>
-    <article class="ai-home-metric ai-home-metric--agents"><span>{% translate "Agents" %}</span><strong>{{ ai_hub_home.metrics.agents }}</strong></article>
-    <article class="ai-home-metric ai-home-metric--pipelines"><span>{% translate "Pipelines" %}</span><strong>{{ ai_hub_home.metrics.pipelines }}</strong></article>
-    <article class="ai-home-metric ai-home-metric--sessions"><span>{% translate "Sessions" %}</span><strong>{{ ai_hub_home.metrics.sessions }}</strong></article>
-  </section>
-
-  <section class="ai-home-layout">
-    <article class="ai-guide-card ai-guide-card--next">
-      <span class="ai-guide-card__eyebrow">{% translate "Recommended next action" %}</span>
-      <h2>{{ ai_hub_home.recommended_action.label }}</h2>
-      <p>{{ ai_hub_home.recommended_action.detail }}</p>
-      <a class="button default" href="{{ ai_hub_home.recommended_action.url }}">{{ ai_hub_home.recommended_action.button }}</a>
+  {# ═══ Vitals ══════════════════════════════════════════════════════ #}
+  <section class="mc-vitals" aria-label="{% translate 'System snapshot' %}">
+    <article class="mc-vital mc-vital--accent">
+      <div class="mc-eyebrow">{% translate "Live now" %}</div>
+      <div class="mc-vital__n">{{ ai_hub_home.vitals.live }}</div>
+      <div class="mc-vital__sub">{% translate "running or waiting sessions" %}</div>
     </article>
+    <article class="mc-vital{% if ai_hub_home.vitals.needs_attention %} mc-vital--alert{% endif %}">
+      {% if ai_hub_home.vitals.needs_attention %}<span class="mc-vital__flag" aria-hidden="true"></span>{% endif %}
+      <div class="mc-eyebrow">{% translate "Needs you" %}</div>
+      <div class="mc-vital__n">{{ ai_hub_home.vitals.needs_attention }}</div>
+      <div class="mc-vital__sub">{% translate "approvals, info requests, failures" %}</div>
+    </article>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "Goals in flight" %}</div>
+      <div class="mc-vital__n">{{ ai_hub_home.vitals.open_goals }}</div>
+      <div class="mc-vital__sub">{% translate "queued or running GAME goals" %}</div>
+    </article>
+    <article class="mc-vital">
+      <div class="mc-eyebrow">{% translate "Sessions" %}</div>
+      <div class="mc-vital__n">{{ ai_hub_home.vitals.sessions }}</div>
+      <div class="mc-vital__sub">{{ ai_hub_home.vitals.failed }} {% translate "failed" %}</div>
+    </article>
+  </section>
 
-    <article class="ai-guide-card ai-guide-card--mental">
-      <span class="ai-guide-card__eyebrow">{% translate "Simple mental model" %}</span>
-      <h2>{% translate "Two workspaces, one shared foundation" %}</h2>
-      <div class="ai-flow-strip" aria-label="{% translate 'AI Hub mental model' %}">
-        <span>{% translate "Providers" %}</span>
-        <span>{% translate "Models" %}</span>
-        <span>{% translate "Agents" %}</span>
-        <span>{% translate "Orchestrator or GAME" %}</span>
-        <span>{% translate "Execution sessions" %}</span>
+  {# ═══ Inventory line ══════════════════════════════════════════════ #}
+  <div class="mc-invline" aria-label="{% translate 'System inventory' %}">
+    <span class="mc-lead">{% translate "Inventory" %}</span>
+    <b>{{ ai_hub_home.metrics.providers }}</b>&nbsp;{% translate "providers" %} <span class="mc-sep">·</span>
+    <b>{{ ai_hub_home.metrics.models }}</b>&nbsp;{% translate "models" %} <span class="mc-sep">·</span>
+    <b>{{ ai_hub_home.metrics.agents }}</b>&nbsp;{% translate "agents" %} <span class="mc-sep">·</span>
+    <b>{{ ai_hub_home.metrics.pipelines }}</b>&nbsp;{% translate "pipelines" %} <span class="mc-sep">·</span>
+    <b>{{ ai_hub_home.game.sessions }}</b>&nbsp;GAME {% translate "sessions" %}
+    <a href="{% url 'admin:ai_hub_control_center' %}">{% translate "Open connection graph" %} →</a>
+  </div>
+
+  {# ═══ Action queue + Recent activity ═════════════════════════════ #}
+  <div class="mc-twocol mc-twocol--queue">
+
+    <article class="mc-panel">
+      <div class="mc-panel__head">
+        <h2>{% translate "Needs your attention" %}
+          {% if ai_hub_home.needs_attention_count %}
+            <span class="mc-headcount mc-headcount--alert">{{ ai_hub_home.needs_attention_count }}</span>
+          {% endif %}
+        </h2>
+        <a href="{% url 'admin:ai_hub_gameactionapprovalrequest_changelist' %}?status__exact=pending">{% translate "Review all" %}</a>
       </div>
-      <p>{% translate "Orchestrator is best when the steps are known. GAME is best when one agent must decide the next action from a goal." %}</p>
+      <div class="mc-panel__body">
+        {% if ai_hub_home.action_queue %}
+          <ul class="mc-queue">
+            {% for item in ai_hub_home.action_queue %}
+              <li class="mc-qitem mc-qitem--{{ item.kind }}">
+                <span class="mc-qitem__ic" aria-hidden="true">{% if item.kind == "approval" %}✓{% elif item.kind == "info" %}?{% else %}!{% endif %}</span>
+                <div class="mc-qitem__body">
+                  <b>{{ item.label }}</b>
+                  <small>{{ item.detail }}{% if item.occurred_at %} · {{ item.occurred_at|timesince }} {% translate "ago" %}{% endif %}</small>
+                </div>
+                <div class="mc-qitem__act">
+                  <a class="mc-btn mc-btn--sm{% if item.kind == "approval" %} mc-btn--accent{% endif %}" href="{{ item.url }}">{{ item.button }}</a>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="mc-queue__empty">
+            <span class="big" aria-hidden="true">✓</span>
+            <b>{% translate "All clear" %}</b>
+            <span>{% translate "No pending approvals or paused goals right now." %}</span>
+          </div>
+        {% endif %}
+      </div>
     </article>
-  </section>
 
-  <section class="ai-workspace-grid" aria-label="{% translate 'AI Hub workspaces' %}">
-    <article class="ai-workspace-card ai-workspace-card--large">
-      <span>{% translate "ORCHESTRATOR" %}</span>
+    <article class="mc-panel">
+      <div class="mc-panel__head">
+        <h2>{% translate "Recent activity" %}</h2>
+        <a href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "View all" %}</a>
+      </div>
+      <div class="mc-panel__body mc-stack">
+        {% for session in ai_hub_home.recent_sessions %}
+          <a class="mc-runcard mc-runcard--{{ session.status }}" href="{{ session.url }}">
+            <header>
+              <b>{{ session.source_label|default:"Session" }}</b>
+              <span class="mc-pill mc-pill--{{ session.status }}">{{ session.status }}</span>
+            </header>
+            <small>{{ session.runtime_kind|upper }}{% if session.pipeline__name %} · {{ session.pipeline__name }}{% elif session.entry_agent__name %} · {{ session.entry_agent__name }}{% endif %}</small>
+          </a>
+        {% empty %}
+          <p class="mc-empty">{% translate "No sessions yet. Run a pipeline or start a GAME session and the timeline appears here." %}</p>
+        {% endfor %}
+      </div>
+    </article>
+
+  </div>
+
+  {# ═══ Workspace launchers ════════════════════════════════════════ #}
+  <section class="mc-launch" aria-label="{% translate 'Workspaces' %}">
+
+    <article class="mc-lcard mc-lcard--orchestrator">
+      <div class="mc-lcard__top">
+        <span class="mc-lbadge">{% translate "Orchestrator" %}</span>
+        {% if ai_hub_home.orchestrator.active_pipelines %}
+          <span class="mc-pill mc-pill--ok">{{ ai_hub_home.orchestrator.active_pipelines }} {% translate "active" %}</span>
+        {% else %}
+          <span class="mc-pill mc-pill--inactive">{% translate "no active pipelines" %}</span>
+        {% endif %}
+      </div>
       <h2>{% translate "Fixed agent workflows" %}</h2>
-      <p>{% translate "Use this for predictable recipes: ordered agents, explicit mappings, clear contracts and step-by-step debugging." %}</p>
-      <ol class="ai-mini-steps">
-        <li>{% translate "Create a pipeline." %}</li>
-        <li>{% translate "Add ordered steps." %}</li>
-        <li>{% translate "Run and inspect the timeline." %}</li>
-      </ol>
-      <div>
-        <a class="button default" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Open Orchestrator" %}</a>
-        <a class="button" href="{% url 'admin:ai_hub_pipelinedefinition_add' %}">{% translate "New pipeline" %}</a>
+      <p class="mc-lcard__desc">{% translate "For predictable recipes: ordered agents, explicit input/output mappings, and step-by-step debugging." %}</p>
+      <div class="mc-lflow" aria-label="{% translate 'How Orchestrator works' %}">
+        <code>{% translate "input" %}</code><span class="arr">→</span><code>{% translate "step 1" %}</code><span class="arr">→</span><code>{% translate "step 2" %}</code><span class="arr">→</span><code>{% translate "output" %}</code>
+      </div>
+      <div class="mc-lcard__stats">
+        <div class="mc-lstat"><b>{{ ai_hub_home.orchestrator.pipelines }}</b><span>{% translate "Pipelines" %}</span></div>
+        <div class="mc-lstat"><b>{{ ai_hub_home.orchestrator.active_pipelines }}</b><span>{% translate "Active" %}</span></div>
+        <div class="mc-lstat"><b>{{ ai_hub_home.orchestrator.sessions }}</b><span>{% translate "Sessions" %}</span></div>
+      </div>
+      <div class="mc-lcard__act">
+        <a class="mc-btn mc-btn--accent mc-btn--sm" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Open Orchestrator" %}</a>
+        <a class="mc-btn mc-btn--sm" href="{% url 'admin:ai_hub_pipelinedefinition_add' %}">{% translate "New pipeline" %}</a>
       </div>
     </article>
-    <article class="ai-workspace-card ai-workspace-card--game ai-workspace-card--large">
-      <span>{% translate "GAME" %}</span>
+
+    <article class="mc-lcard mc-lcard--game">
+      <div class="mc-lcard__top">
+        <span class="mc-lbadge">GAME</span>
+        {% if ai_hub_home.game.live_sessions %}
+          <span class="mc-pill mc-pill--running">{{ ai_hub_home.game.live_sessions }} {% translate "live" %}</span>
+        {% else %}
+          <span class="mc-pill mc-pill--inactive">{% translate "no live sessions" %}</span>
+        {% endif %}
+      </div>
       <h2>{% translate "Autonomous goal sessions" %}</h2>
-      <p>{% translate "Use this when the agent should loop: read the goal, choose an action, observe, remember and decide when to finish." %}</p>
-      <ol class="ai-mini-steps">
-        <li>{% translate "Choose one entry agent." %}</li>
-        <li>{% translate "Write a clear goal." %}</li>
-        <li>{% translate "Review each decision." %}</li>
-      </ol>
-      <div>
-        <a class="button default" href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "Open GAME" %}</a>
-        <a class="button" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Create GAME session" %}</a>
+      <p class="mc-lcard__desc">{% translate "For open-ended work: one agent reads a goal, decides the next action, observes, remembers and stops when done." %}</p>
+      <div class="mc-lflow" aria-label="{% translate 'How GAME works' %}">
+        <code>{% translate "goal" %}</code><span class="arr">→</span><code>{% translate "decide" %}</code><span class="arr">→</span><code>{% translate "act" %}</code><span class="arr">→</span><code>{% translate "observe" %}</code><span class="arr">→</span><code>{% translate "memory" %}</code>
       </div>
-    </article>
-  </section>
-
-  <section class="ai-home-layout ai-home-layout--wide">
-    <article class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-        <h2>{% translate "Setup checklist" %}</h2>
-        <span>{% translate "Follow this order for the first successful run." %}</span>
+      <div class="mc-lcard__stats">
+        <div class="mc-lstat"><b>{{ ai_hub_home.game.open_goals }}</b><span>{% translate "Open goals" %}</span></div>
+        <div class="mc-lstat"><b>{{ ai_hub_home.game.live_sessions }}</b><span>{% translate "Live" %}</span></div>
+        <div class="mc-lstat"><b>{{ ai_hub_home.game.sessions }}</b><span>{% translate "Sessions" %}</span></div>
       </div>
-      <div class="ai-checklist ai-checklist--guided">
-        {% for item in ai_hub_home.checklist %}
-          <article class="ai-checklist__item ai-checklist__item--{{ item.status }}">
-            <strong>{{ item.label }}</strong>
-            <span>{{ item.detail }}</span>
-            {% if item.status != "ok" %}
-              <small>{{ item.action }}</small>
-            {% endif %}
-            <a href="{{ item.url }}">{{ item.button }}</a>
-          </article>
-        {% endfor %}
+      <div class="mc-lcard__act">
+        <a class="mc-btn mc-btn--accent mc-btn--sm" href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "Open GAME" %}</a>
+        <a class="mc-btn mc-btn--sm" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "New GAME session" %}</a>
       </div>
     </article>
 
-    <article class="ai-control__panel">
-      <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-        <h2>{% translate "Example blueprints" %}</h2>
-        <span>{% translate "Use these as patterns when naming agents and workflows." %}</span>
+  </section>
+
+  {# ═══ System health + Setup ════════════════════════════════════ #}
+  <div class="mc-twocol">
+
+    <article class="mc-panel">
+      <div class="mc-panel__head">
+        <h2>{% translate "System health" %}</h2>
+        <a href="{% url 'admin:ai_hub_control_center' %}">{% translate "Open Control Center" %}</a>
       </div>
-      <div class="ai-example-grid">
-        {% for example in ai_hub_home.examples %}
-          <article class="ai-example-card ai-example-card--{{ example.workspace|lower }}">
-            <span>{{ example.workspace }}</span>
-            <h3>{{ example.title }}</h3>
-            <p>{{ example.description }}</p>
-            <small>{{ example.steps }}</small>
-          </article>
-        {% endfor %}
+      <div class="mc-panel__body">
+        <div class="mc-healthbar" role="img" aria-label="{% translate 'System health bar' %}">
+          <i class="ok"   style="flex-grow: {{ ai_hub_home.health_summary.ok }}"></i>
+          <i class="warn" style="flex-grow: {{ ai_hub_home.health_summary.warning }}"></i>
+          <i class="err"  style="flex-grow: {{ ai_hub_home.health_summary.error }}"></i>
+          <i class="off"  style="flex-grow: {{ ai_hub_home.health_summary.inactive }}"></i>
+        </div>
+        <div class="mc-health-legend">
+          <span class="item"><span class="dot" style="background:var(--mc-ok)"></span>{% translate "Healthy" %} <b>{{ ai_hub_home.health_summary.ok }}</b></span>
+          <span class="item"><span class="dot" style="background:var(--mc-warn)"></span>{% translate "Needs review" %} <b>{{ ai_hub_home.health_summary.warning }}</b></span>
+          <span class="item"><span class="dot" style="background:var(--mc-error)"></span>{% translate "Errors" %} <b>{{ ai_hub_home.health_summary.error }}</b></span>
+          <span class="item"><span class="dot" style="background:var(--mc-off)"></span>{% translate "Inactive" %} <b>{{ ai_hub_home.health_summary.inactive }}</b></span>
+        </div>
       </div>
     </article>
-  </section>
 
-  <section class="ai-shared-resources ai-shared-resources--cards">
-    <div>
-      <h2>{% translate "Shared resources" %}</h2>
-      <p>{% translate "Both workspaces use the same providers, models, agents, knowledge and tools." %}</p>
-    </div>
-    <div class="ai-resource-grid">
-      {% for resource in ai_hub_home.resources %}
-        <article class="ai-resource-card ai-resource-card--{{ resource.label|lower }}">
-          <header>
-            <h3><a href="{{ resource.url }}">{{ resource.label }}</a></h3>
-            <strong>{{ resource.count }}</strong>
-          </header>
-          <p>{{ resource.description }}</p>
-          <a href="{{ resource.add_url }}">{% translate "Add new" %}</a>
-        </article>
-      {% endfor %}
-    </div>
-  </section>
+    <article class="mc-panel">
+      <div class="mc-panel__head">
+        <h2>{% translate "Get to your first result" %}</h2>
+        <span class="mc-headcount">{{ ai_hub_home.checklist_done }} / {{ ai_hub_home.checklist|length }}</span>
+      </div>
+      <div class="mc-panel__body">
 
-  <section class="ai-control__panel ai-advanced-records">
-    <div class="ai-control__panel-heading ai-control__panel-heading--plain">
-      <h2>{% translate "Advanced Django records" %}</h2>
-      <span>{% translate "Use these lists when you need the raw admin tables." %}</span>
+        <div class="mc-meter">
+          <div class="mc-meter__label">
+            <span>{% translate "Setup progress" %}</span>
+            <b>{{ ai_hub_home.checklist_pct }}%</b>
+          </div>
+          <div class="mc-meter__track">
+            <div class="mc-meter__fill" style="width: {{ ai_hub_home.checklist_pct }}%"></div>
+          </div>
+        </div>
+
+        <div class="mc-next">
+          <span class="mc-next__ic" aria-hidden="true">★</span>
+          <div class="mc-next__body">
+            <span class="mc-eyebrow">{% translate "Recommended next" %}</span>
+            <b>{{ ai_hub_home.recommended_action.label }}</b>
+            <p>{{ ai_hub_home.recommended_action.detail }}</p>
+          </div>
+          <a class="mc-btn mc-btn--accent mc-btn--sm" href="{{ ai_hub_home.recommended_action.url }}">{{ ai_hub_home.recommended_action.button }}</a>
+        </div>
+
+        <div class="mc-check">
+          {% for item in ai_hub_home.checklist %}
+            <div class="mc-check__item {% if item.status == 'ok' %}done{% else %}warning{% endif %}">
+              <span class="mark" aria-hidden="true">{% if item.status == "ok" %}✓{% else %}!{% endif %}</span>
+              <div><b>{{ item.label }}</b><small>{{ item.detail }}</small></div>
+              <a href="{{ item.url }}">{{ item.button }}</a>
+            </div>
+          {% endfor %}
+        </div>
+
+      </div>
+    </article>
+
+  </div>
+
+  {# ═══ How AI Hub works (subtle theory) + Blueprints ══════════════ #}
+  <div class="mc-twocol">
+
+    <article class="mc-panel mc-theory">
+      <div class="mc-panel__body">
+        <div class="mc-eyebrow">// {% translate "How AI Hub works" %}</div>
+        <div class="mc-flow" aria-label="{% translate 'AI Hub mental model' %}">
+          <span class="mc-flow__node"><span class="d" style="background:#0f766e"></span>{% translate "Provider" %}</span>
+          <span class="mc-flow__arr">→</span>
+          <span class="mc-flow__node"><span class="d" style="background:#2563eb"></span>{% translate "Model" %}</span>
+          <span class="mc-flow__arr">→</span>
+          <span class="mc-flow__node"><span class="d" style="background:#be123c"></span>{% translate "Agent" %}</span>
+          <span class="mc-flow__arr">→</span>
+          <span class="mc-flow__node"><span class="d" style="background:#047857"></span>{% translate "Workspace" %}</span>
+          <span class="mc-flow__arr">→</span>
+          <span class="mc-flow__node"><span class="d" style="background:#e0a317"></span>{% translate "Session" %}</span>
+        </div>
+        <p>{% translate "Everything builds on one chain: a provider exposes models, a model powers an agent, and agents run inside a workspace." %}
+        {% blocktranslate %}Use <span class="kw-o">Orchestrator</span> when you know the steps. Use <span class="kw-g">GAME</span> when one agent must decide the next move from a goal.{% endblocktranslate %}
+        {% translate "Both produce sessions you can inspect step by step." %}</p>
+      </div>
+    </article>
+
+    <article class="mc-panel">
+      <div class="mc-panel__head">
+        <h2>{% translate "Start from a pattern" %}</h2>
+        <span class="mc-headcount">{{ ai_hub_home.examples|length }}</span>
+      </div>
+      <div class="mc-panel__body">
+        <div class="mc-blueprints">
+          {% for example in ai_hub_home.examples %}
+            <div class="mc-bp mc-bp--{{ example.workspace|lower }}">
+              <div class="mc-bp__top">
+                <span class="mc-bp__tag">{{ example.workspace }}</span>
+                <b>{{ example.title }}</b>
+              </div>
+              <small>{{ example.steps }}</small>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </article>
+
+  </div>
+
+  {# ═══ All records (block.super = Django default model table) ═════ #}
+  <article class="mc-panel">
+    <div class="mc-panel__head">
+      <h2>{% translate "All records" %}</h2>
+      <span style="font-size:12px;color:var(--mc-muted)">{% translate "Raw admin tables, grouped by stage" %}</span>
     </div>
-    {{ block.super }}
-  </section>
+    <div class="mc-panel__body" style="padding: 0;">
+      {{ block.super }}
+    </div>
+  </article>
+
 </div>
 {% endblock %}

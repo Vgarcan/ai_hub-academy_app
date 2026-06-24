@@ -11,6 +11,9 @@ from ai_hub.models import (
     AgentProfile,
     ExecutionSession,
     ExecutionStepRun,
+    GameActionApprovalRequest,
+    GameContinuationRequest,
+    GameGoal,
     KnowledgeCollection,
     KnowledgeDocument,
     ModelConfig,
@@ -263,6 +266,120 @@ def build_ai_hub_home_context() -> dict:
     game_session_count = ExecutionSession.objects.filter(runtime_kind=ExecutionSession.RuntimeKind.GAME).count()
     recent_session_count = ExecutionSession.objects.count()
 
+    # ── Action queue: things needing human intervention ──────────────
+    pending_approvals = list(
+        GameActionApprovalRequest.objects
+        .filter(status=GameActionApprovalRequest.Status.PENDING)
+        .select_related("action_run", "goal")
+        .order_by("created_at")[:5]
+    )
+    pending_continuations = list(
+        GameContinuationRequest.objects
+        .filter(status=GameContinuationRequest.Status.PENDING)
+        .select_related("goal")
+        .order_by("created_at")[:5]
+    )
+    recent_failed = list(
+        ExecutionSession.objects
+        .filter(status=ExecutionSession.Status.FAILED)
+        .order_by("-created_at")[:3]
+    )
+    action_queue = []
+    for ap in pending_approvals:
+        goal_title = ap.goal.title if ap.goal else "–"
+        action_name = ap.action_run.action_name if ap.action_run else "–"
+        action_queue.append({
+            "kind": "approval",
+            "label": f"Approve action \"{action_name}\" for goal \"{goal_title}\"",
+            "detail": f"Waiting for approval",
+            "occurred_at": ap.created_at,
+            "url": _admin_url("gameactionapprovalrequest", ap.pk),
+            "button": "Review",
+        })
+    for cont in pending_continuations:
+        goal_title = cont.goal.title if cont.goal else "–"
+        action_queue.append({
+            "kind": "info",
+            "label": f"Goal \"{goal_title}\" is paused",
+            "detail": cont.get_reason_code_display(),
+            "occurred_at": cont.created_at,
+            "url": _admin_url("gamecontinuationrequest", cont.pk),
+            "button": "Provide",
+        })
+    for session in recent_failed:
+        name = session.source_label or f"Session #{session.pk}"
+        action_queue.append({
+            "kind": "failed",
+            "label": f"{name} failed",
+            "detail": (session.error_detail or "Inspect timeline for details")[:80],
+            "occurred_at": session.created_at,
+            "url": _admin_url("executionsession", session.pk),
+            "button": "Inspect",
+        })
+
+    # ── Workspace pulse counts ────────────────────────────────────────
+    orchestrator_session_count = ExecutionSession.objects.filter(
+        runtime_kind=ExecutionSession.RuntimeKind.ORCHESTRATOR,
+    ).count()
+    orchestrator_active_sessions = ExecutionSession.objects.filter(
+        runtime_kind=ExecutionSession.RuntimeKind.ORCHESTRATOR,
+        status__in=[ExecutionSession.Status.RUNNING, ExecutionSession.Status.WAITING_ASYNC],
+    ).count()
+    open_game_goals = GameGoal.objects.filter(
+        status__in=[
+            GameGoal.Status.QUEUED,
+            GameGoal.Status.RUNNING,
+            GameGoal.Status.WAITING_INFO,
+            GameGoal.Status.WAITING_APPROVAL,
+            GameGoal.Status.BLOCKED,
+        ]
+    ).count()
+    live_game_sessions = ExecutionSession.objects.filter(
+        runtime_kind=ExecutionSession.RuntimeKind.GAME,
+        status__in=[ExecutionSession.Status.RUNNING, ExecutionSession.Status.WAITING_ASYNC],
+    ).count()
+    live_sessions = ExecutionSession.objects.filter(
+        status__in=[ExecutionSession.Status.RUNNING, ExecutionSession.Status.WAITING_ASYNC],
+    ).count()
+    failed_session_count = ExecutionSession.objects.filter(
+        status=ExecutionSession.Status.FAILED,
+    ).count()
+
+    # ── Recent sessions feed ──────────────────────────────────────────
+    raw_sessions = (
+        ExecutionSession.objects
+        .order_by("-created_at")
+        .values(
+            "id", "source_label", "pipeline__name", "entry_agent__name",
+            "runtime_kind", "status", "created_at", "error_detail",
+        )[:8]
+    )
+    recent_sessions_home = [
+        {**s, "url": _admin_url("executionsession", s["id"])}
+        for s in raw_sessions
+    ]
+
+    # ── Light health summary (no full graph build) ────────────────────
+    active_nodes = active_provider_count + active_model_count + active_agent_count + active_pipeline_count
+    inactive_nodes = (
+        ProviderConfig.objects.filter(is_active=False).count()
+        + ModelConfig.objects.filter(is_active=False).count()
+        + AgentProfile.objects.filter(is_active=False).count()
+        + PipelineDefinition.objects.filter(is_active=False).count()
+    )
+    # Agents missing both contracts count as needing review
+    warning_nodes = AgentProfile.objects.filter(
+        is_active=True,
+        input_contract={},
+        output_contract={},
+    ).count()
+    health_summary = {
+        "ok": max(0, active_nodes - warning_nodes),
+        "warning": warning_nodes,
+        "error": 0,
+        "inactive": inactive_nodes,
+    }
+
     checklist = [
         {
             **_checklist_item(
@@ -390,6 +507,9 @@ def build_ai_hub_home_context() -> dict:
         },
     ]
 
+    done_count = sum(1 for item in checklist if item["status"] == "ok")
+    checklist_pct = round(done_count * 100 / len(checklist)) if checklist else 0
+
     return {
         "ai_hub_home": {
             "metrics": {
@@ -399,8 +519,36 @@ def build_ai_hub_home_context() -> dict:
                 "pipelines": PipelineDefinition.objects.count(),
                 "sessions": recent_session_count,
                 "game_sessions": game_session_count,
+                "orchestrator_sessions": orchestrator_session_count,
+                "live": live_sessions,
+                "failed": failed_session_count,
             },
+            "vitals": {
+                "live": live_sessions,
+                "needs_attention": len(action_queue),
+                "open_goals": open_game_goals,
+                "sessions": recent_session_count,
+                "failed": failed_session_count,
+                "live_sub": f"{live_sessions} running · {0} waiting",
+            },
+            "orchestrator": {
+                "pipelines": PipelineDefinition.objects.count(),
+                "active_pipelines": active_pipeline_count,
+                "sessions": orchestrator_session_count,
+                "active_sessions": orchestrator_active_sessions,
+            },
+            "game": {
+                "open_goals": open_game_goals,
+                "live_sessions": live_game_sessions,
+                "sessions": game_session_count,
+            },
+            "action_queue": action_queue,
+            "needs_attention_count": len(action_queue),
+            "recent_sessions": recent_sessions_home,
+            "health_summary": health_summary,
             "checklist": checklist,
+            "checklist_pct": checklist_pct,
+            "checklist_done": done_count,
             "recommended_action": recommended,
             "resources": resources,
             "examples": EXAMPLE_TEMPLATES,

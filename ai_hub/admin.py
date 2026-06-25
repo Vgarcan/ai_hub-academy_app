@@ -1181,6 +1181,7 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
     filter_horizontal = ("tools", "knowledge_collections")
     inlines = [AgentToolboxAssignmentInline, AgentToolGrantInline]
     readonly_fields = ("resolved_tool_manifest",)
+    change_form_template = "admin/ai_hub/agentprofile/change_form.html"
     ai_hub_field_guidance = {
         "name": {
             "placeholder": "Example: support_ticket_triage or symbol_extractor",
@@ -1339,6 +1340,68 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "<pre>{}</pre>",
             json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
         )
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        agent = self.get_object(request, object_id)
+        if agent:
+            extra_context["agent_overview"] = self._build_agent_overview(agent)
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    def _build_agent_overview(self, agent):
+        """Read-only 'at a glance' context for the composed Agent Composer page (IA Step 4)."""
+        pipelines = list(
+            PipelineDefinition.objects.filter(steps__agent=agent)
+            .distinct().order_by("name").values("id", "name", "is_active")
+        )
+        try:
+            manifest = resolve_agent_tools(agent).manifest() or []
+        except Exception:
+            manifest = []
+        tool_names = []
+        for entry in manifest:
+            if isinstance(entry, dict):
+                tool_names.append(entry.get("label") or entry.get("name") or entry.get("slug") or "tool")
+            else:
+                tool_names.append(str(entry))
+        collections = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "is_active": c.is_active,
+                "docs": KnowledgeDocument.objects.filter(collection=c).count(),
+            }
+            for c in agent.knowledge_collections.all()
+        ]
+        sessions_qs = ExecutionSession.objects.filter(entry_agent=agent)
+        sessions = list(
+            sessions_qs.order_by("-created_at")[:5].values("id", "status", "runtime_kind", "source_label")
+        )
+        sessions_total = sessions_qs.count()
+        game_total = sessions_qs.filter(runtime_kind=ExecutionSession.RuntimeKind.GAME).count()
+        in_orch, in_game = bool(pipelines), game_total > 0
+        usage_label = "Both" if (in_orch and in_game) else "Orchestrator" if in_orch else "GAME" if in_game else "Unused"
+        health = [
+            {"label": _("Model active"), "ok": bool(agent.model_config and agent.model_config.is_active)},
+            {"label": _("Agent active"), "ok": agent.is_active},
+            {"label": _("Prompt set"), "ok": bool((agent.system_prompt or "").strip())},
+            {"label": _("Contracts set"), "ok": bool(agent.input_contract) and bool(agent.output_contract)},
+        ]
+        return {
+            "model": str(agent.model_config) if agent.model_config else None,
+            "usage_label": usage_label,
+            "vitals": {
+                "pipelines": len(pipelines),
+                "tools": len(tool_names),
+                "collections": len(collections),
+                "sessions": sessions_total,
+            },
+            "pipelines": pipelines,
+            "tool_names": tool_names,
+            "collections": collections,
+            "sessions": sessions,
+            "health": health,
+        }
 
 
 @admin.register(AgentToolboxAssignment)

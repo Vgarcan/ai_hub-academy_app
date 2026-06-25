@@ -2422,6 +2422,49 @@ class HubAdminControlCenterTests(TestCase):
         response = client.get(reverse("admin:ai_hub_pipelinestep_changelist"))
         self.assertEqual(response.status_code, 200)
 
+    def test_agent_composer_change_page_is_composed(self):
+        """IA Step 4: AgentProfile change page renders the composed workspace shell."""
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_agentprofile_change", args=[self.agent.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Agent Composer")
+        self.assertContains(response, "data-ws-tabs")          # tab nav
+        self.assertContains(response, 'data-tab="overview"')   # overview panel
+        self.assertContains(response, 'data-tab="config"')     # editable form wrapped in a tab
+        self.assertContains(response, "Used in pipelines")
+        self.assertContains(response, self.pipeline.name)      # overview lists the pipeline that uses the agent
+        self.assertContains(response, 'name="name"')           # editable field still present inside the form
+
+    def test_agent_composer_save_still_works(self):
+        """IA Step 4: wrapping fieldsets/inlines in tab panels must not break submission."""
+        client = Client()
+        client.force_login(self.user)
+        data = {
+            "name": "visual-agent",
+            "role": "Updated role",
+            "model_config": self.model.id,
+            "execution_mode": "inherit",
+            "knowledge_max_chars": "6000",
+            "system_prompt": "Updated prompt",
+            "input_contract": '{"required": ["dream_id"]}',
+            "output_contract": '{"required": ["agent"]}',
+            "is_active": "on",
+            "toolbox_assignments-TOTAL_FORMS": "0",
+            "toolbox_assignments-INITIAL_FORMS": "0",
+            "toolbox_assignments-MIN_NUM_FORMS": "0",
+            "toolbox_assignments-MAX_NUM_FORMS": "1000",
+            "tool_grants-TOTAL_FORMS": "0",
+            "tool_grants-INITIAL_FORMS": "0",
+            "tool_grants-MIN_NUM_FORMS": "0",
+            "tool_grants-MAX_NUM_FORMS": "1000",
+            "_save": "Save",
+        }
+        response = client.post(reverse("admin:ai_hub_agentprofile_change", args=[self.agent.id]), data)
+        self.assertEqual(response.status_code, 302)  # redirect = saved successfully
+        self.agent.refresh_from_db()
+        self.assertEqual(self.agent.role, "Updated role")
+
     def test_clean_workspace_urls_render(self):
         client = Client()
         client.force_login(self.user)

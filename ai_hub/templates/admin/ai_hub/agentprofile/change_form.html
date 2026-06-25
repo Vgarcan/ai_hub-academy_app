@@ -1,0 +1,161 @@
+{% extends "admin/change_form.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step4-v1">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-step4-v1" defer></script>
+{% endblock %}
+
+{% block field_sets %}
+{% if original %}
+<div class="ai-ws-head" style="--ai-ws-accent:#be123c;">
+  <div>
+    <div class="ai-ws-head__eyebrow">{% translate "Foundation · Agent Composer" %}</div>
+    <h2 class="ai-ws-head__title">{{ original.name }}</h2>
+    <div class="ai-ws-head__meta">
+      {% if agent_overview.model %}{{ agent_overview.model }}{% else %}{% translate "no model" %}{% endif %}
+      {% if original.role %} · {{ original.role }}{% endif %}
+      {% if agent_overview.usage_label %} · {{ agent_overview.usage_label }}{% endif %}
+    </div>
+  </div>
+  <div class="ai-ws-head__actions">
+    {% if original.is_active %}
+      <span class="ai-ws-pill ai-ws-pill--ok">{% translate "active" %}</span>
+    {% else %}
+      <span class="ai-ws-pill ai-ws-pill--muted">{% translate "inactive" %}</span>
+    {% endif %}
+    <a class="button" href="{% url 'admin:ai_hub_control_center' %}">{% translate "Control Center" %}</a>
+  </div>
+</div>
+
+<div class="ai-tabnav" data-ws-tabs data-tab-default="overview" data-tab-error="config" role="tablist" aria-label="{% translate 'Agent sections' %}">
+  <button type="button" class="ai-tabnav__btn" data-tab-to="overview" role="tab">{% translate "Overview" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="config" role="tab">{% translate "Configuration" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="relations" role="tab">{% translate "Tools &amp; permissions" %}</button>
+</div>
+
+<div class="ai-tab" data-tab="overview" role="tabpanel">
+  <div class="ai-ws-vitals">
+    <div class="ai-ws-vital"><div class="n">{{ agent_overview.vitals.pipelines }}</div><div class="l">{% translate "Pipelines" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ agent_overview.vitals.tools }}</div><div class="l">{% translate "Tools" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ agent_overview.vitals.collections }}</div><div class="l">{% translate "Knowledge" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ agent_overview.vitals.sessions }}</div><div class="l">{% translate "Sessions" %}</div></div>
+  </div>
+
+  <div class="ai-ws-grid" style="margin-top:14px;">
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Effective tool access" %}</span><a href="#" data-tab-to="relations" class="ai-ws-jump">{% translate "manage" %}</a></div>
+        <div class="ai-ws-card__body">
+          {% if agent_overview.tool_names %}
+          <div class="ai-ws-chips">
+            {% for tname in agent_overview.tool_names %}
+            <span class="ai-chip ai-chip--on" style="--ai-ws-accent:#be123c;"><span class="ai-chip__x">&#x2713;</span>{{ tname }}</span>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No tools resolved. Attach a toolbox or grant in the Tools & permissions tab." %}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Used in pipelines" %}</span></div>
+        <div class="ai-ws-card__body">
+          {% if agent_overview.pipelines %}
+          <div class="ai-ws-rows">
+            {% for p in agent_overview.pipelines %}
+            <a class="ai-ws-row" style="--ai-row-accent:#047857;" href="{% url 'admin:ai_hub_pipelinedefinition_change' p.id %}">
+              <span class="rt">{{ p.name }}</span>
+              <span class="rr">
+                {% if p.is_active %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "active" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "inactive" %}</span>{% endif %}
+              </span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "Not used in any pipeline yet." %}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Knowledge collections" %}</span></div>
+        <div class="ai-ws-card__body">
+          {% if agent_overview.collections %}
+          <div class="ai-ws-rows">
+            {% for c in agent_overview.collections %}
+            <a class="ai-ws-row" style="--ai-row-accent:#56b8ca;" href="{% url 'admin:ai_hub_knowledgecollection_change' c.id %}">
+              <span class="rt">{{ c.name }}</span>
+              <span class="rm">{{ c.docs }} {% translate "docs" %}</span>
+              <span class="rr">{% if c.is_active %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "live" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "off" %}</span>{% endif %}</span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No knowledge attached." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Health" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            {% for h in agent_overview.health %}
+            <div class="ai-ws-hrow"><span class="dot {% if h.ok %}dot--ok{% else %}dot--bad{% endif %}"></span>{{ h.label }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Recent sessions" %}</span><a href="{% url 'admin:ai_hub_executionsession_changelist' %}?entry_agent__id__exact={{ original.id }}">{% translate "all" %}</a></div>
+        <div class="ai-ws-card__body">
+          {% if agent_overview.sessions %}
+          <div class="ai-ws-rows">
+            {% for s in agent_overview.sessions %}
+            <a class="ai-ws-row" style="--ai-row-accent:#e0a317;" href="{% url 'admin:ai_hub_executionsession_change' s.id %}">
+              <span class="rt">#{{ s.id }}</span>
+              <span class="rm">{{ s.runtime_kind }}</span>
+              <span class="rr">
+                {% if s.status == 'success' %}<span class="ai-ws-pill ai-ws-pill--ok">{{ s.status }}</span>
+                {% elif s.status == 'failed' %}<span class="ai-ws-pill ai-ws-pill--crit">{{ s.status }}</span>
+                {% else %}<span class="ai-ws-pill ai-ws-pill--warn">{{ s.status }}</span>{% endif %}
+              </span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No sessions run by this agent yet." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}
+
+{% block inline_field_sets %}
+{% if original %}
+<div class="ai-tab" data-tab="relations" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}

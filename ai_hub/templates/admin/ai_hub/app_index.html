@@ -3,7 +3,7 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260624-mission-home-v1">
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-ia-step3-v1">
 {% endblock %}
 
 {% block content %}
@@ -121,56 +121,60 @@
   </div>
 
   {# ═══ Workspace launchers ════════════════════════════════════════ #}
-  <section class="mc-launch" aria-label="{% translate 'Workspaces' %}">
+  {# ═══ Areas — five-area navigation map (IA Step 3) ════════════════ #}
+  <section class="mc-areas" aria-label="{% translate 'Navigation areas' %}">
 
-    <article class="mc-lcard mc-lcard--orchestrator">
-      <div class="mc-lcard__top">
-        <span class="mc-lbadge">{% translate "Orchestrator" %}</span>
-        {% if ai_hub_home.orchestrator.active_pipelines %}
-          <span class="mc-pill mc-pill--ok">{{ ai_hub_home.orchestrator.active_pipelines }} {% translate "active" %}</span>
-        {% else %}
-          <span class="mc-pill mc-pill--inactive">{% translate "no active pipelines" %}</span>
-        {% endif %}
-      </div>
-      <h2>{% translate "Fixed agent workflows" %}</h2>
-      <p class="mc-lcard__desc">{% translate "For predictable recipes: ordered agents, explicit input/output mappings, and step-by-step debugging." %}</p>
-      <div class="mc-lflow" aria-label="{% translate 'How Orchestrator works' %}">
-        <code>{% translate "input" %}</code><span class="arr">→</span><code>{% translate "step 1" %}</code><span class="arr">→</span><code>{% translate "step 2" %}</code><span class="arr">→</span><code>{% translate "output" %}</code>
-      </div>
-      <div class="mc-lcard__stats">
-        <div class="mc-lstat"><b>{{ ai_hub_home.orchestrator.pipelines }}</b><span>{% translate "Pipelines" %}</span></div>
-        <div class="mc-lstat"><b>{{ ai_hub_home.orchestrator.active_pipelines }}</b><span>{% translate "Active" %}</span></div>
-        <div class="mc-lstat"><b>{{ ai_hub_home.orchestrator.sessions }}</b><span>{% translate "Sessions" %}</span></div>
-      </div>
-      <div class="mc-lcard__act">
-        <a class="mc-btn mc-btn--accent mc-btn--sm" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Open Orchestrator" %}</a>
-        <a class="mc-btn mc-btn--sm" href="{% url 'admin:ai_hub_pipelinedefinition_add' %}">{% translate "New pipeline" %}</a>
-      </div>
+    <article class="mc-acard" style="--ac:#6366f1">
+      <div class="mc-acard__head"><span class="mc-acard__ix">0</span><h2>{% translate "Overview &amp; Entry" %}</h2></div>
+      <p class="mc-acard__desc">{% translate "Cockpit, guided build, and deep diagnostics." %}</p>
+      <nav class="mc-acard__links" aria-label="{% translate 'Overview screens' %}">
+        <a href="{% url 'admin:ai_hub_control_center' %}">{% translate "Control Center" %}</a>
+        <a href="{% url 'admin:ai_hub_workspace_build' %}">{% translate "Build Console" %}</a>
+      </nav>
     </article>
 
-    <article class="mc-lcard mc-lcard--game">
-      <div class="mc-lcard__top">
-        <span class="mc-lbadge">GAME</span>
-        {% if ai_hub_home.game.live_sessions %}
-          <span class="mc-pill mc-pill--running">{{ ai_hub_home.game.live_sessions }} {% translate "live" %}</span>
-        {% else %}
-          <span class="mc-pill mc-pill--inactive">{% translate "no live sessions" %}</span>
-        {% endif %}
+    <article class="mc-acard" style="--ac:#0f766e">
+      <div class="mc-acard__head"><span class="mc-acard__ix">1</span><h2>{% translate "Foundation" %}</h2></div>
+      <p class="mc-acard__desc">{% translate "The reusable parts the AI is made of." %}</p>
+      <nav class="mc-acard__links" aria-label="{% translate 'Foundation screens' %}">
+        <a href="{% url 'admin:ai_hub_providerconfig_changelist' %}">{% translate "Connectivity" %}</a>
+        <a href="{% url 'admin:ai_hub_knowledgecollection_changelist' %}">{% translate "Knowledge Library" %}</a>
+        <a href="{% url 'admin:ai_hub_tooldefinition_changelist' %}">{% translate "Tool Registry" %}</a>
+        <a href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "Agent Composer" %}</a>
+      </nav>
+    </article>
+
+    <article class="mc-acard" style="--ac:#047857">
+      <div class="mc-acard__head"><span class="mc-acard__ix">2</span><h2>{% translate "Orchestrator" %}</h2>
+        {% if ai_hub_home.orchestrator.active_pipelines %}<span class="mc-pill mc-pill--ok">{{ ai_hub_home.orchestrator.active_pipelines }} {% translate "active" %}</span>{% endif %}
       </div>
-      <h2>{% translate "Autonomous goal sessions" %}</h2>
-      <p class="mc-lcard__desc">{% translate "For open-ended work: one agent reads a goal, decides the next action, observes, remembers and stops when done." %}</p>
-      <div class="mc-lflow" aria-label="{% translate 'How GAME works' %}">
-        <code>{% translate "goal" %}</code><span class="arr">→</span><code>{% translate "decide" %}</code><span class="arr">→</span><code>{% translate "act" %}</code><span class="arr">→</span><code>{% translate "observe" %}</code><span class="arr">→</span><code>{% translate "memory" %}</code>
+      <p class="mc-acard__desc">{% translate "Fixed, ordered agent flows." %}</p>
+      <nav class="mc-acard__links" aria-label="{% translate 'Orchestrator screens' %}">
+        <a href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Open Orchestrator" %}</a>
+        <a href="{% url 'admin:ai_hub_pipelinedefinition_add' %}">{% translate "New pipeline" %}</a>
+      </nav>
+    </article>
+
+    <article class="mc-acard" style="--ac:#be123c">
+      <div class="mc-acard__head"><span class="mc-acard__ix">3</span><h2>GAME</h2>
+        {% if ai_hub_home.game.live_sessions %}<span class="mc-pill mc-pill--running">{{ ai_hub_home.game.live_sessions }} {% translate "live" %}</span>{% endif %}
       </div>
-      <div class="mc-lcard__stats">
-        <div class="mc-lstat"><b>{{ ai_hub_home.game.open_goals }}</b><span>{% translate "Open goals" %}</span></div>
-        <div class="mc-lstat"><b>{{ ai_hub_home.game.live_sessions }}</b><span>{% translate "Live" %}</span></div>
-        <div class="mc-lstat"><b>{{ ai_hub_home.game.sessions }}</b><span>{% translate "Sessions" %}</span></div>
+      <p class="mc-acard__desc">{% translate "Autonomous goals — workspaces and goal config." %}</p>
+      <nav class="mc-acard__links" aria-label="{% translate 'GAME screens' %}">
+        <a href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "Open GAME" %}</a>
+        <a href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "New GAME session" %}</a>
+      </nav>
+    </article>
+
+    <article class="mc-acard" style="--ac:#e0a317">
+      <div class="mc-acard__head"><span class="mc-acard__ix">4</span><h2>{% translate "Operations" %}</h2>
+        {% if ai_hub_home.vitals.needs_attention %}<span class="mc-pill mc-pill--running">{{ ai_hub_home.vitals.needs_attention }} {% translate "need you" %}</span>{% endif %}
       </div>
-      <div class="mc-lcard__act">
-        <a class="mc-btn mc-btn--accent mc-btn--sm" href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "Open GAME" %}</a>
-        <a class="mc-btn mc-btn--sm" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "New GAME session" %}</a>
-      </div>
+      <p class="mc-acard__desc">{% translate "Run, supervise and unblock sessions." %}</p>
+      <nav class="mc-acard__links" aria-label="{% translate 'Operations screens' %}">
+        <a href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Session Explorer" %}</a>
+        <a href="{% url 'admin:ai_hub_gameactionapprovalrequest_changelist' %}?status__exact=pending">{% translate "Approvals" %}</a>
+      </nav>
     </article>
 
   </section>

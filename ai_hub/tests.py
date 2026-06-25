@@ -2397,13 +2397,30 @@ class HubAdminControlCenterTests(TestCase):
         response = client.get(reverse("admin:app_list", kwargs={"app_label": "ai_hub"}))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Fixed agent workflows")
+        # five-area navigation map (IA Step 3)
+        self.assertContains(response, "Foundation")
+        self.assertContains(response, "Operations")
         self.assertContains(response, "Recommended next")
         self.assertContains(response, "Setup progress")
         self.assertContains(response, "Start from a pattern")
         self.assertContains(response, "Open Orchestrator")
         self.assertContains(response, "Open GAME")
         self.assertContains(response, "All records")
+        # root entities stay listed in the "All records" fallback
+        self.assertContains(response, "Agent profiles")
+        self.assertContains(response, "Pipeline definitions")
+        # demoted supporting models are removed from the index (get_model_perms -> {})
+        self.assertNotContains(response, "Pipeline steps")
+        self.assertNotContains(response, "Execution step runs")
+        self.assertNotContains(response, "Agent toolbox assignments")
+
+    def test_demoted_model_changelist_still_reachable(self):
+        """Hidden-from-index models keep working URLs (registered, perms intact)."""
+        client = Client()
+        client.force_login(self.user)
+        # PipelineStep is demoted from the index but its changelist must still resolve
+        response = client.get(reverse("admin:ai_hub_pipelinestep_changelist"))
+        self.assertEqual(response.status_code, 200)
 
     def test_clean_workspace_urls_render(self):
         client = Client()

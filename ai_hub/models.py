@@ -33,8 +33,8 @@ class ProviderConfig(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "0.1 Provider config"
-        verbose_name_plural = "0.1 Provider configs - AI service accounts"
+        verbose_name = "1.1 Provider config"
+        verbose_name_plural = "1.1 Provider configs - AI service accounts"
 
     def __str__(self):
         return self.name
@@ -53,8 +53,8 @@ class ModelConfig(models.Model):
     class Meta:
         unique_together = [("provider", "model_name")]
         ordering = ["provider__name", "model_name"]
-        verbose_name = "0.2 Model config"
-        verbose_name_plural = "0.2 Model configs - model choices"
+        verbose_name = "1.2 Model config"
+        verbose_name_plural = "1.2 Model configs - model choices"
 
     def __str__(self):
         return f"{self.provider.name} / {self.model_name}"
@@ -113,8 +113,8 @@ class ToolDefinition(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "2.0 Tool definition"
-        verbose_name_plural = "2.0 Tool definitions - optional agent tools"
+        verbose_name = "1.6 Tool definition"
+        verbose_name_plural = "1.6 Tool definitions - optional agent tools"
 
     def __str__(self):
         return self.name
@@ -136,8 +136,8 @@ class Toolbox(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "2.1 Toolbox"
-        verbose_name_plural = "2.1 Toolboxes - reusable tool groups"
+        verbose_name = "1.7 Toolbox"
+        verbose_name_plural = "1.7 Toolboxes - reusable tool groups"
 
     def __str__(self):
         return self.label or self.name
@@ -153,8 +153,8 @@ class ToolboxTool(models.Model):
 
     class Meta:
         ordering = ["toolbox__name", "display_order", "tool__name"]
-        verbose_name = "2.2 Toolbox tool"
-        verbose_name_plural = "2.2 Toolbox tools - toolbox membership"
+        verbose_name = "1.8 Toolbox tool"
+        verbose_name_plural = "1.8 Toolbox tools - toolbox membership"
         constraints = [
             models.UniqueConstraint(fields=["toolbox", "tool"], name="ai_hub_unique_toolbox_tool"),
         ]
@@ -173,8 +173,8 @@ class KnowledgeCollection(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "1.0 Knowledge collection"
-        verbose_name_plural = "1.0 Knowledge collections - knowledge groups"
+        verbose_name = "1.3 Knowledge collection"
+        verbose_name_plural = "1.3 Knowledge collections - knowledge groups"
 
     def __str__(self):
         return self.name
@@ -199,8 +199,8 @@ class KnowledgeDocument(models.Model):
 
     class Meta:
         ordering = ["collection__name", "title"]
-        verbose_name = "1.1 Knowledge document"
-        verbose_name_plural = "1.1 Knowledge documents - curated files and text"
+        verbose_name = "1.4 Knowledge document"
+        verbose_name_plural = "1.4 Knowledge documents - curated files and text"
         indexes = [
             models.Index(fields=["collection", "status"], name="ai_hub_kdoc_collect_status_idx"),
             models.Index(fields=["language", "status"], name="ai_hub_kdoc_lang_status_idx"),
@@ -222,8 +222,8 @@ class KnowledgeDocumentChunk(models.Model):
 
     class Meta:
         ordering = ["document__collection__name", "document__title", "chunk_index"]
-        verbose_name = "1.2 Knowledge document chunk"
-        verbose_name_plural = "1.2 Knowledge document chunks - retrievable sections"
+        verbose_name = "1.5 Knowledge document chunk"
+        verbose_name_plural = "1.5 Knowledge document chunks - retrievable sections"
         constraints = [
             models.UniqueConstraint(fields=["document", "chunk_index"], name="ai_hub_unique_doc_chunk_index"),
         ]
@@ -263,8 +263,8 @@ class AgentProfile(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "3.0 Agent profile"
-        verbose_name_plural = "3.0 Agent profiles - prompts and roles"
+        verbose_name = "1.9 Agent profile"
+        verbose_name_plural = "1.9 Agent profiles - prompts and roles"
 
     def __str__(self):
         return self.name
@@ -282,8 +282,8 @@ class AgentToolboxAssignment(models.Model):
 
     class Meta:
         ordering = ["agent__name", "toolbox__name"]
-        verbose_name = "3.1 Agent toolbox assignment"
-        verbose_name_plural = "3.1 Agent toolbox assignments - reusable access"
+        verbose_name = "1.10 Agent toolbox assignment"
+        verbose_name_plural = "1.10 Agent toolbox assignments - reusable access"
         constraints = [
             models.UniqueConstraint(fields=["agent", "toolbox"], name="ai_hub_unique_agent_toolbox"),
         ]
@@ -312,8 +312,8 @@ class AgentToolGrant(models.Model):
 
     class Meta:
         ordering = ["agent__name", "tool__name"]
-        verbose_name = "3.2 Agent tool grant"
-        verbose_name_plural = "3.2 Agent tool grants - individual overrides"
+        verbose_name = "1.11 Agent tool grant"
+        verbose_name_plural = "1.11 Agent tool grants - individual overrides"
         constraints = [
             models.UniqueConstraint(fields=["agent", "tool"], name="ai_hub_unique_agent_tool_grant"),
         ]
@@ -341,8 +341,8 @@ class PipelineDefinition(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "4.0 Pipeline definition"
-        verbose_name_plural = "4.0 Pipeline definitions - ordered agent flows"
+        verbose_name = "2.1 Pipeline definition"
+        verbose_name_plural = "2.1 Pipeline definitions - ordered agent flows"
 
     def __str__(self):
         return self.name
@@ -388,8 +388,8 @@ class PipelineStep(models.Model):
     class Meta:
         unique_together = [("pipeline", "order")]
         ordering = ["pipeline__name", "order"]
-        verbose_name = "4.1 Pipeline step"
-        verbose_name_plural = "4.1 Pipeline steps - agent connections"
+        verbose_name = "2.2 Pipeline step"
+        verbose_name_plural = "2.2 Pipeline steps - agent connections"
 
     def __str__(self):
         return f"{self.pipeline.name} - step {self.order}"
@@ -414,8 +414,8 @@ class GameWorkspace(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "4.5 GAME workspace"
-        verbose_name_plural = "4.5 GAME workspaces - environments"
+        verbose_name = "3.1 GAME workspace"
+        verbose_name_plural = "3.1 GAME workspaces - environments"
 
     def __str__(self):
         return self.name
@@ -463,8 +463,8 @@ class GameGoal(models.Model):
 
     class Meta:
         ordering = ["workspace__name", "-calculated_priority", "created_at"]
-        verbose_name = "4.6 GAME goal"
-        verbose_name_plural = "4.6 GAME goals - work items"
+        verbose_name = "3.2 GAME goal"
+        verbose_name_plural = "3.2 GAME goals - work items"
         indexes = [
             models.Index(fields=["workspace", "status"], name="aihub_goal_ws_status_idx"),
             models.Index(fields=["workspace", "calculated_priority"], name="aihub_goal_ws_priority_idx"),
@@ -484,8 +484,8 @@ class GameGoalDependency(models.Model):
 
     class Meta:
         ordering = ["goal_id", "depends_on_id"]
-        verbose_name = "4.7 GAME goal dependency"
-        verbose_name_plural = "4.7 GAME goal dependencies"
+        verbose_name = "3.3 GAME goal dependency"
+        verbose_name_plural = "3.3 GAME goal dependencies"
         constraints = [
             models.UniqueConstraint(fields=["goal", "depends_on"], name="ai_hub_unique_goal_dependency"),
             models.CheckConstraint(
@@ -554,8 +554,8 @@ class GameActionDefinition(models.Model):
 
     class Meta:
         ordering = ["name"]
-        verbose_name = "4.8 GAME action definition"
-        verbose_name_plural = "4.8 GAME action definitions - dispatcher registry"
+        verbose_name = "3.6 GAME action definition"
+        verbose_name_plural = "3.6 GAME action definitions - dispatcher registry"
 
     def __str__(self):
         return f"{self.name} ({self.get_action_type_display()})"
@@ -640,8 +640,8 @@ class ExecutionSession(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = "5.0 Execution session"
-        verbose_name_plural = "5.0 Execution sessions - generic runs"
+        verbose_name = "4.1 Execution session"
+        verbose_name_plural = "4.1 Execution sessions - generic runs"
         indexes = [
             models.Index(fields=["runtime_kind", "status"], name="ai_hub_session_kind_status_idx"),
             models.Index(fields=["source_content_type", "source_object_id"], name="ai_hub_session_source_idx"),
@@ -709,8 +709,8 @@ class ExecutionStepRun(models.Model):
     class Meta:
         unique_together = [("session", "order")]
         ordering = ["session_id", "order"]
-        verbose_name = "5.1 Execution step run"
-        verbose_name_plural = "5.1 Execution step runs - generic step logs"
+        verbose_name = "4.2 Execution step run"
+        verbose_name_plural = "4.2 Execution step runs - generic step logs"
         indexes = [
             models.Index(fields=["session", "status"], name="ai_hub_step_session_status_idx"),
             models.Index(fields=["agent", "status"], name="ai_hub_step_agent_status_idx"),
@@ -775,8 +775,8 @@ class ToolExecutionRun(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = "5.2 Tool execution run"
-        verbose_name_plural = "5.2 Tool execution runs - generic tool audit"
+        verbose_name = "4.3 Tool execution run"
+        verbose_name_plural = "4.3 Tool execution runs - generic tool audit"
         indexes = [
             models.Index(fields=["session", "status"], name="aihub_tool_run_sess_status_idx"),
             models.Index(fields=["agent", "status"], name="aihub_tool_run_agent_stat_idx"),
@@ -833,8 +833,8 @@ class GameActionRun(models.Model):
 
     class Meta:
         ordering = ["session_id", "iteration"]
-        verbose_name = "4.9 GAME action run"
-        verbose_name_plural = "4.9 GAME action runs - dispatcher history"
+        verbose_name = "4.4 GAME action run"
+        verbose_name_plural = "4.4 GAME action runs - dispatcher history"
         indexes = [
             models.Index(fields=["session", "iteration"], name="aihub_action_run_sess_iter_idx"),
             models.Index(fields=["action", "status"], name="aihub_game_run_action_stat_idx"),
@@ -874,8 +874,8 @@ class GameMemoryEntry(models.Model):
 
     class Meta:
         ordering = ["workspace_id", "-importance_score", "created_at"]
-        verbose_name = "4.10 GAME memory entry"
-        verbose_name_plural = "4.10 GAME memory entries - scoped knowledge store"
+        verbose_name = "3.9 GAME memory entry"
+        verbose_name_plural = "3.9 GAME memory entries - scoped knowledge store"
         indexes = [
             models.Index(fields=["workspace", "scope_type"], name="aihub_mem_ws_scope_idx"),
             models.Index(fields=["goal", "scope_type"], name="aihub_mem_goal_scope_idx"),
@@ -956,8 +956,8 @@ class GameContinuationRequest(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = "4.11 GAME continuation request"
-        verbose_name_plural = "4.11 GAME continuation requests - pause records"
+        verbose_name = "4.6 GAME continuation request"
+        verbose_name_plural = "4.6 GAME continuation requests - pause records"
         indexes = [
             models.Index(fields=["session", "status"], name="aihub_cont_req_sess_stat_idx"),
         ]
@@ -1002,8 +1002,8 @@ class GameActionApprovalRequest(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = "4.12 GAME action approval request"
-        verbose_name_plural = "4.12 GAME action approval requests - gated actions"
+        verbose_name = "4.7 GAME action approval request"
+        verbose_name_plural = "4.7 GAME action approval requests - gated actions"
         permissions = [("approve_game_action", "Can approve GAME action requests")]
         indexes = [
             models.Index(fields=["goal", "status"], name="aihub_approval_goal_stat_idx"),
@@ -1034,8 +1034,8 @@ class GameWorkspaceAction(models.Model):
 
     class Meta:
         ordering = ["workspace__name", "action__name"]
-        verbose_name = "4.13 GAME workspace action"
-        verbose_name_plural = "4.13 GAME workspace actions - allow-list"
+        verbose_name = "3.7 GAME workspace action"
+        verbose_name_plural = "3.7 GAME workspace actions - allow-list"
         constraints = [
             models.UniqueConstraint(fields=["workspace", "action"], name="ai_hub_unique_ws_action"),
         ]
@@ -1057,8 +1057,8 @@ class GameWorkspaceAgent(models.Model):
 
     class Meta:
         ordering = ["workspace__name", "agent__name"]
-        verbose_name = "4.14 GAME workspace agent"
-        verbose_name_plural = "4.14 GAME workspace agents - allow-list"
+        verbose_name = "3.8 GAME workspace agent"
+        verbose_name_plural = "3.8 GAME workspace agents - allow-list"
         constraints = [
             models.UniqueConstraint(fields=["workspace", "agent"], name="ai_hub_unique_ws_agent"),
         ]
@@ -1084,8 +1084,8 @@ class GameGoalPlan(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = "4.15 GAME goal plan"
-        verbose_name_plural = "4.15 GAME goal plans - structured execution aids"
+        verbose_name = "3.4 GAME goal plan"
+        verbose_name_plural = "3.4 GAME goal plans - structured execution aids"
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(version__gte=1),
@@ -1125,8 +1125,8 @@ class GameGoalPlanStep(models.Model):
 
     class Meta:
         ordering = ["plan_id", "order"]
-        verbose_name = "4.16 GAME goal plan step"
-        verbose_name_plural = "4.16 GAME goal plan steps"
+        verbose_name = "3.5 GAME goal plan step"
+        verbose_name_plural = "3.5 GAME goal plan steps"
         constraints = [
             models.UniqueConstraint(
                 fields=["plan", "order"], name="ai_hub_unique_plan_step_order"
@@ -1194,8 +1194,8 @@ class GameDelegationRun(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        verbose_name = "4.17 GAME delegation run"
-        verbose_name_plural = "4.17 GAME delegation runs - sub-agent history"
+        verbose_name = "4.5 GAME delegation run"
+        verbose_name_plural = "4.5 GAME delegation runs - sub-agent history"
         indexes = [
             models.Index(
                 fields=["parent_goal", "status"], name="aihub_delegation_goal_stat_idx"

@@ -163,6 +163,17 @@ class AIHubListPageMixin(AIHubFormHelpMixin):
         return super().changelist_view(request, extra_context=extra_context)
 
 
+class AIHubHideFromIndexMixin:
+    """Keep the model fully registered — URLs, reverse() links, inlines, change pages
+    and direct permissions all keep working — but remove it from the admin app index
+    and the nav sidebar. Used for bridge tables, structural children, and runtime/audit
+    records that belong inside a parent entity or a timeline, not as a top-level
+    navigation destination. (Step 3: demote supporting models per the IA blueprint.)"""
+
+    def get_model_perms(self, request):
+        return {}
+
+
 def _status_count(queryset, status):
     return queryset.filter(status=status).count()
 
@@ -975,7 +986,7 @@ class ToolboxAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(ToolboxTool)
-class ToolboxToolAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class ToolboxToolAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Toolbox tools")
     ai_hub_section_description = _("Membership records connecting tools to toolboxes.")
     ai_hub_section_accent = "tool"
@@ -1110,7 +1121,7 @@ class KnowledgeDocumentAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(KnowledgeDocumentChunk)
-class KnowledgeDocumentChunkAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class KnowledgeDocumentChunkAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Knowledge chunks")
     ai_hub_section_description = _("Retrievable sections inside knowledge documents.")
     ai_hub_section_note = _(
@@ -1331,7 +1342,7 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(AgentToolboxAssignment)
-class AgentToolboxAssignmentAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class AgentToolboxAssignmentAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Agent toolbox assignments")
     ai_hub_section_description = _("Attach reusable toolboxes to agents without duplicating direct tool lists.")
     ai_hub_section_accent = "agent"
@@ -1342,7 +1353,7 @@ class AgentToolboxAssignmentAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(AgentToolGrant)
-class AgentToolGrantAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class AgentToolGrantAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Agent tool grants")
     ai_hub_section_description = _("Allow or deny one specific tool for one agent as an explicit override.")
     ai_hub_section_accent = "agent"
@@ -1589,7 +1600,7 @@ class PipelineDefinitionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
 
 
 @admin.register(PipelineStep)
-class PipelineStepAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class PipelineStepAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Pipeline steps")
     ai_hub_section_description = _(
         "Each row is one handoff between agents. Keep the order continuous and the input/output mappings clear."
@@ -1726,11 +1737,22 @@ class GameWorkspaceAdmin(AIHubListPageMixin, admin.ModelAdmin):
         return TemplateResponse(request, "admin/ai_hub/gameworkspace/dashboard.html", context)
 
 
+class GameGoalDependencyInline(admin.TabularInline):
+    model = GameGoalDependency
+    fk_name = "goal"
+    extra = 0
+    autocomplete_fields = ("depends_on",)
+    fields = ("depends_on", "is_required", "note")
+    verbose_name = _("dependency")
+    verbose_name_plural = _("Dependencies — this goal depends on…")
+
+
 @admin.register(GameGoal)
 class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME goals")
     ai_hub_section_description = _("Manage durable work items independently from their execution sessions.")
     change_form_template = "admin/ai_hub/gamegoal/change_form.html"
+    inlines = (GameGoalDependencyInline,)
     list_display = (
         "title",
         "workspace",
@@ -1838,7 +1860,7 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(GameGoalDependency)
-class GameGoalDependencyAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameGoalDependencyAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME goal dependencies")
     ai_hub_section_description = _("Describe required and optional ordering relationships inside one workspace.")
     list_display = ("goal", "depends_on", "is_required", "note", "created_at")
@@ -2198,7 +2220,7 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
 
 
 @admin.register(ExecutionStepRun)
-class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class ExecutionStepRunAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Execution step runs")
     ai_hub_section_description = _(
         "This is the session timeline at the most detailed level. Use it to inspect a failed or slow step."
@@ -2315,7 +2337,7 @@ class ExecutionStepRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(ToolExecutionRun)
-class ToolExecutionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class ToolExecutionRunAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Tool execution runs")
     ai_hub_section_description = _("Generic audit records for individual reusable tool calls.")
     ai_hub_section_note = _("Future runtimes write these records; inspect them here rather than editing them.")
@@ -2512,7 +2534,7 @@ class GameActionRunInline(admin.TabularInline):
 
 
 @admin.register(GameActionRun)
-class GameActionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameActionRunAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME action runs")
     ai_hub_section_description = _(
         "Immutable audit records for every action dispatched during a GAME goal session."
@@ -2620,7 +2642,7 @@ class GameActionRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(GameMemoryEntry)
-class GameMemoryEntryAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameMemoryEntryAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME memory entries")
     ai_hub_section_description = _(
         "Scoped, bounded knowledge entries persisted across GAME iterations. "
@@ -2867,7 +2889,7 @@ class GameActionApprovalRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(GameWorkspaceAction)
-class GameWorkspaceActionAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameWorkspaceActionAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME workspace actions")
     ai_hub_section_description = _(
         "Allow-list of actions permitted per workspace. "
@@ -2890,7 +2912,7 @@ class GameWorkspaceActionAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(GameWorkspaceAgent)
-class GameWorkspaceAgentAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameWorkspaceAgentAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME workspace agents")
     ai_hub_section_description = _(
         "Allow-list of agents permitted to run as entry agents within a workspace. "
@@ -2921,7 +2943,7 @@ class GameGoalPlanStepInline(admin.TabularInline):
 
 
 @admin.register(GameGoalPlan)
-class GameGoalPlanAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameGoalPlanAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME goal plans")
     ai_hub_section_description = _(
         "Structured execution plans attached to goals. "
@@ -2949,7 +2971,7 @@ class GameGoalPlanAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(GameGoalPlanStep)
-class GameGoalPlanStepAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameGoalPlanStepAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME goal plan steps")
     ai_hub_section_description = _("Individual steps within a goal plan.")
     ai_hub_section_accent = "game"
@@ -2967,7 +2989,7 @@ class GameGoalPlanStepAdmin(AIHubListPageMixin, admin.ModelAdmin):
 
 
 @admin.register(GameDelegationRun)
-class GameDelegationRunAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class GameDelegationRunAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME delegation runs")
     ai_hub_section_description = _(
         "Records of sub-agent delegation requests. Each entry tracks a parent action, "

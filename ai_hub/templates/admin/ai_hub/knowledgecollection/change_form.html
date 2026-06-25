@@ -1,0 +1,127 @@
+{% extends "admin/change_form.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step6-v1">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-step6-v1" defer></script>
+{% endblock %}
+
+{% block field_sets %}
+{% if original %}
+<div class="ai-ws-head" style="--ai-ws-accent:#7c3aed;">
+  <div>
+    <div class="ai-ws-head__eyebrow">{% translate "Foundation · Knowledge Library" %}</div>
+    <h2 class="ai-ws-head__title">{{ original.name }}</h2>
+    <div class="ai-ws-head__meta">
+      {{ collection_overview.vitals.documents }} {% translate "documents" %}
+      · {{ collection_overview.vitals.active_docs }} {% translate "active" %}
+      · {{ collection_overview.vitals.agents }} {% translate "agents" %}
+    </div>
+  </div>
+  <div class="ai-ws-head__actions">
+    {% if collection_overview.is_active %}
+      <span class="ai-ws-pill ai-ws-pill--ok">{% translate "active" %}</span>
+    {% else %}
+      <span class="ai-ws-pill ai-ws-pill--muted">{% translate "inactive" %}</span>
+    {% endif %}
+    <a class="button" href="{% url 'admin:ai_hub_knowledgedocument_add' %}">{% translate "Add document" %}</a>
+  </div>
+</div>
+
+<div class="ai-tabnav" data-ws-tabs data-tab-default="overview" data-tab-error="config" role="tablist" aria-label="{% translate 'Collection sections' %}">
+  <button type="button" class="ai-tabnav__btn" data-tab-to="overview" role="tab">{% translate "Overview" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="config" role="tab">{% translate "Configuration" %}</button>
+</div>
+
+<div class="ai-tab" data-tab="overview" role="tabpanel">
+  <div class="ai-ws-vitals">
+    <div class="ai-ws-vital"><div class="n">{{ collection_overview.vitals.documents }}</div><div class="l">{% translate "Documents" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ collection_overview.vitals.active_docs }}</div><div class="l">{% translate "Active" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ collection_overview.vitals.chunks }}</div><div class="l">{% translate "Chunks" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ collection_overview.vitals.agents }}</div><div class="l">{% translate "Agents" %}</div></div>
+  </div>
+
+  <div class="ai-ws-grid" style="margin-top:14px;">
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Documents" %}</span><a href="#" data-tab-to="config" class="ai-ws-jump">{% translate "manage" %}</a></div>
+        <div class="ai-ws-card__body">
+          {% if collection_overview.documents %}
+          <div class="ai-ws-rows">
+            {% for d in collection_overview.documents %}
+            <a class="ai-ws-row" style="--ai-row-accent:#7c3aed;" href="{% url 'admin:ai_hub_knowledgedocument_change' d.id %}">
+              <span class="rt">{{ d.title }}</span>
+              {% if d.language %}<span class="rm">{{ d.language }}</span>{% endif %}
+              <span class="rr">
+                {% if d.status == 'active' %}<span class="ai-ws-pill ai-ws-pill--ok">{{ d.status }}</span>
+                {% elif d.status == 'archived' %}<span class="ai-ws-pill ai-ws-pill--muted">{{ d.status }}</span>
+                {% else %}<span class="ai-ws-pill ai-ws-pill--warn">{{ d.status }}</span>{% endif %}
+              </span>
+            </a>
+            {% endfor %}
+          </div>
+          {% if collection_overview.documents_total > collection_overview.documents|length %}
+          <div class="empty">{% blocktranslate with shown=collection_overview.documents|length total=collection_overview.documents_total %}Showing {{ shown }} of {{ total }}.{% endblocktranslate %}</div>
+          {% endif %}
+          {% else %}
+          <div class="empty">{% translate "No documents yet. Add curated text so agents have context to read." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Health" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            {% for h in collection_overview.health %}
+            <div class="ai-ws-hrow"><span class="dot {% if h.ok %}dot--ok{% else %}dot--bad{% endif %}"></span>{{ h.label }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Agents using this collection" %}</span></div>
+        <div class="ai-ws-card__body">
+          {% if collection_overview.agents %}
+          <div class="ai-ws-rows">
+            {% for a in collection_overview.agents %}
+            <a class="ai-ws-row" style="--ai-row-accent:#be123c;" href="{% url 'admin:ai_hub_agentprofile_change' a.id %}">
+              <span class="rt">{{ a.name }}</span>
+              <span class="rr">{% if a.is_active %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "active" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "off" %}</span>{% endif %}</span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No agents attached to this collection yet." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}
+
+{% block inline_field_sets %}
+{% if original %}
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}

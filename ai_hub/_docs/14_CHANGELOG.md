@@ -9,6 +9,15 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Admin information architecture (IA overhaul)
+
+- Re-architected the admin around **five areas** (Overview & Entry, Foundation, Orchestrator, GAME, Operations). Model `verbose_name_plural` prefixes were re-mapped to area-based numbering so the sidebar groups by area; metadata-only migration `0018_alter_*_options`.
+- Added `AIHubHideFromIndexMixin` (`get_model_perms → {}`): demotes 15 bridge tables, structural children, and runtime/audit records from the index and sidebar while keeping their URLs and permissions intact.
+- AI Hub home re-laid into a five-area navigation map, plus a **"Show supporting tables" toggle** on the *All records* panel that reveals the 15 hidden models grouped by category (Bridge tables · GAME structural children · Runtime / audit), each with a one-line reason it is hidden.
+- **Composed entity workspaces** (IA Step 4): the five root entities — AgentProfile (Agent Composer), PipelineDefinition (Orchestrator Designer), GameWorkspace, GameGoal, ExecutionSession (Session Explorer) — now render tabbed change pages (Overview + Configuration + entity-specific tabs) built on a new `.ai-ws-*` toolkit, with progressive enhancement (panels stack without JS; `initEntityTabs()` groups them and lands on the editable tab when validation errors are present).
+- **Operations Inbox** (IA Step 5) at `/admin/ai_hub/operations/`: one cross-workspace queue for everything needing a human — pending approvals (inline Approve/Reject), paused sessions waiting for info, failed sessions, and blocked goals — with category filter chips. Wired into the home header, the "Needs your attention" panel, and the Operations area card.
+- **Foundation composition** (IA Step 6): the three Foundation hub entities — ProviderConfig (Connectivity), KnowledgeCollection (Knowledge Library), Toolbox (Tool Registry) — now render composed Overview + Configuration change pages showing what is inside them, what uses them, and a health checklist. `initEntityTabs()` extended to bind in-panel `data-tab-to` jump links, not only the nav tabs.
+
 #### Build Console wizard
 
 - Added a multi-step guided creation wizard at `/admin/ai_hub/workspaces/build/` for both GAME and Orchestrator blueprints.

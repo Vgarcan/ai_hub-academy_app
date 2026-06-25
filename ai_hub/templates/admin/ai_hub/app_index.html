@@ -3,7 +3,7 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-ia-step3-v1">
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-hidden-toggle-v1">
 {% endblock %}
 
 {% block content %}
@@ -21,6 +21,7 @@
       <a class="mc-btn" href="{% url 'admin:ai_hub_workspace_build' %}">{% translate "Build Console" %}</a>
       <a class="mc-btn" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Orchestrator" %}</a>
       <a class="mc-btn" href="{% url 'admin:ai_hub_workspace_game' %}">GAME</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_operations_inbox' %}">{% translate "Operations" %}</a>
     </nav>
   </header>
 
@@ -70,7 +71,7 @@
             <span class="mc-headcount mc-headcount--alert">{{ ai_hub_home.needs_attention_count }}</span>
           {% endif %}
         </h2>
-        <a href="{% url 'admin:ai_hub_gameactionapprovalrequest_changelist' %}?status__exact=pending">{% translate "Review all" %}</a>
+        <a href="{% url 'admin:ai_hub_operations_inbox' %}">{% translate "Review all" %}</a>
       </div>
       <div class="mc-panel__body">
         {% if ai_hub_home.action_queue %}
@@ -172,8 +173,8 @@
       </div>
       <p class="mc-acard__desc">{% translate "Run, supervise and unblock sessions." %}</p>
       <nav class="mc-acard__links" aria-label="{% translate 'Operations screens' %}">
+        <a href="{% url 'admin:ai_hub_operations_inbox' %}">{% translate "Operations Inbox" %}</a>
         <a href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Session Explorer" %}</a>
-        <a href="{% url 'admin:ai_hub_gameactionapprovalrequest_changelist' %}?status__exact=pending">{% translate "Approvals" %}</a>
       </nav>
     </article>
 
@@ -294,12 +295,60 @@
   <article class="mc-panel">
     <div class="mc-panel__head">
       <h2>{% translate "All records" %}</h2>
-      <span style="font-size:12px;color:var(--mc-muted)">{% translate "Raw admin tables, grouped by stage" %}</span>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:12px;color:var(--mc-muted)">{% translate "Raw admin tables, grouped by stage" %}</span>
+        {% if ai_hub_home.hidden_models %}
+        <button type="button" id="hidden-models-toggle" class="mc-btn mc-btn--sm"
+                aria-expanded="false" aria-controls="hidden-models-section"
+                style="font-size:11px;">
+          {% translate "Show supporting tables" %} ({{ ai_hub_home.hidden_models|length }})
+        </button>
+        {% endif %}
+      </div>
     </div>
     <div class="mc-panel__body" style="padding: 0;">
       {{ block.super }}
     </div>
+
+    {% if ai_hub_home.hidden_models %}
+    <div id="hidden-models-section" hidden style="border-top:1px solid var(--mc-border);padding:16px 20px;">
+      <p style="font-size:12px;color:var(--mc-muted);margin:0 0 14px;">
+        {% blocktranslate %}These <b>{{ ai_hub_home.hidden_models|length }} supporting tables</b> are hidden from the main index because they are managed through their parent screens (e.g. Agent Composer, Pipeline Designer, Session Explorer). They remain fully accessible here for debugging and advanced edits.{% endblocktranslate %}
+      </p>
+      <div class="mc-hidden-models">
+        {% regroup ai_hub_home.hidden_models by category as grouped_models %}
+        {% for group in grouped_models %}
+        <div class="mc-hgroup">
+          <div class="mc-hgroup__label">{{ group.grouper }}</div>
+          {% for m in group.list %}
+          <a class="mc-hrow" href="{{ m.url }}">
+            <span class="mc-hrow__name">{{ m.label }}</span>
+            <span class="mc-hrow__why">{{ m.reason }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
   </article>
+
+  <script>
+  (function () {
+    var btn = document.getElementById("hidden-models-toggle");
+    var sec = document.getElementById("hidden-models-section");
+    if (!btn || !sec) return;
+    btn.addEventListener("click", function () {
+      var open = sec.hidden;
+      sec.hidden = !open;
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      btn.textContent = open
+        ? btn.textContent.replace(/^Show/, "Hide").replace(/^Mostrar/, "Ocultar")
+        : btn.textContent.replace(/^Hide/, "Show").replace(/^Ocultar/, "Mostrar");
+    });
+  })();
+  </script>
 
 </div>
 {% endblock %}

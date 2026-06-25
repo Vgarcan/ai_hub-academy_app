@@ -44,6 +44,26 @@ GAME_KIND_LEGEND = [
     {"kind": "stop", "label": "Stop", "description": "The finish condition or final answer."},
 ]
 
+# Models hidden from the index via AIHubHideFromIndexMixin.
+# category, admin_model_name, display_label, why_hidden
+_HIDDEN_MODEL_CATALOG = [
+    ("Bridge tables", "knowledgedocumentchunk", "Knowledge document chunks", "Managed inside their parent document. Direct edits bypass chunking logic."),
+    ("Bridge tables", "toolboxtool", "Toolbox → tool assignments", "Managed via the Toolbox record."),
+    ("Bridge tables", "agenttoolboxassignment", "Agent → toolbox assignments", "Managed via Agent Composer (Tools tab)."),
+    ("Bridge tables", "agenttoolgrant", "Agent → direct tool grants", "Managed via Agent Composer (Tools tab)."),
+    ("Bridge tables", "pipelinestep", "Pipeline steps", "Managed inside the Pipeline Designer (Steps tab)."),
+    ("GAME structural children", "gamegoaldependency", "Goal dependencies", "Managed inside the Goal detail (Config tab)."),
+    ("GAME structural children", "gamegoalplan", "Goal plans", "Auto-created by the GAME planning engine."),
+    ("GAME structural children", "gamegoalplanstep", "Goal plan steps", "Auto-created by the GAME planning engine."),
+    ("GAME structural children", "gameworkspaceaction", "Workspace actions", "Managed inside the Workspace record."),
+    ("GAME structural children", "gameworkspaceagent", "Workspace agents", "Managed inside the Workspace record."),
+    ("Runtime / audit", "gamememoryentry", "Memory entries", "Written by the GAME engine each loop iteration."),
+    ("Runtime / audit", "executionsteprun", "Execution step runs", "Written by the engine. Inspect via the Session Explorer Timeline tab."),
+    ("Runtime / audit", "toolexecutionrun", "Tool execution runs", "Written by the engine on each tool call."),
+    ("Runtime / audit", "gameactionrun", "GAME action runs", "Written by the engine per GAME action."),
+    ("Runtime / audit", "gamedelegationrun", "GAME delegation runs", "Written by the engine when an agent delegates."),
+]
+
 EXAMPLE_TEMPLATES = [
     {
         "title": "Dream interpretation workflow",
@@ -514,6 +534,14 @@ def build_ai_hub_home_context() -> dict:
     done_count = sum(1 for item in checklist if item["status"] == "ok")
     checklist_pct = round(done_count * 100 / len(checklist)) if checklist else 0
 
+    hidden_models = []
+    for category, model_name, label, reason in _HIDDEN_MODEL_CATALOG:
+        try:
+            url = _admin_changelist_url(model_name)
+        except Exception:
+            url = ""
+        hidden_models.append({"category": category, "label": label, "reason": reason, "url": url})
+
     return {
         "ai_hub_home": {
             "metrics": {
@@ -557,6 +585,7 @@ def build_ai_hub_home_context() -> dict:
             "recommended_action": recommended,
             "resources": resources,
             "examples": EXAMPLE_TEMPLATES,
+            "hidden_models": hidden_models,
         }
     }
 
@@ -1261,4 +1290,100 @@ def build_control_center_context() -> dict:
         "critical_nodes": _connected_node_summary(nodes, edges),
         "health_checklist": checklist,
         "recent_sessions": recent_sessions,
+    }
+
+
+def build_operations_inbox_context():
+    """Cross-workspace queue of everything that needs a human (IA Step 5).
+
+    Four categories: pending approvals, paused sessions waiting for information,
+    failed sessions, and blocked goals. Unbounded for approvals/waiting (those are
+    the actionable gates); failures/blocked are capped to the most recent.
+    """
+    approvals = list(
+        GameActionApprovalRequest.objects
+        .filter(status=GameActionApprovalRequest.Status.PENDING)
+        .select_related("action_run", "goal", "goal__workspace")
+        .order_by("created_at")
+    )
+    waiting = list(
+        GameContinuationRequest.objects
+        .filter(status=GameContinuationRequest.Status.PENDING)
+        .select_related("goal", "goal__workspace")
+        .order_by("created_at")
+    )
+    failures = list(
+        ExecutionSession.objects
+        .filter(status=ExecutionSession.Status.FAILED)
+        .select_related("entry_agent", "pipeline")
+        .order_by("-created_at")[:25]
+    )
+    blocked = list(
+        GameGoal.objects
+        .filter(status=GameGoal.Status.BLOCKED)
+        .select_related("workspace")
+        .order_by("-updated_at")[:25]
+    )
+
+    approval_items = [
+        {
+            "id": ap.pk,
+            "action_name": ap.action_run.action_name if ap.action_run else "—",
+            "goal_title": ap.goal.title if ap.goal else "—",
+            "created_at": ap.created_at,
+            "expires_at": ap.expires_at,
+            "url": _admin_url("gameactionapprovalrequest", ap.pk),
+            "approve_url": reverse("admin:ai_hub_gameactionapprovalrequest_approve", args=[ap.pk]),
+            "reject_url": reverse("admin:ai_hub_gameactionapprovalrequest_reject", args=[ap.pk]),
+        }
+        for ap in approvals
+    ]
+    waiting_items = [
+        {
+            "id": c.pk,
+            "goal_title": c.goal.title if c.goal else "—",
+            "reason": c.get_reason_code_display(),
+            "created_at": c.created_at,
+            "url": _admin_url("gamecontinuationrequest", c.pk),
+            "goal_url": _admin_url("gamegoal", c.goal_id) if c.goal_id else None,
+        }
+        for c in waiting
+    ]
+    failure_items = [
+        {
+            "id": s.pk,
+            "label": s.source_label or f"Session #{s.pk}",
+            "runtime_kind": s.runtime_kind,
+            "error": (s.error_detail or "")[:140],
+            "created_at": s.created_at,
+            "url": _admin_url("executionsession", s.pk),
+        }
+        for s in failures
+    ]
+    blocked_items = [
+        {
+            "id": g.pk,
+            "title": g.title,
+            "workspace": g.workspace.name if g.workspace else "—",
+            "url": _admin_url("gamegoal", g.pk),
+        }
+        for g in blocked
+    ]
+
+    counts = {
+        "approvals": len(approval_items),
+        "waiting": len(waiting_items),
+        "failures": len(failure_items),
+        "blocked": len(blocked_items),
+    }
+    counts["total"] = sum(counts.values())
+
+    return {
+        "operations_inbox": {
+            "counts": counts,
+            "approvals": approval_items,
+            "waiting": waiting_items,
+            "failures": failure_items,
+            "blocked": blocked_items,
+        }
     }

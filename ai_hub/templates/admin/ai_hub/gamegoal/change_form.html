@@ -1,104 +1,196 @@
-{% extends "admin/ai_hub/styled_change_form.html" %}
-{% load i18n %}
+{% extends "admin/change_form.html" %}
+{% load i18n static %}
 
-{% block after_field_sets %}
+{% block extrastyle %}
 {{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step4-v1">
+{% endblock %}
 
-{% if scheduler_explanation %}
-<section class="module ai-goal-detail">
-  <h2>{% translate "Scheduler explanation" %}</h2>
-  <dl>
-    <div><dt>{% translate "Base priority" %}</dt><dd>{{ scheduler_explanation.base_priority }}</dd></div>
-    {% for bonus in scheduler_explanation.bonuses %}
-    <div><dt>{{ bonus.reason }}</dt><dd>+{{ bonus.value }}</dd></div>
-    {% endfor %}
-    <div><dt><strong>{% translate "Total" %}</strong></dt><dd><strong>{{ scheduler_explanation.total }}</strong></dd></div>
-  </dl>
-</section>
-{% endif %}
+{% block extrahead %}
+{{ block.super }}
+<script src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-step4-v1" defer></script>
+{% endblock %}
 
-{% if blockers %}
-<section class="module ai-goal-detail">
-  <h2>{% translate "Goal blockers" %}</h2>
-  <ul>
-    {% for blocker in blockers %}
-    <li>{{ blocker.title }} — <em>{{ blocker.status }}</em></li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
-
-{% if is_resumable %}
-<section class="module ai-goal-detail">
-  <h2>{% translate "Resume" %}</h2>
-  <p>{% translate "This goal has a waiting session that can be resumed." %}</p>
-  <p>
-    <a class="button" href="{% url 'admin:ai_hub_gamegoal_changelist' %}?status__exact=waiting_approval">
-      {% translate "View waiting approvals" %}
-    </a>
-  </p>
-</section>
-{% endif %}
-
-{% if session_history %}
-<section class="module ai-goal-detail">
-  <h2>{% translate "Session history" %}</h2>
-  <div class="ai-run-list">
-    {% for session in session_history %}
-    <a class="ai-run-card ai-run-card--{{ session.status }}" href="{% url 'admin:ai_hub_executionsession_change' session.pk %}">
-      <header>
-        <strong>{% if session.source_label %}{{ session.source_label }}{% else %}{% translate "Session" %} #{{ session.pk }}{% endif %}</strong>
-        <span class="ai-status-pill">{{ session.status }}</span>
-      </header>
-      <small>{% if session.entry_agent %}{{ session.entry_agent.name }}{% endif %} · {{ session.created_at|date:"Y-m-d H:i" }}</small>
-    </a>
-    {% endfor %}
+{% block field_sets %}
+{% if original %}
+<div class="ai-ws-head" style="--ai-ws-accent:#be123c;">
+  <div>
+    <div class="ai-ws-head__eyebrow">{% translate "GAME · Goal Detail" %}</div>
+    <h2 class="ai-ws-head__title">{{ original.title }}</h2>
+    <div class="ai-ws-head__meta">
+      {{ original.workspace.name }} · {% translate "priority" %} {{ original.calculated_priority }}
+      {% if original.due_at %} · {% translate "due" %} {{ original.due_at|date:"Y-m-d" }}{% endif %}
+    </div>
   </div>
-</section>
-{% endif %}
-
-{% if action_runs %}
-<section class="module ai-goal-detail">
-  <h2>{% translate "Action runs" %}</h2>
-  <div class="ai-run-list">
-    {% for run in action_runs %}
-    <a class="ai-run-card ai-run-card--{{ run.status }}" href="{% url 'admin:ai_hub_gameactionrun_change' run.pk %}">
-      <header>
-        <strong>{{ run.action_name }}</strong>
-        <span class="ai-status-pill">{{ run.status }}</span>
-      </header>
-      <small>{% translate "Iteration" %} {{ run.iteration }} · {{ run.started_at|date:"Y-m-d H:i" }}</small>
-    </a>
-    {% endfor %}
+  <div class="ai-ws-head__actions">
+    {% if original.status == 'completed' %}<span class="ai-ws-pill ai-ws-pill--ok">{{ original.status }}</span>
+    {% elif original.status == 'failed' %}<span class="ai-ws-pill ai-ws-pill--crit">{{ original.status }}</span>
+    {% elif original.status == 'cancelled' %}<span class="ai-ws-pill ai-ws-pill--muted">{{ original.status }}</span>
+    {% else %}<span class="ai-ws-pill ai-ws-pill--warn">{{ original.status }}</span>{% endif %}
+    <a class="button" href="{% url 'admin:ai_hub_gameworkspace_dashboard' original.workspace_id %}">{% translate "Workspace dashboard" %}</a>
   </div>
-</section>
-{% endif %}
+</div>
 
-{% if plan %}
-<section class="module ai-goal-detail">
-  <h2>{% translate "Goal plan" %} (v{{ plan.version }})</h2>
-  {% if plan.summary %}<p>{{ plan.summary }}</p>{% endif %}
-  {% with steps=plan.steps.all %}
-  {% if steps %}
-  <ul>
-    {% for step in steps %}
-    <li>{{ step.order }}. {{ step.title }} — <em>{{ step.status }}</em></li>
-    {% endfor %}
-  </ul>
-  {% endif %}
-  {% endwith %}
-</section>
-{% endif %}
+<div class="ai-tabnav" data-ws-tabs data-tab-default="overview" data-tab-error="config" role="tablist" aria-label="{% translate 'Goal sections' %}">
+  <button type="button" class="ai-tabnav__btn" data-tab-to="overview" role="tab">{% translate "Overview" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="activity" role="tab">{% translate "Activity" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="planmem" role="tab">{% translate "Plan &amp; memory" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="config" role="tab">{% translate "Configuration" %}</button>
+</div>
 
-{% if memory_entries %}
-<section class="module ai-goal-detail">
-  <h2>{% translate "Memory entries" %} ({{ memory_entries|length }})</h2>
-  <ul>
-    {% for entry in memory_entries %}
-    <li><strong>{{ entry.scope_type }}</strong> · importance {{ entry.importance_score }} — {{ entry.content|truncatechars:120 }}</li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
+<div class="ai-tab" data-tab="overview" role="tabpanel">
+  <div class="ai-ws-vitals">
+    <div class="ai-ws-vital"><div class="n">{{ session_history|length }}</div><div class="l">{% translate "Sessions" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ action_runs|length }}</div><div class="l">{% translate "Action runs" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ memory_entries|length }}</div><div class="l">{% translate "Memory" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ original.calculated_priority }}</div><div class="l">{% translate "Priority" %}</div></div>
+  </div>
 
+  <div class="ai-ws-grid" style="margin-top:14px;">
+    <div class="ai-ws-col">
+      {% if is_resumable %}
+      <div class="ai-ws-card" style="--ai-ws-accent:#e0a317;border-top-color:var(--mc-warn);">
+        <div class="ai-ws-card__head"><span class="t" style="color:var(--mc-warn);">{% translate "Resume" %}</span></div>
+        <div class="ai-ws-card__body">
+          <p style="font-size:13px;color:var(--mc-text-soft);margin:0 0 11px;">{% translate "This goal has a waiting session that can be resumed." %}</p>
+          <a class="button" href="{% url 'admin:ai_hub_gamegoal_changelist' %}?status__exact=waiting_approval">{% translate "View waiting approvals" %}</a>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if scheduler_explanation %}
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Scheduler explanation" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            <div class="ai-ws-hrow"><span class="rm" style="min-width:160px;">{% translate "Base priority" %}</span>{{ scheduler_explanation.base_priority }}</div>
+            {% for bonus in scheduler_explanation.bonuses %}
+            <div class="ai-ws-hrow"><span class="rm" style="min-width:160px;">{{ bonus.reason }}</span>+{{ bonus.value }}</div>
+            {% endfor %}
+            <div class="ai-ws-hrow"><span class="rm" style="min-width:160px;"><strong>{% translate "Total" %}</strong></span><strong>{{ scheduler_explanation.total }}</strong></div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Blockers" %}</span></div>
+        <div class="ai-ws-card__body">
+          {% if blockers %}
+          <div class="ai-ws-rows">
+            {% for blocker in blockers %}
+            <div class="ai-ws-row" style="--ai-row-accent:#be123c;"><span class="rt">{{ blocker.title }}</span><span class="rr"><span class="rm">{{ blocker.status }}</span></span></div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No blocking dependencies." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="activity" role="tabpanel">
+  <div class="ai-ws-card">
+    <div class="ai-ws-card__head"><span class="t">{% translate "Session history" %}</span></div>
+    <div class="ai-ws-card__body">
+      {% if session_history %}
+      <div class="ai-ws-rows">
+        {% for session in session_history %}
+        <a class="ai-ws-row" style="--ai-row-accent:#e0a317;" href="{% url 'admin:ai_hub_executionsession_change' session.pk %}">
+          <span class="rt">{% if session.source_label %}{{ session.source_label }}{% else %}{% translate "Session" %} #{{ session.pk }}{% endif %}</span>
+          <span class="rr">
+            {% if session.status == 'success' %}<span class="ai-ws-pill ai-ws-pill--ok">{{ session.status }}</span>
+            {% elif session.status == 'failed' %}<span class="ai-ws-pill ai-ws-pill--crit">{{ session.status }}</span>
+            {% else %}<span class="ai-ws-pill ai-ws-pill--warn">{{ session.status }}</span>{% endif %}
+          </span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">{% translate "No execution sessions for this goal yet." %}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="ai-ws-card" style="margin-top:14px;">
+    <div class="ai-ws-card__head"><span class="t">{% translate "Action runs" %}</span></div>
+    <div class="ai-ws-card__body">
+      {% if action_runs %}
+      <div class="ai-ws-rows">
+        {% for run in action_runs %}
+        <a class="ai-ws-row" style="--ai-row-accent:#be123c;" href="{% url 'admin:ai_hub_gameactionrun_change' run.pk %}">
+          <span class="rt">{{ run.action_name }}</span>
+          <span class="rm">{% translate "iter" %} {{ run.iteration }}</span>
+          <span class="rr"><span class="ai-ws-pill ai-ws-pill--warn">{{ run.status }}</span></span>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">{% translate "No action runs recorded." %}</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="planmem" role="tabpanel">
+  <div class="ai-ws-card">
+    <div class="ai-ws-card__head"><span class="t">{% translate "Goal plan" %}{% if plan %} (v{{ plan.version }}){% endif %}</span></div>
+    <div class="ai-ws-card__body">
+      {% if plan %}
+        {% if plan.summary %}<p style="font-size:13px;color:var(--mc-text-soft);margin:0 0 11px;">{{ plan.summary }}</p>{% endif %}
+        {% with steps=plan.steps.all %}
+        {% if steps %}
+        <div class="ai-ws-rows">
+          {% for step in steps %}
+          <div class="ai-ws-row" style="--ai-row-accent:#be123c;"><span class="rm">{{ step.order }}</span><span class="rt">{{ step.title }}</span><span class="rr"><span class="rm">{{ step.status }}</span></span></div>
+          {% endfor %}
+        </div>
+        {% else %}<div class="empty">{% translate "Plan has no steps." %}</div>{% endif %}
+        {% endwith %}
+      {% else %}
+      <div class="empty">{% translate "No plan attached to this goal." %}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="ai-ws-card" style="margin-top:14px;">
+    <div class="ai-ws-card__head"><span class="t">{% translate "Memory entries" %} {% if memory_entries %}({{ memory_entries|length }}){% endif %}</span></div>
+    <div class="ai-ws-card__body">
+      {% if memory_entries %}
+      <div class="ai-ws-rows">
+        {% for entry in memory_entries %}
+        <div class="ai-ws-row" style="--ai-row-accent:#56b8ca;">
+          <span class="rm">{{ entry.scope_type }}</span>
+          <span class="rt" style="font-weight:400;">{{ entry.content|truncatechars:120 }}</span>
+          <span class="rr"><span class="rm">{{ entry.importance_score }}</span></span>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">{% translate "No memory entries for this goal." %}</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}
+
+{% block inline_field_sets %}
+{% if original %}
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
 {% endblock %}

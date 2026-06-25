@@ -48,6 +48,7 @@ from .services.admin_control_center import (
     build_ai_hub_home_context,
     build_control_center_context,
     build_game_graph_context,
+    build_operations_inbox_context,
 )
 from .services.execution_runner import run_execution_session
 from .services.game_goal_execution import create_goal_execution_session
@@ -212,6 +213,10 @@ def ai_hub_game_workspace_view(request):
 
 def ai_hub_build_wizard_view(request):
     return _workspace_pipeline_admin(request).build_wizard_view(request)
+
+
+def ai_hub_operations_inbox_view(request):
+    return _workspace_pipeline_admin(request).operations_inbox_view(request)
 
 
 class _WizardRollback(Exception):
@@ -503,8 +508,8 @@ def _wizard_build_orchestrator(request, data):
         description=(data.get("pipeline_description") or "").strip(),
         entry_agent=entry_agent,
         is_active=False,
-        input_contract=_parse_json_field(data.get("pipeline_input_contract"), {}),
-        output_contract=_parse_json_field(data.get("pipeline_output_contract"), {}),
+        global_input_contract=_parse_json_field(data.get("pipeline_input_contract"), {}),
+        global_output_contract=_parse_json_field(data.get("pipeline_output_contract"), {}),
     )
 
     # 5. Steps
@@ -735,6 +740,7 @@ class ProviderConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
         "This is the first stop in almost every setup. Add one working provider before you create models."
     )
     ai_hub_section_accent = "provider"
+    change_form_template = "admin/ai_hub/providerconfig/change_form.html"
     ai_hub_section_actions = (
         {"label": _("Add provider"), "url": lambda self: reverse("admin:ai_hub_providerconfig_add"), "default": True},
         {"label": _("Open control center"), "url": lambda self: reverse("admin:ai_hub_control_center")},
@@ -786,6 +792,52 @@ class ProviderConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
             ),
         }),
     )
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        provider = self.get_object(request, object_id)
+        if provider:
+            extra_context["provider_overview"] = self._build_provider_overview(provider)
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    def _build_provider_overview(self, provider):
+        """At-a-glance for the composed Connectivity page (IA Step 6).
+
+        Static (no live HTTP) so the change page stays fast; live health checks
+        remain on the Control Center.
+        """
+        models = list(
+            provider.models.order_by("model_name").values("id", "model_name", "is_active", "supports_tools")
+        )
+        active_models = sum(1 for m in models if m["is_active"])
+        agents_qs = AgentProfile.objects.filter(model_config__provider=provider)
+        agents = list(agents_qs.order_by("name").values("id", "name", "is_active")[:12])
+        agents_total = agents_qs.count()
+        is_ollama = provider.provider_type == ProviderConfig.ProviderType.OLLAMA
+        if is_ollama:
+            creds_label, creds_ok = _("Base URL set"), bool(provider.base_url)
+        else:
+            creds_label, creds_ok = _("Credentials configured"), bool(provider.api_key_env_var)
+        health = [
+            {"label": _("Provider active"), "ok": provider.is_active},
+            {"label": _("Has models"), "ok": bool(models)},
+            {"label": _("Active model available"), "ok": active_models > 0},
+            {"label": creds_label, "ok": creds_ok},
+        ]
+        return {
+            "is_active": provider.is_active,
+            "provider_type": provider.get_provider_type_display(),
+            "base_url": provider.base_url,
+            "vitals": {
+                "models": len(models),
+                "active_models": active_models,
+                "agents": agents_total,
+            },
+            "models": models,
+            "agents": agents,
+            "agents_total": agents_total,
+            "health": health,
+        }
 
 
 @admin.register(ModelConfig)
@@ -963,6 +1015,7 @@ class ToolboxAdmin(AIHubListPageMixin, admin.ModelAdmin):
     )
     ai_hub_section_note = _("Toolboxes are additive access groups; agent grants can still allow or deny individual tools.")
     ai_hub_section_accent = "tool"
+    change_form_template = "admin/ai_hub/toolbox/change_form.html"
     list_display = ("name", "label", "is_active", "tool_count", "updated_at")
     list_filter = ("is_active",)
     search_fields = ("name", "slug", "label", "description")
@@ -983,6 +1036,50 @@ class ToolboxAdmin(AIHubListPageMixin, admin.ModelAdmin):
         return obj.tools_total
 
     tool_count.short_description = _("tools")
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        toolbox = self.get_object(request, object_id)
+        if toolbox:
+            extra_context["toolbox_overview"] = self._build_toolbox_overview(toolbox)
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    def _build_toolbox_overview(self, toolbox):
+        """At-a-glance for the composed Tool Registry page (IA Step 6)."""
+        entries = list(toolbox.tool_entries.select_related("tool").order_by("display_order", "tool__name"))
+        tools = [
+            {
+                "id": e.tool_id,
+                "name": e.tool.label or e.tool.name,
+                "kind": e.tool.get_tool_kind_display(),
+                "risk": e.tool.get_risk_level_display(),
+                "enabled": e.is_enabled,
+            }
+            for e in entries
+        ]
+        enabled = sum(1 for t in tools if t["enabled"])
+        assignments = list(toolbox.agent_assignments.select_related("agent").order_by("agent__name"))
+        agents = [
+            {"id": a.agent_id, "name": a.agent.name, "is_active": a.agent.is_active, "enabled": a.is_enabled}
+            for a in assignments
+        ]
+        health = [
+            {"label": _("Toolbox active"), "ok": toolbox.is_active},
+            {"label": _("Has tools"), "ok": bool(tools)},
+            {"label": _("At least one tool enabled"), "ok": enabled > 0},
+            {"label": _("Assigned to an agent"), "ok": bool(agents)},
+        ]
+        return {
+            "is_active": toolbox.is_active,
+            "vitals": {
+                "tools": len(tools),
+                "enabled": enabled,
+                "agents": len(agents),
+            },
+            "tools": tools,
+            "agents": agents,
+            "health": health,
+        }
 
 
 @admin.register(ToolboxTool)
@@ -1007,6 +1104,7 @@ class KnowledgeCollectionAdmin(AIHubListPageMixin, admin.ModelAdmin):
         "Keep active collections tight and relevant so agents do not receive noisy context."
     )
     ai_hub_section_accent = "knowledge"
+    change_form_template = "admin/ai_hub/knowledgecollection/change_form.html"
     ai_hub_section_actions = (
         {"label": _("Add collection"), "url": lambda self: reverse("admin:ai_hub_knowledgecollection_add"), "default": True},
         {"label": _("View documents"), "url": lambda self: reverse("admin:ai_hub_knowledgedocument_changelist")},
@@ -1043,6 +1141,42 @@ class KnowledgeCollectionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     @admin.display(description="Documents")
     def documents_count(self, obj):
         return obj.documents.count()
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        collection = self.get_object(request, object_id)
+        if collection:
+            extra_context["collection_overview"] = self._build_collection_overview(collection)
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    def _build_collection_overview(self, collection):
+        """At-a-glance for the composed Knowledge Library page (IA Step 6)."""
+        docs = list(
+            collection.documents.order_by("-updated_at").values(
+                "id", "title", "status", "language", "updated_at"
+            )
+        )
+        active_docs = sum(1 for d in docs if d["status"] == KnowledgeDocument.Status.ACTIVE)
+        chunks_total = KnowledgeDocumentChunk.objects.filter(document__collection=collection).count()
+        agents = list(collection.agents.order_by("name").values("id", "name", "is_active"))
+        health = [
+            {"label": _("Collection active"), "ok": collection.is_active},
+            {"label": _("Has active documents"), "ok": active_docs > 0},
+            {"label": _("Used by an agent"), "ok": bool(agents)},
+        ]
+        return {
+            "is_active": collection.is_active,
+            "vitals": {
+                "documents": len(docs),
+                "active_docs": active_docs,
+                "chunks": chunks_total,
+                "agents": len(agents),
+            },
+            "documents": docs[:12],
+            "documents_total": len(docs),
+            "agents": agents,
+            "health": health,
+        }
 
 
 @admin.register(KnowledgeDocument)
@@ -1436,7 +1570,7 @@ class AgentToolGrantAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.Mod
 @admin.register(PipelineDefinition)
 class PipelineDefinitionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
     change_list_template = "admin/ai_hub/pipelinedefinition/change_list.html"
-    change_form_template = "admin/ai_hub/styled_change_form.html"
+    change_form_template = "admin/ai_hub/pipelinedefinition/change_form.html"
     list_display = ("name", "is_active", "entry_agent", "updated_at")
     list_filter = ("is_active",)
     search_fields = ("name", "description")
@@ -1523,6 +1657,58 @@ class PipelineDefinitionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
             ),
         ]
         return custom_urls + urls
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        pipeline = self.get_object(request, object_id)
+        if pipeline:
+            extra_context["pipeline_overview"] = self._build_pipeline_overview(pipeline)
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    def _build_pipeline_overview(self, pipeline):
+        """Read-only 'at a glance' context for the composed Orchestrator Designer page (IA Step 4)."""
+        steps = list(pipeline.steps.select_related("agent").order_by("order"))
+        sessions_qs = ExecutionSession.objects.filter(pipeline=pipeline)
+        recent = list(
+            sessions_qs.order_by("-created_at")[:5].values("id", "status", "source_label")
+        )
+        agent_ids = {s.agent_id for s in steps if s.agent_id}
+        health = [
+            {"label": _("Active"), "ok": pipeline.is_active},
+            {"label": _("Has steps"), "ok": bool(steps)},
+            {"label": _("Entry agent set"), "ok": bool(pipeline.entry_agent_id)},
+            {"label": _("Output contract set"), "ok": bool(pipeline.global_output_contract)},
+        ]
+        return {
+            "is_active": pipeline.is_active,
+            "entry_agent": pipeline.entry_agent,
+            "vitals": {
+                "steps": len(steps),
+                "agents": len(agent_ids),
+                "sessions": sessions_qs.count(),
+                "failed": sessions_qs.filter(status=ExecutionSession.Status.FAILED).count(),
+            },
+            "steps": [
+                {"order": s.order, "agent": s.agent.name if s.agent else "—", "on_error": s.on_error}
+                for s in steps
+            ],
+            "recent_sessions": recent,
+            "health": health,
+        }
+
+    def operations_inbox_view(self, request):
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+        if not request.user.has_perm("ai_hub.view_executionsession"):
+            raise PermissionDenied
+        context = {
+            **self.admin_site.each_context(request),
+            "title": _("Operations Inbox"),
+            "opts": self.model._meta,
+            "can_approve": request.user.has_perm("ai_hub.approve_game_action"),
+            **build_operations_inbox_context(),
+        }
+        return TemplateResponse(request, "admin/ai_hub/operations/inbox.html", context)
 
     def orchestrator_workspace_view(self, request):
         if not self.has_view_or_change_permission(request):
@@ -1753,6 +1939,7 @@ class ExecutionStepRunInline(admin.TabularInline):
 class GameWorkspaceAdmin(AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("GAME workspaces")
     ai_hub_section_description = _("Define the environments that own GAME goals, defaults and policy boundaries.")
+    change_form_template = "admin/ai_hub/gameworkspace/change_form.html"
     list_display = ("name", "is_active", "goal_count", "dashboard_link", "updated_at")
     list_filter = ("is_active",)
     search_fields = ("name", "description")
@@ -1798,6 +1985,46 @@ class GameWorkspaceAdmin(AIHubListPageMixin, admin.ModelAdmin):
             **build_workspace_dashboard_context(workspace, user=request.user),
         }
         return TemplateResponse(request, "admin/ai_hub/gameworkspace/dashboard.html", context)
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        workspace = self.get_object(request, object_id)
+        if workspace:
+            extra_context["workspace_overview"] = self._build_workspace_overview(workspace)
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
+    def _build_workspace_overview(self, workspace):
+        """Light 'at a glance' for the workspace change page; the full operational
+        view stays on the per-workspace dashboard (IA Step 4)."""
+        open_statuses = {"queued", "running", "waiting_info", "waiting_approval", "blocked"}
+        status_rows = list(workspace.goals.values("status").annotate(n=Count("id")).order_by("-n"))
+        goals_total = sum(r["n"] for r in status_rows)
+        open_goals = sum(r["n"] for r in status_rows if r["status"] in open_statuses)
+        sessions_qs = ExecutionSession.objects.filter(goal__workspace=workspace)
+        policy = workspace.default_policy or {}
+        safety = policy.get("safety", {}) if isinstance(policy, dict) else {}
+        budget = policy.get("budget", {}) if isinstance(policy, dict) else {}
+        allowed_actions = policy.get("allowed_actions", []) if isinstance(policy, dict) else []
+        health = [
+            {"label": _("Workspace active"), "ok": workspace.is_active},
+            {"label": _("Has goals"), "ok": goals_total > 0},
+            {"label": _("External writes locked"), "ok": not safety.get("allow_external_writes", False)},
+        ]
+        return {
+            "is_active": workspace.is_active,
+            "dashboard_url": reverse("admin:ai_hub_gameworkspace_dashboard", args=[workspace.pk]),
+            "vitals": {
+                "goals": goals_total,
+                "open": open_goals,
+                "sessions": sessions_qs.count(),
+                "actions": len(allowed_actions) if isinstance(allowed_actions, (list, tuple)) else 0,
+            },
+            "status_rows": status_rows,
+            "allowed_actions": allowed_actions if isinstance(allowed_actions, (list, tuple)) else [],
+            "external_writes": bool(safety.get("allow_external_writes", False)),
+            "budget": budget if isinstance(budget, dict) else {},
+            "health": health,
+        }
 
 
 class GameGoalDependencyInline(admin.TabularInline):
@@ -2179,6 +2406,28 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
                 "final_answer": redact_text(
                     (session.final_context or {}).get("final_answer", "")
                 ),
+            }
+            steps = extra_context["timeline_steps"]
+            extra_context["session_overview"] = {
+                "runtime_kind": session.runtime_kind,
+                "runtime_mode": session.runtime_mode,
+                "status": session.status,
+                "entry_agent": session.entry_agent,
+                "pipeline": session.pipeline,
+                "goal": session.goal,
+                "source_label": session.source_label,
+                "started_at": session.started_at,
+                "finished_at": session.finished_at,
+                "triggered_by": session.triggered_by,
+                "finish_reason": (session.final_context or {}).get("finish_reason", ""),
+                "final_answer": redact_text((session.final_context or {}).get("final_answer", "")),
+                "error": redact_text(session.error_detail) if session.error_detail else "",
+                "vitals": {
+                    "steps": len(steps),
+                    "events": len(timeline_events),
+                    "latency_ms": sum((s.get("latency_ms") or 0) for s in steps),
+                    "failed": sum(1 for s in steps if s.get("status") == "failed"),
+                },
             }
         return super().change_view(request, object_id, form_url, extra_context=extra_context)
 
@@ -3106,6 +3355,11 @@ def _install_ai_hub_workspace_admin_urls():
                 "ai_hub/workspaces/build/",
                 admin.site.admin_view(ai_hub_build_wizard_view),
                 name="ai_hub_workspace_build",
+            ),
+            path(
+                "ai_hub/operations/",
+                admin.site.admin_view(ai_hub_operations_inbox_view),
+                name="ai_hub_operations_inbox",
             ),
         ]
         return custom_urls + original_get_urls()

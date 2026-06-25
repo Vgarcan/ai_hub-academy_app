@@ -2409,10 +2409,11 @@ class HubAdminControlCenterTests(TestCase):
         # root entities stay listed in the "All records" fallback
         self.assertContains(response, "Agent profiles")
         self.assertContains(response, "Pipeline definitions")
-        # demoted supporting models are removed from the index (get_model_perms -> {})
-        self.assertNotContains(response, "Pipeline steps")
-        self.assertNotContains(response, "Execution step runs")
-        self.assertNotContains(response, "Agent toolbox assignments")
+        # supporting models are accessible via the hidden-models toggle (not in the main Django table)
+        self.assertContains(response, "Show supporting tables")
+        self.assertContains(response, "hidden-models-section")
+        self.assertContains(response, "Pipeline steps")
+        self.assertContains(response, "Execution step runs")
 
     def test_demoted_model_changelist_still_reachable(self):
         """Hidden-from-index models keep working URLs (registered, perms intact)."""
@@ -2464,6 +2465,173 @@ class HubAdminControlCenterTests(TestCase):
         self.assertEqual(response.status_code, 302)  # redirect = saved successfully
         self.agent.refresh_from_db()
         self.assertEqual(self.agent.role, "Updated role")
+
+    def test_orchestrator_designer_change_page_is_composed(self):
+        """IA Step 4: PipelineDefinition change page renders the composed designer shell."""
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_pipelinedefinition_change", args=[self.pipeline.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Orchestrator")
+        self.assertContains(response, "data-ws-tabs")
+        self.assertContains(response, 'data-tab="overview"')
+        self.assertContains(response, 'data-tab="steps"')
+        self.assertContains(response, self.agent.name)  # step's agent listed in overview
+
+    def test_game_workspace_change_page_is_composed(self):
+        """IA Step 4: GameWorkspace change page renders the composed workspace shell."""
+        from ai_hub.models import GameWorkspace
+        workspace = GameWorkspace.objects.create(
+            name="Composed WS",
+            default_policy={"allowed_actions": ["submit_for_approval"], "safety": {"allow_external_writes": False}},
+        )
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_gameworkspace_change", args=[workspace.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "data-ws-tabs")
+        self.assertContains(response, "Open dashboard")
+        self.assertContains(response, "Goals by status")
+
+    def test_goal_detail_change_page_is_composed(self):
+        """IA Step 4: GameGoal change page renders the composed goal-detail shell."""
+        from ai_hub.models import GameWorkspace, GameGoal
+        workspace = GameWorkspace.objects.create(name="Goal WS")
+        goal = GameGoal.objects.create(workspace=workspace, title="Composed goal", description="desc")
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_gamegoal_change", args=[goal.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Goal Detail")
+        self.assertContains(response, "data-ws-tabs")
+        self.assertContains(response, 'data-tab="activity"')
+        self.assertContains(response, 'data-tab="planmem"')
+
+    def test_connectivity_provider_change_page_is_composed(self):
+        """IA Step 6: ProviderConfig change page renders the composed Connectivity shell."""
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_providerconfig_change", args=[self.provider.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Connectivity")
+        self.assertContains(response, "data-ws-tabs")
+        self.assertContains(response, 'data-tab="overview"')
+        self.assertContains(response, 'data-tab="config"')
+        self.assertContains(response, self.model.model_name)   # model listed in overview
+        self.assertContains(response, self.agent.name)         # agent reachable via this provider
+        self.assertContains(response, 'name="name"')           # editable field still present
+
+    def test_connectivity_provider_save_still_works(self):
+        """IA Step 6: wrapping the provider form in a tab panel must not break submission."""
+        client = Client()
+        client.force_login(self.user)
+        data = {
+            "name": "Ollama LAN renamed",
+            "provider_type": ProviderConfig.ProviderType.OLLAMA,
+            "is_active": "on",
+            "base_url": "http://localhost:11434",
+            "default_timeout": "60",
+            "api_key_env_var": "",
+            "_save": "Save",
+        }
+        response = client.post(reverse("admin:ai_hub_providerconfig_change", args=[self.provider.id]), data)
+        self.assertEqual(response.status_code, 302)
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.name, "Ollama LAN renamed")
+
+    def test_knowledge_collection_change_page_is_composed(self):
+        """IA Step 6: KnowledgeCollection change page renders the composed Library shell."""
+        from ai_hub.models import KnowledgeCollection, KnowledgeDocument
+        collection = KnowledgeCollection.objects.create(name="Support rules", is_active=True)
+        KnowledgeDocument.objects.create(
+            collection=collection, title="Refund policy", status=KnowledgeDocument.Status.ACTIVE
+        )
+        self.agent.knowledge_collections.add(collection)
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_knowledgecollection_change", args=[collection.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Knowledge Library")
+        self.assertContains(response, "data-ws-tabs")
+        self.assertContains(response, 'data-tab="overview"')
+        self.assertContains(response, "Refund policy")        # document listed in overview
+        self.assertContains(response, self.agent.name)        # agent using the collection
+
+    def test_knowledge_collection_save_still_works(self):
+        """IA Step 6: inlines wrapped in a tab panel must still submit (document formset)."""
+        from ai_hub.models import KnowledgeCollection
+        collection = KnowledgeCollection.objects.create(name="Editable collection", is_active=True)
+        client = Client()
+        client.force_login(self.user)
+        data = {
+            "name": "Editable collection renamed",
+            "description": "updated",
+            "is_active": "on",
+            "documents-TOTAL_FORMS": "0",
+            "documents-INITIAL_FORMS": "0",
+            "documents-MIN_NUM_FORMS": "0",
+            "documents-MAX_NUM_FORMS": "1000",
+            "_save": "Save",
+        }
+        response = client.post(reverse("admin:ai_hub_knowledgecollection_change", args=[collection.id]), data)
+        self.assertEqual(response.status_code, 302)
+        collection.refresh_from_db()
+        self.assertEqual(collection.name, "Editable collection renamed")
+
+    def test_tool_registry_toolbox_change_page_is_composed(self):
+        """IA Step 6: Toolbox change page renders the composed Tool Registry shell."""
+        from ai_hub.models import Toolbox, ToolboxTool, ToolDefinition
+        tool = ToolDefinition.objects.create(name="fetch_profile", label="Fetch profile", is_active=True)
+        toolbox = Toolbox.objects.create(name="support_box", slug="support-box", label="Support box", is_active=True)
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool, is_enabled=True, display_order=1)
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_toolbox_change", args=[toolbox.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Tool Registry")
+        self.assertContains(response, "data-ws-tabs")
+        self.assertContains(response, 'data-tab="overview"')
+        self.assertContains(response, "Fetch profile")        # tool listed in overview
+
+    def test_operations_inbox_renders_empty(self):
+        """IA Step 5: inbox renders the queue shell and an all-clear state when idle."""
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_operations_inbox"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Needs a human")
+        self.assertContains(response, "inbox-filter")
+        self.assertContains(response, "All clear")
+
+    def test_operations_inbox_lists_failed_session(self):
+        """IA Step 5: a failed session surfaces as an inbox item under Failures."""
+        session = create_execution_session(
+            source_label="Boom session",
+            entry_agent=self.agent,
+            triggered_by=self.user,
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            goal_text="trigger a failure",
+        )
+        session.status = ExecutionSession.Status.FAILED
+        session.error_detail = "kaboom"
+        session.save(update_fields=["status", "error_detail"])
+        client = Client()
+        client.force_login(self.user)
+        response = client.get(reverse("admin:ai_hub_operations_inbox"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Boom session")
+        self.assertContains(response, 'data-cat="failure"')
+        self.assertNotContains(response, "All clear")
+
+    def test_operations_inbox_requires_execution_permission(self):
+        """IA Step 5: inbox is gated behind view_executionsession like the workspaces."""
+        weak_staff = get_user_model().objects.create_user(
+            username="weakstaff", password="pw", is_staff=True
+        )
+        client = Client()
+        client.force_login(weak_staff)
+        response = client.get(reverse("admin:ai_hub_operations_inbox"))
+        self.assertEqual(response.status_code, 403)
 
     def test_clean_workspace_urls_render(self):
         client = Client()
@@ -2610,6 +2778,38 @@ class HubAdminControlCenterTests(TestCase):
         self.assertEqual(goal.workspace.name, "RegressionWS")
         # Service should have transitioned goal queued → running
         self.assertEqual(goal.status, GameGoal.Status.RUNNING)
+
+    def test_build_wizard_orchestrator_creates_pipeline(self):
+        """Regression: the Orchestrator wizard must create a pipeline, not 500.
+
+        It previously passed input_contract/output_contract kwargs to
+        PipelineDefinition.objects.create(), but the model fields are
+        global_input_contract/global_output_contract — a TypeError on submit.
+        """
+        from ai_hub.models import PipelineDefinition
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build") + "?kind=orchestrator",
+            {
+                "wizard_kind": "orchestrator",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "pipeline_name": "Wizard pipeline",
+                "pipeline_description": "Built by the wizard",
+                "pipeline_input_contract": '{"required": ["dream_id"]}',
+                "pipeline_output_contract": '{"required": ["result"]}',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)  # redirect = created successfully
+        pipeline = PipelineDefinition.objects.filter(name="Wizard pipeline").first()
+        self.assertIsNotNone(pipeline, "Orchestrator wizard should have created a pipeline")
+        self.assertEqual(pipeline.global_input_contract, {"required": ["dream_id"]})
+        self.assertEqual(pipeline.global_output_contract, {"required": ["result"]})
 
     def test_home_vitals_running_and_waiting_counts_are_separate(self):
         """Regression: vitals must carry separate 'running' and 'waiting' keys, not a hardcoded zero."""
@@ -2858,6 +3058,12 @@ class HubExecutionSessionEndpointTests(TestCase):
         self.assertContains(response, "Timeline complete.")
         self.assertContains(response, "game_iteration")
         self.assertContains(response, "25 ms")
+        # IA Step 4: composed Session Explorer shell
+        self.assertContains(response, "Session Explorer")
+        self.assertContains(response, "data-ws-tabs")
+        self.assertContains(response, 'data-tab="overview"')
+        self.assertContains(response, 'data-tab="timeline"')
+        self.assertContains(response, "At a glance")
 
 
 # ============================================================

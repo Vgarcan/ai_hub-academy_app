@@ -5353,3 +5353,40 @@ table.mc-cat {
   .ai-ws-grid { grid-template-columns: 1fr; }
   .ai-ws-vitals { grid-template-columns: 1fr 1fr; }
 }
+
+/* Operations Inbox (IA Step 5) */
+.ai-inbox-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.ai-inbox-chips .ai-chip { cursor: pointer; font-family: var(--mc-mono, ui-monospace, monospace); }
+.ai-inbox-chips .ai-chip--on { background: var(--mc-accent-soft); color: var(--mc-text); border-color: var(--mc-accent-fill); }
+.ai-inbox-rows { display: flex; flex-direction: column; gap: 8px; }
+.ai-inbox-rows [hidden] { display: none; }
+.ai-inbox-rows .ai-ws-row .rt { flex: 1; min-width: 0; }
+.ai-inbox-rows form { margin: 0; }
+
+/* Hidden models toggle (app_index — supporting tables) */
+.mc-hidden-models { display: flex; flex-direction: column; gap: 16px; }
+.mc-hgroup { }
+.mc-hgroup__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--mc-muted);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--mc-border);
+  margin-bottom: 4px;
+}
+.mc-hrow {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--mc-border) 50%, transparent);
+  text-decoration: none;
+  color: var(--mc-text);
+  font-size: 13px;
+  transition: background .12s;
+}
+.mc-hrow:hover { background: var(--mc-card-bg, rgba(127,127,127,.04)); }
+.mc-hrow__name { font-weight: 500; white-space: nowrap; }
+.mc-hrow__why { font-size: 11px; color: var(--mc-muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

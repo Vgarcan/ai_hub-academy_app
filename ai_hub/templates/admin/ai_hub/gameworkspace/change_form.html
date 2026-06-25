@@ -1,0 +1,106 @@
+{% extends "admin/change_form.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step4-v1">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-step4-v1" defer></script>
+{% endblock %}
+
+{% block field_sets %}
+{% if original %}
+<div class="ai-ws-head" style="--ai-ws-accent:#be123c;">
+  <div>
+    <div class="ai-ws-head__eyebrow">{% translate "GAME · Workspace" %}</div>
+    <h2 class="ai-ws-head__title">{{ original.name }}</h2>
+    <div class="ai-ws-head__meta">
+      {{ workspace_overview.vitals.goals }} {% translate "goals" %} · {{ workspace_overview.vitals.open }} {% translate "open" %} · {{ workspace_overview.vitals.sessions }} {% translate "sessions" %}
+    </div>
+  </div>
+  <div class="ai-ws-head__actions">
+    {% if original.is_active %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "active" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "inactive" %}</span>{% endif %}
+    <a class="button" href="{{ workspace_overview.dashboard_url }}">{% translate "Open dashboard" %}</a>
+  </div>
+</div>
+
+<div class="ai-tabnav" data-ws-tabs data-tab-default="overview" data-tab-error="config" role="tablist" aria-label="{% translate 'Workspace sections' %}">
+  <button type="button" class="ai-tabnav__btn" data-tab-to="overview" role="tab">{% translate "Overview" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="config" role="tab">{% translate "Configuration" %}</button>
+</div>
+
+<div class="ai-tab" data-tab="overview" role="tabpanel">
+  <div class="ai-ws-vitals">
+    <div class="ai-ws-vital"><div class="n">{{ workspace_overview.vitals.goals }}</div><div class="l">{% translate "Goals" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ workspace_overview.vitals.open }}</div><div class="l">{% translate "Open" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ workspace_overview.vitals.sessions }}</div><div class="l">{% translate "Sessions" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ workspace_overview.vitals.actions }}</div><div class="l">{% translate "Allowed actions" %}</div></div>
+  </div>
+
+  <div class="ai-ws-grid" style="margin-top:14px;">
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Goals by status" %}</span><a href="{% url 'admin:ai_hub_gamegoal_changelist' %}?workspace__id__exact={{ original.id }}">{% translate "all goals" %}</a></div>
+        <div class="ai-ws-card__body">
+          {% if workspace_overview.status_rows %}
+          <div class="ai-ws-rows">
+            {% for r in workspace_overview.status_rows %}
+            <div class="ai-ws-row" style="--ai-row-accent:#be123c;">
+              <span class="rt">{{ r.status }}</span>
+              <span class="rr"><span class="rm">{{ r.n }}</span></span>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No goals in this workspace yet." %}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Policy" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            <div class="ai-ws-hrow"><span class="rm" style="min-width:150px;">{% translate "External writes" %}</span>
+              {% if workspace_overview.external_writes %}<span class="ai-ws-pill ai-ws-pill--warn">{% translate "allowed" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "locked" %}</span>{% endif %}
+            </div>
+            <div class="ai-ws-hrow"><span class="rm" style="min-width:150px;">{% translate "Allowed actions" %}</span>
+              {% if workspace_overview.allowed_actions %}{{ workspace_overview.allowed_actions|join:", " }}{% else %}<span style="color:var(--mc-faint);">{% translate "none configured" %}</span>{% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Health" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            {% for h in workspace_overview.health %}
+            <div class="ai-ws-hrow"><span class="dot {% if h.ok %}dot--ok{% else %}dot--bad{% endif %}"></span>{{ h.label }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Operational view" %}</span></div>
+        <div class="ai-ws-card__body">
+          <p style="font-size:13px;color:var(--mc-muted);margin:0 0 11px;">{% translate "The full dashboard has eligible goals, approvals, blocked goals and recent activity." %}</p>
+          <a class="button" href="{{ workspace_overview.dashboard_url }}">{% translate "Open dashboard" %}</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}

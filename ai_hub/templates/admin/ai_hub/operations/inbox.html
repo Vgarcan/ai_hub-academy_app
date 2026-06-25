@@ -1,0 +1,118 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step5-v1">
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate "Home" %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label='ai_hub' %}">AI Hub</a>
+  &rsaquo; {% translate "Operations Inbox" %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="ai-console">
+
+  <header class="mc-head">
+    <div>
+      <div class="mc-eyebrow">// AI Hub &middot; {% translate "Operations" %}</div>
+      <h1>{% translate "Needs a human" %}</h1>
+      <p>{% translate "Approvals, paused sessions, failures and blocked goals — one queue to act on." %}</p>
+    </div>
+    <nav class="mc-head__actions" aria-label="{% translate 'Operations actions' %}">
+      <a class="mc-btn" href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "Session Explorer" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_control_center' %}">{% translate "Control Center" %}</a>
+    </nav>
+  </header>
+
+  <div class="ai-inbox-chips" id="inbox-filter" role="tablist" aria-label="{% translate 'Filter by type' %}">
+    <button type="button" class="ai-chip ai-chip--on" data-filter="all">{% translate "All" %} · {{ operations_inbox.counts.total }}</button>
+    <button type="button" class="ai-chip" data-filter="approval">{% translate "Approvals" %} · {{ operations_inbox.counts.approvals }}</button>
+    <button type="button" class="ai-chip" data-filter="waiting">{% translate "Waiting info" %} · {{ operations_inbox.counts.waiting }}</button>
+    <button type="button" class="ai-chip" data-filter="failure">{% translate "Failures" %} · {{ operations_inbox.counts.failures }}</button>
+    <button type="button" class="ai-chip" data-filter="blocked">{% translate "Blocked goals" %} · {{ operations_inbox.counts.blocked }}</button>
+  </div>
+
+  {% if operations_inbox.counts.total == 0 %}
+  <div class="ai-ws-card" style="margin-top:16px;">
+    <div class="ai-ws-card__body" style="text-align:center;padding:32px;">
+      <div style="font-size:16px;font-weight:600;color:var(--mc-text);margin-bottom:6px;">{% translate "All clear" %}</div>
+      <div style="font-size:13px;color:var(--mc-muted);">{% translate "Nothing is waiting on a human right now." %}</div>
+    </div>
+  </div>
+  {% else %}
+
+  <div class="ai-inbox-rows" style="margin-top:16px;">
+
+    {% for ap in operations_inbox.approvals %}
+    <div class="ai-ws-row" data-cat="approval" style="--ai-row-accent:#e0a317;">
+      <span class="ai-ws-pill ai-ws-pill--warn">{% translate "approval" %}</span>
+      <span class="rt">{{ ap.action_name }} <span class="rm">· {{ ap.goal_title }}</span></span>
+      <span class="rm">{{ ap.created_at|timesince }}</span>
+      <span class="rr">
+        {% if can_approve %}
+        <form method="post" action="{{ ap.approve_url }}">{% csrf_token %}<button class="button" type="submit">{% translate "Approve" %}</button></form>
+        <form method="post" action="{{ ap.reject_url }}">{% csrf_token %}<button class="button" type="submit">{% translate "Reject" %}</button></form>
+        {% endif %}
+        <a class="button" href="{{ ap.url }}">{% translate "Open" %}</a>
+      </span>
+    </div>
+    {% endfor %}
+
+    {% for w in operations_inbox.waiting %}
+    <div class="ai-ws-row" data-cat="waiting" style="--ai-row-accent:#8b8cf0;">
+      <span class="ai-ws-pill" style="color:#8b8cf0;">{% translate "waiting info" %}</span>
+      <span class="rt">{{ w.goal_title }} <span class="rm">· {{ w.reason }}</span></span>
+      <span class="rm">{{ w.created_at|timesince }}</span>
+      <span class="rr">
+        {% if w.goal_url %}<a class="button" href="{{ w.goal_url }}">{% translate "Goal" %}</a>{% endif %}
+        <a class="button" href="{{ w.url }}">{% translate "Open" %}</a>
+      </span>
+    </div>
+    {% endfor %}
+
+    {% for f in operations_inbox.failures %}
+    <div class="ai-ws-row" data-cat="failure" style="--ai-row-accent:#DC2626;">
+      <span class="ai-ws-pill ai-ws-pill--crit">{% translate "failed" %}</span>
+      <span class="rt">{{ f.label }} <span class="rm">· {{ f.runtime_kind }}{% if f.error %} · {{ f.error }}{% endif %}</span></span>
+      <span class="rm">{{ f.created_at|timesince }}</span>
+      <span class="rr"><a class="button" href="{{ f.url }}">{% translate "Open" %}</a></span>
+    </div>
+    {% endfor %}
+
+    {% for b in operations_inbox.blocked %}
+    <div class="ai-ws-row" data-cat="blocked" style="--ai-row-accent:#be123c;">
+      <span class="ai-ws-pill" style="color:#be123c;">{% translate "blocked" %}</span>
+      <span class="rt">{{ b.title }} <span class="rm">· {{ b.workspace }}</span></span>
+      <span class="rr"><a class="button" href="{{ b.url }}">{% translate "Open" %}</a></span>
+    </div>
+    {% endfor %}
+
+  </div>
+  {% endif %}
+
+</div>
+
+<script>
+  (function () {
+    var bar = document.getElementById("inbox-filter");
+    if (!bar) return;
+    var rows = document.querySelectorAll(".ai-inbox-rows [data-cat]");
+    bar.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-filter]");
+      if (!btn) return;
+      var f = btn.getAttribute("data-filter");
+      bar.querySelectorAll("[data-filter]").forEach(function (x) {
+        x.classList.toggle("ai-chip--on", x === btn);
+      });
+      rows.forEach(function (r) {
+        r.hidden = !(f === "all" || r.getAttribute("data-cat") === f);
+      });
+    });
+  })();
+</script>
+{% endblock %}

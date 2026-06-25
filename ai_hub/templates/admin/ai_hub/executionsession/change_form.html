@@ -3,74 +3,177 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260606-guided-v8">
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step4-v1">
 {% endblock %}
 
-{% block after_field_sets %}
+{% block extrahead %}
 {{ block.super }}
-{% if timeline_summary %}
-<section class="ai-session-timeline module">
-  <header class="ai-session-timeline__header">
-    <div>
-      <h2>{% translate "Execution timeline" %}</h2>
-      <p>
-        {{ timeline_summary.runtime_kind|upper }} · {{ timeline_summary.status }}
-        {% if timeline_summary.finish_reason %} · {{ timeline_summary.finish_reason }}{% endif %}
-      </p>
+<script src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-step4-v1" defer></script>
+{% endblock %}
+
+{% block field_sets %}
+{% if original %}
+<div class="ai-ws-head" style="--ai-ws-accent:#e0a317;">
+  <div>
+    <div class="ai-ws-head__eyebrow">{% translate "Operations · Session Explorer" %}</div>
+    <h2 class="ai-ws-head__title">{% if original.source_label %}{{ original.source_label }}{% else %}{% translate "Session" %} #{{ original.id }}{% endif %}</h2>
+    <div class="ai-ws-head__meta">
+      #{{ original.id }} · {{ session_overview.runtime_kind }} · {{ session_overview.runtime_mode }}
+      {% if session_overview.entry_agent %} · {{ session_overview.entry_agent.name }}{% endif %}
+      {% if session_overview.pipeline %} · {{ session_overview.pipeline.name }}{% endif %}
     </div>
-    <strong>{{ timeline_summary.total }}</strong>
-  </header>
-
-  {% if timeline_summary.final_answer %}
-    <article class="ai-session-timeline__answer">
-      <span>{% translate "Final answer" %}</span>
-      <p>{{ timeline_summary.final_answer }}</p>
-    </article>
-  {% endif %}
-
-  <div class="ai-session-timeline__list">
-    {% for event in timeline_events %}
-      <article class="ai-session-step ai-session-step--{{ event.status }}">
-        <header>
-          <div>
-            <span>{{ event.kind|upper }} · {{ event.action|default:"event" }}</span>
-            <h3>
-              {% if event.agent %}{{ event.agent }}{% else %}{% translate "System" %}{% endif %}
-            </h3>
-          </div>
-          <a class="button" href="{{ event.change_url }}">{% translate "Open" %}</a>
-        </header>
-        <dl>
-          <div>
-            <dt>{% translate "Status" %}</dt>
-            <dd>{{ event.status }}</dd>
-          </div>
-          <div>
-            <dt>{% translate "Action" %}</dt>
-            <dd>{{ event.action|default:"-" }}</dd>
-          </div>
-          <div>
-            <dt>{% translate "Time" %}</dt>
-            <dd>{{ event.timestamp|date:"Y-m-d H:i:s" }}</dd>
-          </div>
-          <div>
-            <dt>{% translate "Latency" %}</dt>
-            <dd>{% if event.latency_ms != None %}{{ event.latency_ms }} ms{% else %}-{% endif %}</dd>
-          </div>
-        </dl>
-        {% if event.summary %}
-          <p>{{ event.summary|truncatechars:420 }}</p>
-        {% endif %}
-        {% if event.error %}
-          <p class="ai-session-step__error">{{ event.error }}</p>
-        {% endif %}
-      </article>
-    {% empty %}
-      <article class="ai-session-timeline__empty">
-        {% translate "No timeline events have been recorded yet." %}
-      </article>
-    {% endfor %}
   </div>
-</section>
+  <div class="ai-ws-head__actions">
+    {% if original.status == 'success' %}<span class="ai-ws-pill ai-ws-pill--ok">{{ original.status }}</span>
+    {% elif original.status == 'failed' %}<span class="ai-ws-pill ai-ws-pill--crit">{{ original.status }}</span>
+    {% elif original.status == 'cancelled' %}<span class="ai-ws-pill ai-ws-pill--muted">{{ original.status }}</span>
+    {% else %}<span class="ai-ws-pill ai-ws-pill--warn">{{ original.status }}</span>{% endif %}
+    <a class="button" href="{% url 'admin:ai_hub_executionsession_changelist' %}">{% translate "All sessions" %}</a>
+  </div>
+</div>
+
+<div class="ai-tabnav" data-ws-tabs data-tab-default="overview" data-tab-error="config" role="tablist" aria-label="{% translate 'Session sections' %}">
+  <button type="button" class="ai-tabnav__btn" data-tab-to="overview" role="tab">{% translate "Overview" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="timeline" role="tab">{% translate "Timeline" %}{% if session_overview.vitals.failed %}<span class="ai-tabnav__flag"></span>{% endif %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="config" role="tab">{% translate "Configuration" %}</button>
+</div>
+
+<div class="ai-tab" data-tab="overview" role="tabpanel">
+  <div class="ai-ws-vitals">
+    <div class="ai-ws-vital"><div class="n">{{ session_overview.vitals.steps }}</div><div class="l">{% translate "Steps" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ session_overview.vitals.events }}</div><div class="l">{% translate "Events" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ session_overview.vitals.latency_ms }}</div><div class="l">{% translate "Latency ms" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ session_overview.vitals.failed }}</div><div class="l">{% translate "Failed steps" %}</div></div>
+  </div>
+
+  <div class="ai-ws-grid" style="margin-top:14px;">
+    <div class="ai-ws-col">
+      {% if session_overview.final_answer %}
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Final answer" %}</span></div>
+        <div class="ai-ws-card__body" style="color:var(--mc-text-soft);font-size:13.5px;line-height:1.6;white-space:pre-wrap;">{{ session_overview.final_answer }}</div>
+      </div>
+      {% endif %}
+
+      {% if session_overview.error %}
+      <div class="ai-ws-card" style="--ai-ws-accent:#DC2626;border-top-color:var(--mc-error);">
+        <div class="ai-ws-card__head"><span class="t" style="color:var(--mc-error);">{% translate "Error detail" %}</span></div>
+        <div class="ai-ws-card__body" style="color:var(--mc-text-soft);font-size:13px;line-height:1.6;white-space:pre-wrap;">{{ session_overview.error }}</div>
+      </div>
+      {% endif %}
+
+      {% if not session_overview.final_answer and not session_overview.error %}
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Result" %}</span></div>
+        <div class="ai-ws-card__body"><span class="empty">{% translate "No final answer recorded yet. Check the Timeline for progress." %}</span></div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "At a glance" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            <div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Runtime" %}</span>{{ session_overview.runtime_kind }} · {{ session_overview.runtime_mode }}</div>
+            {% if session_overview.entry_agent %}<div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Agent" %}</span>{{ session_overview.entry_agent.name }}</div>{% endif %}
+            {% if session_overview.pipeline %}<div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Pipeline" %}</span>{{ session_overview.pipeline.name }}</div>{% endif %}
+            {% if session_overview.goal %}<div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Goal" %}</span>{{ session_overview.goal.title }}</div>{% endif %}
+            {% if session_overview.finish_reason %}<div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Finish reason" %}</span>{{ session_overview.finish_reason }}</div>{% endif %}
+            {% if session_overview.started_at %}<div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Started" %}</span>{{ session_overview.started_at|date:"Y-m-d H:i" }}</div>{% endif %}
+            {% if session_overview.finished_at %}<div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Finished" %}</span>{{ session_overview.finished_at|date:"Y-m-d H:i" }}</div>{% endif %}
+            {% if session_overview.triggered_by %}<div class="ai-ws-hrow"><span class="rm" style="min-width:96px;">{% translate "Triggered by" %}</span>{{ session_overview.triggered_by }}</div>{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="timeline" role="tabpanel">
+  {% if timeline_summary %}
+  <section class="ai-session-timeline module">
+    <header class="ai-session-timeline__header">
+      <div>
+        <h2>{% translate "Execution timeline" %}</h2>
+        <p>
+          {{ timeline_summary.runtime_kind|upper }} · {{ timeline_summary.status }}
+          {% if timeline_summary.finish_reason %} · {{ timeline_summary.finish_reason }}{% endif %}
+        </p>
+      </div>
+      <strong>{{ timeline_summary.total }}</strong>
+    </header>
+
+    {% if timeline_summary.final_answer %}
+      <article class="ai-session-timeline__answer">
+        <span>{% translate "Final answer" %}</span>
+        <p>{{ timeline_summary.final_answer }}</p>
+      </article>
+    {% endif %}
+
+    <div class="ai-session-timeline__list">
+      {% for event in timeline_events %}
+        <article class="ai-session-step ai-session-step--{{ event.status }}">
+          <header>
+            <div>
+              <span>{{ event.kind|upper }} · {{ event.action|default:"event" }}</span>
+              <h3>
+                {% if event.agent %}{{ event.agent }}{% else %}{% translate "System" %}{% endif %}
+              </h3>
+            </div>
+            <a class="button" href="{{ event.change_url }}">{% translate "Open" %}</a>
+          </header>
+          <dl>
+            <div>
+              <dt>{% translate "Status" %}</dt>
+              <dd>{{ event.status }}</dd>
+            </div>
+            <div>
+              <dt>{% translate "Action" %}</dt>
+              <dd>{{ event.action|default:"-" }}</dd>
+            </div>
+            <div>
+              <dt>{% translate "Time" %}</dt>
+              <dd>{{ event.timestamp|date:"Y-m-d H:i:s" }}</dd>
+            </div>
+            <div>
+              <dt>{% translate "Latency" %}</dt>
+              <dd>{% if event.latency_ms != None %}{{ event.latency_ms }} ms{% else %}-{% endif %}</dd>
+            </div>
+          </dl>
+          {% if event.summary %}
+            <p>{{ event.summary|truncatechars:420 }}</p>
+          {% endif %}
+          {% if event.error %}
+            <p class="ai-session-step__error">{{ event.error }}</p>
+          {% endif %}
+        </article>
+      {% empty %}
+        <article class="ai-session-timeline__empty">
+          {% translate "No timeline events have been recorded yet." %}
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% else %}
+  <div class="ai-ws-card"><div class="ai-ws-card__body"><span class="empty">{% translate "No timeline available." %}</span></div></div>
+  {% endif %}
+</div>
+
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}
+
+{% block inline_field_sets %}
+{% if original %}
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
 {% endif %}
 {% endblock %}

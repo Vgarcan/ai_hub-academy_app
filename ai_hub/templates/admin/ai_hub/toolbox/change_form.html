@@ -1,0 +1,122 @@
+{% extends "admin/change_form.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step6-v1">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-step6-v1" defer></script>
+{% endblock %}
+
+{% block field_sets %}
+{% if original %}
+<div class="ai-ws-head" style="--ai-ws-accent:#c2410c;">
+  <div>
+    <div class="ai-ws-head__eyebrow">{% translate "Foundation · Tool Registry" %}</div>
+    <h2 class="ai-ws-head__title">{{ original.label|default:original.name }}</h2>
+    <div class="ai-ws-head__meta">
+      {{ toolbox_overview.vitals.tools }} {% translate "tools" %}
+      · {{ toolbox_overview.vitals.enabled }} {% translate "enabled" %}
+      · {{ toolbox_overview.vitals.agents }} {% translate "agents" %}
+    </div>
+  </div>
+  <div class="ai-ws-head__actions">
+    {% if toolbox_overview.is_active %}
+      <span class="ai-ws-pill ai-ws-pill--ok">{% translate "active" %}</span>
+    {% else %}
+      <span class="ai-ws-pill ai-ws-pill--muted">{% translate "inactive" %}</span>
+    {% endif %}
+    <a class="button" href="{% url 'admin:ai_hub_tooldefinition_changelist' %}">{% translate "All tools" %}</a>
+  </div>
+</div>
+
+<div class="ai-tabnav" data-ws-tabs data-tab-default="overview" data-tab-error="config" role="tablist" aria-label="{% translate 'Toolbox sections' %}">
+  <button type="button" class="ai-tabnav__btn" data-tab-to="overview" role="tab">{% translate "Overview" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="config" role="tab">{% translate "Configuration" %}</button>
+</div>
+
+<div class="ai-tab" data-tab="overview" role="tabpanel">
+  <div class="ai-ws-vitals">
+    <div class="ai-ws-vital"><div class="n">{{ toolbox_overview.vitals.tools }}</div><div class="l">{% translate "Tools" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ toolbox_overview.vitals.enabled }}</div><div class="l">{% translate "Enabled" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ toolbox_overview.vitals.agents }}</div><div class="l">{% translate "Agents" %}</div></div>
+  </div>
+
+  <div class="ai-ws-grid" style="margin-top:14px;">
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Tools in this toolbox" %}</span><a href="#" data-tab-to="config" class="ai-ws-jump">{% translate "manage" %}</a></div>
+        <div class="ai-ws-card__body">
+          {% if toolbox_overview.tools %}
+          <div class="ai-ws-rows">
+            {% for t in toolbox_overview.tools %}
+            <a class="ai-ws-row" style="--ai-row-accent:#c2410c;" href="{% url 'admin:ai_hub_tooldefinition_change' t.id %}">
+              <span class="rt">{{ t.name }}</span>
+              <span class="rm">{{ t.kind }} · {{ t.risk }}</span>
+              <span class="rr">{% if t.enabled %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "on" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "off" %}</span>{% endif %}</span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No tools in this toolbox yet. Add tools in the Configuration tab." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Health" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            {% for h in toolbox_overview.health %}
+            <div class="ai-ws-hrow"><span class="dot {% if h.ok %}dot--ok{% else %}dot--bad{% endif %}"></span>{{ h.label }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Agents using this toolbox" %}</span></div>
+        <div class="ai-ws-card__body">
+          {% if toolbox_overview.agents %}
+          <div class="ai-ws-rows">
+            {% for a in toolbox_overview.agents %}
+            <a class="ai-ws-row" style="--ai-row-accent:#be123c;" href="{% url 'admin:ai_hub_agentprofile_change' a.id %}">
+              <span class="rt">{{ a.name }}</span>
+              <span class="rr">
+                {% if a.enabled %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "enabled" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "disabled" %}</span>{% endif %}
+                {% if not a.is_active %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "agent off" %}</span>{% endif %}
+              </span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No agents are assigned this toolbox yet." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}
+
+{% block inline_field_sets %}
+{% if original %}
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}

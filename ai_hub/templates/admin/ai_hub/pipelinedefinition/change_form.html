@@ -1,0 +1,121 @@
+{% extends "admin/change_form.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-step4-v1">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-step4-v1" defer></script>
+{% endblock %}
+
+{% block field_sets %}
+{% if original %}
+<div class="ai-ws-head" style="--ai-ws-accent:#047857;">
+  <div>
+    <div class="ai-ws-head__eyebrow">{% translate "Orchestrator · Designer" %}</div>
+    <h2 class="ai-ws-head__title">{{ original.name }}</h2>
+    <div class="ai-ws-head__meta">
+      {{ pipeline_overview.vitals.steps }} {% translate "steps" %}
+      {% if pipeline_overview.entry_agent %} · {% translate "entry" %}: {{ pipeline_overview.entry_agent.name }}{% endif %}
+    </div>
+  </div>
+  <div class="ai-ws-head__actions">
+    {% if original.is_active %}<span class="ai-ws-pill ai-ws-pill--ok">{% translate "active" %}</span>{% else %}<span class="ai-ws-pill ai-ws-pill--muted">{% translate "inactive" %}</span>{% endif %}
+    <a class="button" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Orchestrator" %}</a>
+    <a class="button" href="{% url 'admin:ai_hub_control_center' %}">{% translate "Control Center" %}</a>
+  </div>
+</div>
+
+<div class="ai-tabnav" data-ws-tabs data-tab-default="overview" data-tab-error="config" role="tablist" aria-label="{% translate 'Pipeline sections' %}">
+  <button type="button" class="ai-tabnav__btn" data-tab-to="overview" role="tab">{% translate "Overview" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="config" role="tab">{% translate "Configuration" %}</button>
+  <button type="button" class="ai-tabnav__btn" data-tab-to="steps" role="tab">{% translate "Steps" %}</button>
+</div>
+
+<div class="ai-tab" data-tab="overview" role="tabpanel">
+  <div class="ai-ws-vitals">
+    <div class="ai-ws-vital"><div class="n">{{ pipeline_overview.vitals.steps }}</div><div class="l">{% translate "Steps" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ pipeline_overview.vitals.agents }}</div><div class="l">{% translate "Agents" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ pipeline_overview.vitals.sessions }}</div><div class="l">{% translate "Sessions" %}</div></div>
+    <div class="ai-ws-vital"><div class="n">{{ pipeline_overview.vitals.failed }}</div><div class="l">{% translate "Failed" %}</div></div>
+  </div>
+
+  <div class="ai-ws-grid" style="margin-top:14px;">
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Steps" %}</span><a href="#" data-tab-to="steps">{% translate "edit" %}</a></div>
+        <div class="ai-ws-card__body">
+          {% if pipeline_overview.steps %}
+          <div class="ai-ws-rows">
+            {% for s in pipeline_overview.steps %}
+            <div class="ai-ws-row" style="--ai-row-accent:#047857;">
+              <span class="rm">{{ s.order }}</span>
+              <span class="rt">{{ s.agent }}</span>
+              <span class="rr"><span class="rm">on_error: {{ s.on_error }}</span></span>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No steps yet. Add ordered steps in the Steps tab." %}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Recent sessions" %}</span><a href="{% url 'admin:ai_hub_executionsession_changelist' %}?pipeline__id__exact={{ original.id }}">{% translate "all" %}</a></div>
+        <div class="ai-ws-card__body">
+          {% if pipeline_overview.recent_sessions %}
+          <div class="ai-ws-rows">
+            {% for s in pipeline_overview.recent_sessions %}
+            <a class="ai-ws-row" style="--ai-row-accent:#e0a317;" href="{% url 'admin:ai_hub_executionsession_change' s.id %}">
+              <span class="rt">{% if s.source_label %}{{ s.source_label }}{% else %}#{{ s.id }}{% endif %}</span>
+              <span class="rr">
+                {% if s.status == 'success' %}<span class="ai-ws-pill ai-ws-pill--ok">{{ s.status }}</span>
+                {% elif s.status == 'failed' %}<span class="ai-ws-pill ai-ws-pill--crit">{{ s.status }}</span>
+                {% else %}<span class="ai-ws-pill ai-ws-pill--warn">{{ s.status }}</span>{% endif %}
+              </span>
+            </a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">{% translate "No sessions run for this pipeline yet." %}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-ws-col">
+      <div class="ai-ws-card">
+        <div class="ai-ws-card__head"><span class="t">{% translate "Health" %}</span></div>
+        <div class="ai-ws-card__body">
+          <div class="ai-ws-health">
+            {% for h in pipeline_overview.health %}
+            <div class="ai-ws-hrow"><span class="dot {% if h.ok %}dot--ok{% else %}dot--bad{% endif %}"></span>{{ h.label }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ai-tab" data-tab="config" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}
+
+{% block inline_field_sets %}
+{% if original %}
+<div class="ai-tab" data-tab="steps" role="tabpanel">
+  {{ block.super }}
+</div>
+{% else %}
+{{ block.super }}
+{% endif %}
+{% endblock %}

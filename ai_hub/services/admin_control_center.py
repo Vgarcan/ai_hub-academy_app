@@ -338,9 +338,13 @@ def build_ai_hub_home_context() -> dict:
         runtime_kind=ExecutionSession.RuntimeKind.GAME,
         status__in=[ExecutionSession.Status.RUNNING, ExecutionSession.Status.WAITING_ASYNC],
     ).count()
-    live_sessions = ExecutionSession.objects.filter(
-        status__in=[ExecutionSession.Status.RUNNING, ExecutionSession.Status.WAITING_ASYNC],
+    running_sessions = ExecutionSession.objects.filter(
+        status=ExecutionSession.Status.RUNNING,
     ).count()
+    waiting_sessions = ExecutionSession.objects.filter(
+        status=ExecutionSession.Status.WAITING_ASYNC,
+    ).count()
+    live_sessions = running_sessions + waiting_sessions
     failed_session_count = ExecutionSession.objects.filter(
         status=ExecutionSession.Status.FAILED,
     ).count()
@@ -525,11 +529,12 @@ def build_ai_hub_home_context() -> dict:
             },
             "vitals": {
                 "live": live_sessions,
+                "running": running_sessions,
+                "waiting": waiting_sessions,
                 "needs_attention": len(action_queue),
                 "open_goals": open_game_goals,
                 "sessions": recent_session_count,
                 "failed": failed_session_count,
-                "live_sub": f"{live_sessions} running · {0} waiting",
             },
             "orchestrator": {
                 "pipelines": PipelineDefinition.objects.count(),

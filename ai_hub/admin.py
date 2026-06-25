@@ -4,7 +4,7 @@ from decimal import Decimal
 from django import forms
 from django.contrib import admin
 from django.contrib import messages
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
@@ -50,6 +50,7 @@ from .services.admin_control_center import (
     build_game_graph_context,
 )
 from .services.execution_runner import run_execution_session
+from .services.game_goal_execution import create_goal_execution_session
 from .services.game_operational_ux import redact_payload, redact_text
 from .services.game_resume import approve_action_run, reject_action_run
 from .services.tool_resolution import resolve_agent_tools
@@ -324,21 +325,12 @@ def _wizard_build_game(request, data):
 
     runtime_mode = data.get("runtime_mode") or ExecutionSession.RuntimeMode.ASYNC
     strict = data.get("strict_response_contract") in ("on", "true", "1")
+    runtime_config = {"max_iterations": max_iter, "strict_response_contract": strict}
 
-    session = ExecutionSession.objects.create(
-        runtime_kind=ExecutionSession.RuntimeKind.GAME,
-        runtime_mode=runtime_mode,
-        status=ExecutionSession.Status.PENDING,
-        entry_agent=agent,
-        triggered_by=request.user,
-        source_label=(data.get("source_label") or "").strip(),
-        goal_text=goal_text,
-        runtime_config={"max_iterations": max_iter, "strict_response_contract": strict},
-        initial_context=initial_context,
-    )
-
-    # 7. Advanced: workspace + goal
     if data.get("game_flavor") == "advanced":
+        # Advanced: workspace → goal → goal-bound session via service.
+        # create_goal_execution_session enforces the aihub_unique_active_goal constraint
+        # and transitions goal queued → running atomically.
         ws_name = (data.get("workspace_name") or f"Workspace for {agent.name}").strip()
         policy = {
             "allowed_actions": ["submit_for_approval"],
@@ -356,10 +348,33 @@ def _wizard_build_game(request, data):
             name=ws_name,
             defaults={"default_policy": policy},
         )
-        GameGoal.objects.create(
+        goal = GameGoal.objects.create(
             workspace=workspace,
             title=goal_text[:200],
             description=goal_text,
+        )
+        try:
+            session = create_goal_execution_session(
+                goal=goal,
+                entry_agent=agent,
+                triggered_by=request.user,
+                runtime_config=runtime_config,
+            )
+        except ValidationError as exc:
+            errors["game_flavor"] = str(exc)
+            return None, errors
+    else:
+        # Simple: standalone session, no durable goal record.
+        session = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            runtime_mode=runtime_mode,
+            status=ExecutionSession.Status.PENDING,
+            entry_agent=agent,
+            triggered_by=request.user,
+            source_label=(data.get("source_label") or "").strip(),
+            goal_text=goal_text,
+            runtime_config=runtime_config,
+            initial_context=initial_context,
         )
 
     return session, {}

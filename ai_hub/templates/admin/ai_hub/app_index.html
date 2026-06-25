@@ -29,7 +29,7 @@
     <article class="mc-vital mc-vital--accent">
       <div class="mc-eyebrow">{% translate "Live now" %}</div>
       <div class="mc-vital__n">{{ ai_hub_home.vitals.live }}</div>
-      <div class="mc-vital__sub">{% translate "running or waiting sessions" %}</div>
+      <div class="mc-vital__sub">{{ ai_hub_home.vitals.running }} {% translate "running" %} &middot; {{ ai_hub_home.vitals.waiting }} {% translate "waiting" %}</div>
     </article>
     <article class="mc-vital{% if ai_hub_home.vitals.needs_attention %} mc-vital--alert{% endif %}">
       {% if ai_hub_home.vitals.needs_attention %}<span class="mc-vital__flag" aria-hidden="true"></span>{% endif %}

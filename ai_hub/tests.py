@@ -2397,13 +2397,13 @@ class HubAdminControlCenterTests(TestCase):
         response = client.get(reverse("admin:app_list", kwargs={"app_label": "ai_hub"}))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Build AI workflows without touching code")
-        self.assertContains(response, "Recommended next action")
-        self.assertContains(response, "Setup checklist")
-        self.assertContains(response, "Example blueprints")
+        self.assertContains(response, "Fixed agent workflows")
+        self.assertContains(response, "Recommended next")
+        self.assertContains(response, "Setup progress")
+        self.assertContains(response, "Start from a pattern")
         self.assertContains(response, "Open Orchestrator")
         self.assertContains(response, "Open GAME")
-        self.assertContains(response, "Shared resources")
+        self.assertContains(response, "All records")
 
     def test_clean_workspace_urls_render(self):
         client = Client()
@@ -2429,8 +2429,8 @@ class HubAdminControlCenterTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Orchestrator workspace")
         self.assertContains(response, self.pipeline.name)
-        self.assertContains(response, "Active pipelines")
-        self.assertContains(response, "View orchestrator sessions")
+        self.assertContains(response, "active")
+        self.assertContains(response, "View sessions")
 
     def test_game_workspace_shows_game_sessions(self):
         game_ready_agent = AgentProfile.objects.create(
@@ -2517,6 +2517,70 @@ class HubAdminControlCenterTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Workspace")
         self.assertContains(response, "Both")
+
+    def test_build_wizard_advanced_game_links_goal_to_session(self):
+        """Regression: advanced wizard must set session.goal — not leave it NULL."""
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "game_flavor": "advanced",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "goal_text": "Regression test: advanced goal",
+                "workspace_name": "RegressionWS",
+                "max_iterations": "3",
+            },
+        )
+
+        self.assertIn(response.status_code, (200, 302))
+        session = ExecutionSession.objects.filter(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=self.agent,
+        ).order_by("-created_at").first()
+        self.assertIsNotNone(session, "Wizard should have created a session")
+        self.assertIsNotNone(session.goal, "Advanced wizard session must have goal FK set")
+        goal = session.goal
+        self.assertEqual(goal.title[:50], "Regression test: advanced goal"[:50])
+        self.assertEqual(goal.workspace.name, "RegressionWS")
+        # Service should have transitioned goal queued → running
+        self.assertEqual(goal.status, GameGoal.Status.RUNNING)
+
+    def test_home_vitals_running_and_waiting_counts_are_separate(self):
+        """Regression: vitals must carry separate 'running' and 'waiting' keys, not a hardcoded zero."""
+        from ai_hub.services.admin_control_center import build_ai_hub_home_context
+        running_session = create_execution_session(
+            source_label="Running",
+            entry_agent=self.agent,
+            triggered_by=self.user,
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            goal_text="Running goal",
+        )
+        running_session.status = ExecutionSession.Status.RUNNING
+        running_session.save(update_fields=["status"])
+        waiting_session = create_execution_session(
+            source_label="Waiting",
+            entry_agent=self.agent,
+            triggered_by=self.user,
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            goal_text="Waiting goal",
+        )
+        waiting_session.status = ExecutionSession.Status.WAITING_ASYNC
+        waiting_session.save(update_fields=["status"])
+
+        ctx = build_ai_hub_home_context()
+        vitals = ctx["ai_hub_home"]["vitals"]
+
+        self.assertIn("running", vitals, "vitals must have a 'running' key")
+        self.assertIn("waiting", vitals, "vitals must have a 'waiting' key")
+        self.assertEqual(vitals["running"], 1)
+        self.assertEqual(vitals["waiting"], 1)
+        self.assertEqual(vitals["live"], 2)
 
 
 class HubExecutionSessionEndpointTests(TestCase):

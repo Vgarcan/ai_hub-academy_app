@@ -33,6 +33,21 @@ The home page shows:
 
 Use this page as the first stop for new admins.
 
+## Build Console
+
+Open:
+
+```text
+/admin/ai_hub/workspaces/build/?kind=game
+/admin/ai_hub/workspaces/build/?kind=orchestrator
+```
+
+The Build Console is a multi-step guided wizard that creates a complete GAME session or Orchestrator pipeline in one atomic transaction. It covers engine, agent, tools, knowledge and workspace configuration without requiring you to navigate multiple raw admin forms.
+
+Use the Build Console when starting from scratch or testing a new configuration. Use the raw admin forms when editing existing objects.
+
+See [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) for the full step-by-step reference.
+
 ## Guided Changelists
 
 Resource list pages include a short explanation and quick actions.
@@ -277,7 +292,9 @@ Aggregated GAME views apply permissions to each related collection. Approval pan
 
 ## Creating A GAME Session
 
-Open:
+**Recommended path**: use the Build Console at `/admin/ai_hub/workspaces/build/?kind=game`. It creates the engine, agent, and session together in one transaction and guides you through all required fields.
+
+**Quick form** (existing agent and model already configured):
 
 ```text
 /admin/ai_hub/executionsession/game/new/
@@ -369,11 +386,15 @@ The session change page includes a timeline of step runs with:
 
 ## Recommended Admin Workflow
 
-1. Configure a provider.
-2. Configure a model.
-3. Configure one narrow agent.
+**Starting from scratch**: use the Build Console (step 1 below). It handles steps 2–4 inside the wizard.
+
+**Iterating on existing objects**: skip to step 5 and use the raw admin forms.
+
+1. Open the Build Console and choose a blueprint (GAME or Orchestrator).
+2. Configure a provider and model (or reuse an existing one).
+3. Configure one narrow agent (or reuse an existing one).
 4. Add knowledge and tools only if needed.
-5. Choose Orchestrator or GAME.
+5. Complete the workspace-specific steps (goal + runtime for GAME; pipeline + steps for Orchestrator).
 6. Run one small test.
 7. Inspect the timeline.
 8. Inspect the control center.

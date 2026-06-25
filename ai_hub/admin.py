@@ -1,9 +1,11 @@
 import json
+from decimal import Decimal
 
 from django import forms
 from django.contrib import admin
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.db.models import Count, Q
 from django.http import HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
 from django.template.response import TemplateResponse
@@ -194,6 +196,334 @@ def ai_hub_orchestrator_workspace_view(request):
 
 def ai_hub_game_workspace_view(request):
     return _workspace_pipeline_admin(request).game_workspace_view(request)
+
+
+def ai_hub_build_wizard_view(request):
+    return _workspace_pipeline_admin(request).build_wizard_view(request)
+
+
+class _WizardRollback(Exception):
+    """Raised inside transaction.atomic() to roll back wizard-created objects on validation error."""
+
+
+def _wizard_build_game(request, data):
+    """Create the full GAME chain transactionally. Returns (session, errors_dict)."""
+    errors = {}
+
+    # 1. Model config
+    engine_mode = data.get("engine_mode", "reuse")
+    model_config = None
+    if engine_mode == "reuse":
+        mid = data.get("engine_reuse_model_id", "")
+        try:
+            model_config = ModelConfig.objects.get(pk=int(mid))
+        except (ModelConfig.DoesNotExist, ValueError, TypeError):
+            errors["engine_reuse_model_id"] = _("Select a valid model.")
+    else:
+        provider_name = (data.get("engine_provider_name") or "").strip()
+        if not provider_name:
+            errors["engine_provider_name"] = _("Provider name is required.")
+        else:
+            provider, _ = ProviderConfig.objects.get_or_create(
+                name=provider_name,
+                defaults={
+                    "provider_type": data.get("engine_provider_type") or ProviderConfig.ProviderType.TRAINING,
+                    "is_active": True,
+                },
+            )
+            model_name = (data.get("engine_model_name") or "training/starter").strip()
+            try:
+                temp = Decimal(str(data.get("engine_temperature") or "0.30"))
+            except Exception:
+                temp = Decimal("0.30")
+            model_config, _ = ModelConfig.objects.get_or_create(
+                provider=provider,
+                model_name=model_name,
+                defaults={"temperature_default": temp, "is_active": True},
+            )
+
+    if errors:
+        return None, errors
+
+    # 2. Agent
+    agent_mode = data.get("agent_mode", "reuse")
+    agent = None
+    if agent_mode == "reuse":
+        aid = data.get("agent_reuse_id", "")
+        try:
+            agent = AgentProfile.objects.get(pk=int(aid))
+        except (AgentProfile.DoesNotExist, ValueError, TypeError):
+            errors["agent_reuse_id"] = _("Select a valid agent.")
+    else:
+        agent_name = (data.get("agent_name") or "").strip()
+        if not agent_name:
+            errors["agent_name"] = _("Agent name is required.")
+        else:
+            agent = AgentProfile.objects.create(
+                name=agent_name,
+                role=(data.get("agent_role") or "").strip(),
+                system_prompt=(data.get("agent_prompt") or "").strip(),
+                model_config=model_config,
+                is_active=True,
+            )
+
+    if errors:
+        return None, errors
+
+    # 3. Toolboxes
+    toolbox_ids = data.getlist("agent_toolbox_ids")
+    for tb_id in toolbox_ids:
+        try:
+            tb = Toolbox.objects.get(pk=int(tb_id))
+            AgentToolboxAssignment.objects.get_or_create(
+                agent=agent, toolbox=tb, defaults={"is_enabled": True}
+            )
+        except (Toolbox.DoesNotExist, ValueError, TypeError):
+            pass
+
+    # 4. Knowledge
+    knowledge_mode = data.get("knowledge_mode", "none")
+    if knowledge_mode == "reuse":
+        try:
+            coll = KnowledgeCollection.objects.get(pk=int(data.get("knowledge_collection_id", "")))
+            agent.knowledge_collections.add(coll)
+        except (KnowledgeCollection.DoesNotExist, ValueError, TypeError):
+            pass
+    elif knowledge_mode == "create":
+        coll_name = (data.get("knowledge_collection_name") or "").strip()
+        doc_title  = (data.get("knowledge_doc_title") or "").strip()
+        if coll_name and doc_title:
+            coll = KnowledgeCollection.objects.create(name=coll_name, is_active=True)
+            KnowledgeDocument.objects.create(
+                collection=coll,
+                title=doc_title,
+                curated_text=(data.get("knowledge_doc_content") or "").strip(),
+                status=KnowledgeDocument.Status.ACTIVE,
+            )
+            agent.knowledge_collections.add(coll)
+
+    # 5. Initial context
+    raw_ctx = (data.get("initial_context") or "{}").strip()
+    try:
+        initial_context = json.loads(raw_ctx)
+        if not isinstance(initial_context, dict):
+            initial_context = {}
+    except json.JSONDecodeError:
+        initial_context = {}
+
+    # 6. Session
+    goal_text = (data.get("goal_text") or "").strip()
+    if not goal_text:
+        errors["goal_text"] = _("Goal is required.")
+        return None, errors
+
+    try:
+        max_iter = max(1, min(25, int(data.get("max_iterations") or 3)))
+    except (ValueError, TypeError):
+        max_iter = 3
+
+    runtime_mode = data.get("runtime_mode") or ExecutionSession.RuntimeMode.ASYNC
+    strict = data.get("strict_response_contract") in ("on", "true", "1")
+
+    session = ExecutionSession.objects.create(
+        runtime_kind=ExecutionSession.RuntimeKind.GAME,
+        runtime_mode=runtime_mode,
+        status=ExecutionSession.Status.PENDING,
+        entry_agent=agent,
+        triggered_by=request.user,
+        source_label=(data.get("source_label") or "").strip(),
+        goal_text=goal_text,
+        runtime_config={"max_iterations": max_iter, "strict_response_contract": strict},
+        initial_context=initial_context,
+    )
+
+    # 7. Advanced: workspace + goal
+    if data.get("game_flavor") == "advanced":
+        ws_name = (data.get("workspace_name") or f"Workspace for {agent.name}").strip()
+        policy = {
+            "allowed_actions": ["submit_for_approval"],
+            "safety": {
+                "allow_external_writes": False,
+                "require_approval_for_medium_risk": data.get("safety_require_approval_medium") in ("on", "true", "1"),
+                "require_approval_for_high_risk":   data.get("safety_require_approval_high")   in ("on", "true", "1"),
+            },
+            "budget": {
+                "max_iterations_per_session":  max_iter,
+                "max_action_runs_per_session": max(1, int(data.get("budget_max_actions") or 2)),
+            },
+        }
+        workspace, _ = GameWorkspace.objects.get_or_create(
+            name=ws_name,
+            defaults={"default_policy": policy},
+        )
+        GameGoal.objects.create(
+            workspace=workspace,
+            title=goal_text[:200],
+            description=goal_text,
+        )
+
+    return session, {}
+
+
+def _wizard_build_orchestrator(request, data):
+    """Create the full Orchestrator chain transactionally. Returns (pipeline, errors_dict)."""
+    errors = {}
+
+    # 1. Model config (same logic as GAME)
+    engine_mode = data.get("engine_mode", "reuse")
+    model_config = None
+    if engine_mode == "reuse":
+        mid = data.get("engine_reuse_model_id", "")
+        try:
+            model_config = ModelConfig.objects.get(pk=int(mid))
+        except (ModelConfig.DoesNotExist, ValueError, TypeError):
+            errors["engine_reuse_model_id"] = _("Select a valid model.")
+    else:
+        provider_name = (data.get("engine_provider_name") or "").strip()
+        if not provider_name:
+            errors["engine_provider_name"] = _("Provider name is required.")
+        else:
+            provider, _ = ProviderConfig.objects.get_or_create(
+                name=provider_name,
+                defaults={
+                    "provider_type": data.get("engine_provider_type") or ProviderConfig.ProviderType.TRAINING,
+                    "is_active": True,
+                },
+            )
+            model_name = (data.get("engine_model_name") or "training/starter").strip()
+            try:
+                temp = Decimal(str(data.get("engine_temperature") or "0.30"))
+            except Exception:
+                temp = Decimal("0.30")
+            model_config, _ = ModelConfig.objects.get_or_create(
+                provider=provider,
+                model_name=model_name,
+                defaults={"temperature_default": temp, "is_active": True},
+            )
+
+    if errors:
+        return None, errors
+
+    # 2. Entry agent
+    agent_mode = data.get("agent_mode", "reuse")
+    entry_agent = None
+    if agent_mode == "reuse":
+        aid = data.get("agent_reuse_id", "")
+        try:
+            entry_agent = AgentProfile.objects.get(pk=int(aid))
+        except (AgentProfile.DoesNotExist, ValueError, TypeError):
+            errors["agent_reuse_id"] = _("Select a valid agent.")
+    else:
+        agent_name = (data.get("agent_name") or "").strip()
+        if not agent_name:
+            errors["agent_name"] = _("Agent name is required.")
+        else:
+            input_contract  = _parse_json_field(data.get("agent_input_contract"), {})
+            output_contract = _parse_json_field(data.get("agent_output_contract"), {})
+            entry_agent = AgentProfile.objects.create(
+                name=agent_name,
+                role=(data.get("agent_role") or "").strip(),
+                system_prompt=(data.get("agent_prompt") or "").strip(),
+                model_config=model_config,
+                input_contract=input_contract,
+                output_contract=output_contract,
+                is_active=True,
+            )
+
+    if errors:
+        return None, errors
+
+    # 3. Toolboxes + knowledge (same as GAME)
+    for tb_id in data.getlist("agent_toolbox_ids"):
+        try:
+            tb = Toolbox.objects.get(pk=int(tb_id))
+            AgentToolboxAssignment.objects.get_or_create(
+                agent=entry_agent, toolbox=tb, defaults={"is_enabled": True}
+            )
+        except (Toolbox.DoesNotExist, ValueError, TypeError):
+            pass
+
+    knowledge_mode = data.get("knowledge_mode", "none")
+    if knowledge_mode == "reuse":
+        try:
+            coll = KnowledgeCollection.objects.get(pk=int(data.get("knowledge_collection_id", "")))
+            entry_agent.knowledge_collections.add(coll)
+        except (KnowledgeCollection.DoesNotExist, ValueError, TypeError):
+            pass
+    elif knowledge_mode == "create":
+        coll_name = (data.get("knowledge_collection_name") or "").strip()
+        doc_title  = (data.get("knowledge_doc_title") or "").strip()
+        if coll_name and doc_title:
+            coll = KnowledgeCollection.objects.create(name=coll_name, is_active=True)
+            KnowledgeDocument.objects.create(
+                collection=coll,
+                title=doc_title,
+                curated_text=(data.get("knowledge_doc_content") or "").strip(),
+                status=KnowledgeDocument.Status.ACTIVE,
+            )
+            entry_agent.knowledge_collections.add(coll)
+
+    # 4. Pipeline
+    pipeline_name = (data.get("pipeline_name") or "").strip()
+    if not pipeline_name:
+        errors["pipeline_name"] = _("Pipeline name is required.")
+        return None, errors
+    if PipelineDefinition.objects.filter(name=pipeline_name).exists():
+        errors["pipeline_name"] = _(f'A pipeline named "{pipeline_name}" already exists.')
+        return None, errors
+
+    pipeline = PipelineDefinition.objects.create(
+        name=pipeline_name,
+        description=(data.get("pipeline_description") or "").strip(),
+        entry_agent=entry_agent,
+        is_active=False,
+        input_contract=_parse_json_field(data.get("pipeline_input_contract"), {}),
+        output_contract=_parse_json_field(data.get("pipeline_output_contract"), {}),
+    )
+
+    # 5. Steps
+    step_agents    = data.getlist("step_agent_id")
+    step_on_errors = data.getlist("step_on_error")
+    step_in_maps   = data.getlist("step_input_mapping")
+    step_out_maps  = data.getlist("step_output_mapping")
+
+    for i, agent_id in enumerate(step_agents):
+        if not agent_id:
+            continue
+        try:
+            step_agent = AgentProfile.objects.get(pk=int(agent_id))
+        except (AgentProfile.DoesNotExist, ValueError, TypeError):
+            continue
+        PipelineStep.objects.create(
+            pipeline=pipeline,
+            order=i + 1,
+            agent=step_agent,
+            on_error=step_on_errors[i] if i < len(step_on_errors) else "fail",
+            input_mapping=_parse_json_field(step_in_maps[i] if i < len(step_in_maps) else None, {}),
+            output_mapping=_parse_json_field(step_out_maps[i] if i < len(step_out_maps) else None, {}),
+        )
+
+    # 6. Activate if requested
+    if data.get("pipeline_activate") in ("on", "true", "1"):
+        try:
+            pipeline.is_active = True
+            pipeline.full_clean()
+            pipeline.save()
+        except Exception:
+            pipeline.is_active = False
+            pipeline.save()
+
+    return pipeline, {}
+
+
+def _parse_json_field(raw, default):
+    if not raw:
+        return default
+    try:
+        parsed = json.loads(raw.strip())
+        return parsed if isinstance(parsed, dict) else default
+    except (json.JSONDecodeError, AttributeError):
+        return default
 
 
 # === REUSABLE AI PIPELINE CORE =============================================
@@ -1097,6 +1427,11 @@ class PipelineDefinitionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
                 self.admin_site.admin_view(self.control_center_data_view),
                 name="ai_hub_control_center_data",
             ),
+            path(
+                "build/",
+                self.admin_site.admin_view(self.build_wizard_view),
+                name="ai_hub_pipelinedefinition_build",
+            ),
         ]
         return custom_urls + urls
 
@@ -1179,6 +1514,63 @@ class PipelineDefinitionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
             raise PermissionDenied
         context = build_control_center_context()
         return JsonResponse({"graph": context["graph"], "metrics": context["metrics"], "warnings": context["warnings"]})
+
+    def build_wizard_view(self, request):
+        if not self.has_view_or_change_permission(request):
+            raise PermissionDenied
+
+        kind = request.GET.get("kind", "game")
+        if kind not in ("game", "orchestrator"):
+            kind = "game"
+
+        errors = {}
+        success_url = None
+
+        if request.method == "POST":
+            wizard_kind = request.POST.get("wizard_kind", kind)
+            try:
+                with transaction.atomic():
+                    if wizard_kind == "orchestrator":
+                        obj, errors = _wizard_build_orchestrator(request, request.POST)
+                    else:
+                        obj, errors = _wizard_build_game(request, request.POST)
+                    if errors:
+                        raise _WizardRollback()
+                    if wizard_kind == "orchestrator":
+                        self.message_user(
+                            request,
+                            _(f'Pipeline "{obj.name}" created. Add steps and activate when ready.'),
+                            level=messages.SUCCESS,
+                        )
+                        success_url = reverse("admin:ai_hub_pipelinedefinition_change", args=[obj.id])
+                    else:
+                        self.message_user(
+                            request,
+                            _(f"GAME session #{obj.id} created. Review it and run it from the session list."),
+                            level=messages.SUCCESS,
+                        )
+                        success_url = reverse("admin:ai_hub_executionsession_change", args=[obj.id])
+            except _WizardRollback:
+                pass
+
+            if success_url and not errors:
+                return HttpResponseRedirect(success_url)
+
+            kind = request.POST.get("wizard_kind", kind)
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": _("Build Console"),
+            "kind": kind,
+            "errors": errors,
+            "agents": AgentProfile.objects.filter(is_active=True).order_by("name"),
+            "model_configs": ModelConfig.objects.select_related("provider").filter(is_active=True).order_by("provider__name", "model_name"),
+            "provider_types": ProviderConfig.ProviderType.choices,
+            "toolboxes": Toolbox.objects.prefetch_related("tool_entries__tool").filter(is_active=True).order_by("name"),
+            "knowledge_collections": KnowledgeCollection.objects.filter(is_active=True).order_by("name"),
+            "pipelines": PipelineDefinition.objects.order_by("name"),
+        }
+        return TemplateResponse(request, "admin/ai_hub/workspaces/build.html", context)
 
 
 @admin.register(PipelineStep)
@@ -2609,6 +3001,11 @@ def _install_ai_hub_workspace_admin_urls():
                 "ai_hub/workspaces/game/",
                 admin.site.admin_view(ai_hub_game_workspace_view),
                 name="ai_hub_workspace_game",
+            ),
+            path(
+                "ai_hub/workspaces/build/",
+                admin.site.admin_view(ai_hub_build_wizard_view),
+                name="ai_hub_workspace_build",
             ),
         ]
         return custom_urls + original_get_urls()

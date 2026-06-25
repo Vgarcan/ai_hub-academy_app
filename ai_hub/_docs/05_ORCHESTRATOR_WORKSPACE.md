@@ -140,6 +140,10 @@ The workspace shows:
 
 The control center graph shows how providers, models, agents, knowledge, tools, pipelines, and steps connect.
 
+### Build Console
+
+The **Build Console** button in the workspace header opens the guided creation wizard for a new pipeline. Use it to create the full engine → agent → pipeline → steps chain in one transaction. See [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md).
+
 The graph is intentionally data-driven. Columns only appear when that node type
 exists in the current configuration. For example:
 

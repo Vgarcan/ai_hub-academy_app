@@ -30,7 +30,8 @@
       <p>{% translate "Autonomous goal sessions where one entry agent iterates with memory, observations and a stop contract." %}</p>
     </div>
     <nav class="mc-head__actions" aria-label="{% translate 'GAME actions' %}">
-      <a class="mc-btn mc-btn--primary" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Create GAME session" %}</a>
+      <a class="mc-btn mc-btn--primary" href="{% url 'admin:ai_hub_workspace_build' %}?kind=game">{% translate "Build Console" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_executionsession_game_new' %}">{% translate "Quick session" %}</a>
       <a class="mc-btn" href="{% url 'admin:ai_hub_executionsession_changelist' %}?runtime_kind__exact=game">{% translate "View GAME sessions" %}</a>
       <a class="mc-btn" href="{% url 'admin:ai_hub_agentprofile_changelist' %}">{% translate "View agents" %}</a>
     </nav>

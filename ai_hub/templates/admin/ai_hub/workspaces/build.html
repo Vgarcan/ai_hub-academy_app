@@ -1,0 +1,753 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260625-wizard-v1">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260625-wizard-v1"></script>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate "Home" %}</a>
+  &rsaquo; <a href="{% url 'admin:app_list' app_label='ai_hub' %}">AI Hub</a>
+  &rsaquo; {% translate "Build Console" %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="ai-console">
+
+  <header class="mc-head">
+    <div>
+      <div class="mc-eyebrow">// AI Hub &middot; Build Console</div>
+      <h1>{% translate "Build Console" %}</h1>
+      <p>{% translate "Assemble a complete runtime from scratch — engine, agent, tools, knowledge and all." %}</p>
+    </div>
+    <nav class="mc-head__actions">
+      <a class="mc-btn" href="{% url 'admin:ai_hub_workspace_game' %}">{% translate "GAME workspace" %}</a>
+      <a class="mc-btn" href="{% url 'admin:ai_hub_workspace_orchestrator' %}">{% translate "Orchestrator workspace" %}</a>
+    </nav>
+  </header>
+
+  {# blueprint selector #}
+  <div style="display:flex;gap:8px;max-width:380px;margin-bottom:24px;">
+    <a href="?kind=game"
+       class="mc-toggle-btn{% if kind == 'game' %} is-on{% endif %}"
+       style="text-decoration:none;flex:1;text-align:center;{% if kind == 'game' %}--bp:#be123c;border-color:#be123c;{% endif %}">
+       &#x25CF; GAME
+    </a>
+    <a href="?kind=orchestrator"
+       class="mc-toggle-btn{% if kind == 'orchestrator' %} is-on{% endif %}"
+       style="text-decoration:none;flex:1;text-align:center;{% if kind == 'orchestrator' %}--bp:#047857;border-color:#047857;{% endif %}">
+       &#x25CF; Orchestrator
+    </a>
+  </div>
+
+  {% if errors %}
+  <div class="mc-wiz-banner mc-wiz-banner--err" style="margin-bottom:16px;max-width:680px;">
+    <strong>{% translate "Fix the following before creating:" %}</strong>
+    <ul style="margin:6px 0 0;padding-left:18px;">
+      {% for key, msg in errors.items %}<li>{{ msg }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="wizard_kind" value="{{ kind }}">
+    <input type="hidden" name="engine_mode" value="reuse">
+    <input type="hidden" name="agent_mode"  value="reuse">
+    <input type="hidden" name="knowledge_mode" value="none">
+    <input type="hidden" name="game_flavor"    value="simple">
+
+    <div class="mc-wiz mc-wiz--{{ kind }}" data-mc-wizard="{{ kind }}">
+
+      {# ===== LEFT RAIL ===== #}
+      <aside class="mc-wiz-rail">
+        <div class="mc-wiz-meter">
+          <div class="mc-wiz-meter__track">
+            <div class="mc-wiz-meter__fill" style="width:0%"></div>
+          </div>
+          <div class="mc-wiz-meter__label">Step 1 of …</div>
+        </div>
+
+        {% if kind == 'game' %}
+        <button type="button" class="mc-wstep is-active" data-step="0">
+          <span class="mc-wstep__mark">1</span>
+          <span>{% translate "Engine" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="1">
+          <span class="mc-wstep__mark">2</span>
+          <span>{% translate "Agent" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="2">
+          <span class="mc-wstep__mark">3</span>
+          <span>{% translate "Goal" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="3">
+          <span class="mc-wstep__mark">4</span>
+          <span>{% translate "Governance" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="4">
+          <span class="mc-wstep__mark">5</span>
+          <span>{% translate "Runtime" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="5">
+          <span class="mc-wstep__mark">6</span>
+          <span>{% translate "Review" %}</span>
+        </button>
+        {% else %}
+        <button type="button" class="mc-wstep is-active" data-step="0">
+          <span class="mc-wstep__mark">1</span>
+          <span>{% translate "Engine" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="1">
+          <span class="mc-wstep__mark">2</span>
+          <span>{% translate "Agent" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="2">
+          <span class="mc-wstep__mark">3</span>
+          <span>{% translate "Pipeline" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="3">
+          <span class="mc-wstep__mark">4</span>
+          <span>{% translate "Steps" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="4">
+          <span class="mc-wstep__mark">5</span>
+          <span>{% translate "Contracts" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="5">
+          <span class="mc-wstep__mark">6</span>
+          <span>{% translate "Activate" %}</span>
+        </button>
+        <button type="button" class="mc-wstep" data-step="6">
+          <span class="mc-wstep__mark">7</span>
+          <span>{% translate "Review" %}</span>
+        </button>
+        {% endif %}
+      </aside>
+
+      {# ===== RIGHT STAGE ===== #}
+      <main class="mc-wiz-stage">
+
+        {# ---- STEP 0: ENGINE ---- #}
+        <div class="mc-step-panel is-active" id="step-0">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 1 — Engine" %}</div>
+              <h2>{% translate "Model &amp; provider" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Pick an existing model or create one. The training stub needs no API key and is the safe default." %}
+              </p>
+            </div>
+          </div>
+
+          <div class="mc-toggle-row" data-toggle-group="engine_mode">
+            <button type="button" class="mc-toggle-btn is-on" data-toggle-value="reuse">
+              &#x21BB; {% translate "Reuse existing" %}
+            </button>
+            <button type="button" class="mc-toggle-btn" data-toggle-value="create">
+              &#xFF0B; {% translate "Create new" %}
+            </button>
+          </div>
+
+          <div data-show-when="engine_mode:reuse" class="mc-wiz-show is-visible">
+            <div class="mc-field">
+              <label for="engine_reuse_model_id">{% translate "Model config" %}</label>
+              <select id="engine_reuse_model_id" name="engine_reuse_model_id">
+                <option value="">— {% translate "Select model" %} —</option>
+                {% for mc in model_configs %}
+                <option value="{{ mc.id }}">{{ mc.provider.name }} / {{ mc.model_name }}</option>
+                {% empty %}
+                <option disabled>{% translate "No models yet — use Create new" %}</option>
+                {% endfor %}
+              </select>
+              <span class="mc-field__hint">{% translate "Only active models are listed." %}</span>
+            </div>
+          </div>
+
+          <div data-show-when="engine_mode:create" class="mc-wiz-show">
+            <div class="mc-wiz-banner mc-wiz-banner--info">
+              {% translate "Training stub — no API key needed. Use" %} <code>training/starter</code> {% translate "as model name." %}
+            </div>
+            <div class="mc-field-row">
+              <div class="mc-field">
+                <label for="engine_provider_name">{% translate "Provider name" %} *</label>
+                <input type="text" id="engine_provider_name" name="engine_provider_name"
+                       placeholder="{% translate 'e.g. Training stub' %}">
+                <span class="mc-field__hint">{% translate "Used as the display name. Re-uses if one with this name already exists." %}</span>
+              </div>
+              <div class="mc-field">
+                <label for="engine_provider_type">{% translate "Provider type" %}</label>
+                <select id="engine_provider_type" name="engine_provider_type">
+                  {% for val, label in provider_types %}
+                  <option value="{{ val }}"{% if val == 'training' %} selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <div class="mc-field-row">
+              <div class="mc-field">
+                <label for="engine_model_name">{% translate "Model name" %} *</label>
+                <input type="text" id="engine_model_name" name="engine_model_name"
+                       value="training/starter"
+                       placeholder="training/starter">
+                <span class="mc-field__hint">{% translate "Training provider: must be 'training' or start with 'training/'." %}</span>
+              </div>
+              <div class="mc-field">
+                <label for="engine_temperature">{% translate "Temperature" %}</label>
+                <input type="number" id="engine_temperature" name="engine_temperature"
+                       value="0.30" min="0" max="2" step="0.01">
+              </div>
+            </div>
+          </div>
+
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 1: AGENT ---- #}
+        <div class="mc-step-panel" id="step-1">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 2 — Agent" %}</div>
+              <h2>{% translate "Entry agent" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Reuse an active agent or create one. Then configure tools (via toolbox) and knowledge." %}
+              </p>
+            </div>
+          </div>
+
+          <div class="mc-toggle-row" data-toggle-group="agent_mode">
+            <button type="button" class="mc-toggle-btn is-on" data-toggle-value="reuse">
+              &#x21BB; {% translate "Reuse existing" %}
+            </button>
+            <button type="button" class="mc-toggle-btn" data-toggle-value="create">
+              &#xFF0B; {% translate "Create new" %}
+            </button>
+          </div>
+
+          <div data-show-when="agent_mode:reuse" class="mc-wiz-show is-visible">
+            <div class="mc-field">
+              <label for="agent_reuse_id">{% translate "Agent" %}</label>
+              <select id="agent_reuse_id" name="agent_reuse_id">
+                <option value="">— {% translate "Select agent" %} —</option>
+                {% for agent in agents %}
+                <option value="{{ agent.id }}">{{ agent.name }} ({{ agent.role }})</option>
+                {% empty %}
+                <option disabled>{% translate "No active agents — use Create new" %}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div data-show-when="agent_mode:create" class="mc-wiz-show">
+            <div class="mc-field-row">
+              <div class="mc-field">
+                <label for="agent_name">{% translate "Name" %} *</label>
+                <input type="text" id="agent_name" name="agent_name"
+                       placeholder="{% translate 'e.g. Support triage agent' %}">
+              </div>
+              <div class="mc-field">
+                <label for="agent_role">{% translate "Role" %}</label>
+                <input type="text" id="agent_role" name="agent_role"
+                       placeholder="{% translate 'e.g. Triage specialist' %}">
+              </div>
+            </div>
+            <div class="mc-field">
+              <label for="agent_prompt">{% translate "System prompt" %}</label>
+              <textarea id="agent_prompt" name="agent_prompt" rows="5"
+                        placeholder="{% translate 'You are … Your goal is … You must finish with a JSON decision.' %}"></textarea>
+            </div>
+            {% if kind == 'orchestrator' %}
+            <div class="mc-field-row">
+              <div class="mc-field">
+                <label for="agent_input_contract">{% translate "Input contract (JSON)" %} *</label>
+                <textarea id="agent_input_contract" name="agent_input_contract" rows="3"
+                          placeholder='{"required":["goal"],"properties":{"goal":{"type":"string"}}}'></textarea>
+                <span class="mc-field__hint">{% translate "Required for pipeline activation. Must be non-empty." %}</span>
+              </div>
+              <div class="mc-field">
+                <label for="agent_output_contract">{% translate "Output contract (JSON)" %} *</label>
+                <textarea id="agent_output_contract" name="agent_output_contract" rows="3"
+                          placeholder='{"required":["agent","llm","tools"]}'></textarea>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+
+          {# Tools sub-section #}
+          <div class="mc-sub">
+            <button type="button" class="mc-sub__head">
+              &#x1F9F0; {% translate "Tools — Toolbox assignment" %}
+              <span class="mc-sub__caret">&#x25BC;</span>
+            </button>
+            <div class="mc-sub__body">
+              <p class="mc-subhead">{% translate "Select toolboxes to attach (recommended over direct tool assignment)" %}</p>
+              {% if toolboxes %}
+              <div class="mc-tboxes">
+                {% for tb in toolboxes %}
+                <label class="mc-tbox">
+                  <span class="mc-tbox__chk">&#x2713;</span>
+                  <input type="checkbox" name="agent_toolbox_ids" value="{{ tb.id }}" style="display:none">
+                  <span class="mc-tbox__info">
+                    <b>{{ tb.label|default:tb.name }}</b>
+                    <small>{{ tb.description|truncatechars:80 }}</small>
+                    <span class="mc-tbox__tools">
+                      {% for entry in tb.tool_entries.all %}
+                        <span class="mc-chip{% if entry.tool.name == 'submit_for_approval' %} mc-chip--approval{% endif %}">
+                          {{ entry.tool.name }}
+                        </span>
+                      {% endfor %}
+                    </span>
+                  </span>
+                </label>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="mc-wiz-banner mc-wiz-banner--warn">
+                {% translate "No toolboxes found. Run the starter demo or create toolboxes via the admin." %}
+              </div>
+              {% endif %}
+            </div>
+          </div>
+
+          {# Knowledge sub-section #}
+          <div class="mc-sub">
+            <button type="button" class="mc-sub__head">
+              &#x1F4DA; {% translate "Knowledge" %}
+              <span class="mc-sub__caret">&#x25BC;</span>
+            </button>
+            <div class="mc-sub__body">
+              <div data-kmode-group>
+                <input type="hidden" name="knowledge_mode" value="none">
+                <div class="mc-kmode">
+                  <button type="button" class="mc-kmode-btn is-on" data-kmode="none">{% translate "None" %}</button>
+                  <button type="button" class="mc-kmode-btn" data-kmode="reuse">{% translate "Reuse collection" %}</button>
+                  <button type="button" class="mc-kmode-btn" data-kmode="create">{% translate "Create new" %}</button>
+                </div>
+
+                <div class="mc-kpane is-on" data-kpane="none">
+                  <p style="font-size:12.5px;color:var(--mc-muted)">{% translate "No knowledge attached. The agent will rely entirely on its prompt and tool results." %}</p>
+                </div>
+
+                <div class="mc-kpane" data-kpane="reuse">
+                  <div class="mc-field">
+                    <label for="knowledge_collection_id">{% translate "Collection" %}</label>
+                    <select id="knowledge_collection_id" name="knowledge_collection_id">
+                      <option value="">— {% translate "Select collection" %} —</option>
+                      {% for coll in knowledge_collections %}
+                      <option value="{{ coll.id }}">{{ coll.name }}</option>
+                      {% empty %}
+                      <option disabled>{% translate "No collections yet" %}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                </div>
+
+                <div class="mc-kpane" data-kpane="create">
+                  <div class="mc-kdoc-warning">
+                    &#x26A0; {% translate "New documents are created with status = active so the agent can read them immediately." %}
+                  </div>
+                  <div class="mc-field">
+                    <label for="knowledge_collection_name">{% translate "Collection name" %} *</label>
+                    <input type="text" id="knowledge_collection_name" name="knowledge_collection_name"
+                           placeholder="{% translate 'e.g. Support playbook' %}">
+                  </div>
+                  <div class="mc-field">
+                    <label for="knowledge_doc_title">{% translate "Document title" %} *</label>
+                    <input type="text" id="knowledge_doc_title" name="knowledge_doc_title"
+                           placeholder="{% translate 'e.g. Triage guidelines v1' %}">
+                  </div>
+                  <div class="mc-field">
+                    <label for="knowledge_doc_content">{% translate "Document content (curated text)" %}</label>
+                    <textarea id="knowledge_doc_content" name="knowledge_doc_content" rows="6"
+                              placeholder="{% translate 'Paste the text the agent should know. Plain text, no chunking needed.' %}"></textarea>
+                    <span class="mc-field__hint">{% translate "Injected directly into the agent context — no embeddings required." %}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ======================================================= #}
+        {# ================ GAME-specific steps ================== #}
+        {# ======================================================= #}
+        {% if kind == 'game' %}
+
+        {# ---- STEP 2: GOAL ---- #}
+        <div class="mc-step-panel" id="step-2">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 3 — Goal" %}</div>
+              <h2>{% translate "Goal &amp; session flavor" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Write what needs to be achieved. Simple mode runs immediately; Advanced adds workspace governance." %}
+              </p>
+            </div>
+          </div>
+
+          <div class="mc-field">
+            <label for="goal_text">{% translate "Goal" %} *</label>
+            <textarea id="goal_text" name="goal_text" rows="5"
+                      placeholder="{% translate 'Example: Review this support ticket, decide whether more information is needed, and finish with the next best response.' %}"></textarea>
+            <span class="mc-field__hint">{% translate "Write the outcome you want, the boundaries, and what counts as finished." %}</span>
+          </div>
+          <div class="mc-field">
+            <label for="source_label">{% translate "Source label" %} <span style="font-weight:400">({% translate "optional" %})</span></label>
+            <input type="text" id="source_label" name="source_label"
+                   placeholder="{% translate 'e.g. Support triage test #1' %}">
+          </div>
+
+          <div class="mc-subhead" style="margin-top:16px;">{% translate "Session flavor" %}</div>
+          <div class="mc-toggle-row" data-toggle-group="game_flavor">
+            <button type="button" class="mc-toggle-btn is-on" data-toggle-value="simple">
+              Simple &mdash; {% translate "runs immediately" %}
+            </button>
+            <button type="button" class="mc-toggle-btn" data-toggle-value="advanced">
+              Advanced &mdash; {% translate "workspace + governance" %}
+            </button>
+          </div>
+          <div data-show-when="game_flavor:simple" class="mc-wiz-show is-visible">
+            <div class="mc-wiz-banner mc-wiz-banner--info">
+              {% translate "Creates an ExecutionSession directly — no workspace, no flags required." %}
+            </div>
+          </div>
+          <div data-show-when="game_flavor:advanced" class="mc-wiz-show">
+            <div class="mc-wiz-banner mc-wiz-banner--warn">
+              {% translate "Advanced mode creates a GameWorkspace and GameGoal. Running a goal session requires" %}
+              <code>AI_HUB_GAME_GOALS_ENABLED=True</code>{% translate "." %}
+            </div>
+          </div>
+
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 3: GOVERNANCE (advanced only) ---- #}
+        <div class="mc-step-panel" id="step-3">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 4 — Governance" %}</div>
+              <h2>{% translate "Workspace &amp; policy" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Simple mode skips this step. Fill in only if you chose Advanced in the previous step." %}
+              </p>
+            </div>
+          </div>
+
+          <div class="mc-wiz-banner mc-wiz-banner--warn">
+            &#x26A0; {% translate "Requires" %} <code>AI_HUB_GAME_GOALS_ENABLED=True</code> {% translate "to run goal sessions. Safe to configure now." %}
+          </div>
+
+          <div class="mc-field">
+            <label for="workspace_name">{% translate "Workspace name" %}</label>
+            <input type="text" id="workspace_name" name="workspace_name"
+                   placeholder="{% translate 'e.g. Support team workspace' %}">
+          </div>
+
+          <div class="mc-subhead" style="margin-top:4px;">{% translate "Safety" %}</div>
+          <div class="mc-gate">
+            <label><input type="checkbox" name="safety_require_approval_medium" checked> {% translate "Require approval for medium-risk actions" %}</label>
+          </div>
+          <div class="mc-gate">
+            <label><input type="checkbox" name="safety_require_approval_high" checked> {% translate "Require approval for high-risk actions" %}</label>
+          </div>
+
+          <div class="mc-subhead" style="margin-top:4px;">{% translate "Budget" %}</div>
+          <div class="mc-field-row">
+            <div class="mc-field">
+              <label for="budget_max_actions">{% translate "Max actions per session" %}</label>
+              <input type="number" id="budget_max_actions" name="budget_max_actions" value="2" min="1" max="50">
+            </div>
+          </div>
+
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 4: RUNTIME ---- #}
+        <div class="mc-step-panel" id="step-4">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 5 — Runtime" %}</div>
+              <h2>{% translate "Session runtime" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Control how the GAME loop runs. Keep iterations low while testing." %}
+              </p>
+            </div>
+          </div>
+
+          <div class="mc-field-row">
+            <div class="mc-field">
+              <label for="max_iterations">{% translate "Max iterations" %}</label>
+              <input type="number" id="max_iterations" name="max_iterations" value="3" min="1" max="25">
+              <span class="mc-field__hint">{% translate "Hard cap for the decision loop. Use 2–3 while testing." %}</span>
+            </div>
+            <div class="mc-field">
+              <label for="runtime_mode">{% translate "Runtime mode" %}</label>
+              <select id="runtime_mode" name="runtime_mode">
+                <option value="async" selected>{% translate "Async (recommended)" %}</option>
+                <option value="sync">{% translate "Sync (local tests only)" %}</option>
+              </select>
+            </div>
+          </div>
+          <div class="mc-gate">
+            <label>
+              <input type="checkbox" name="strict_response_contract" checked>
+              {% translate "Strict response contract" %}
+            </label>
+            <p class="mc-gate__note">{% translate "Fail the session if the agent does not return the required GAME JSON decision." %}</p>
+          </div>
+          <div class="mc-field" style="margin-top:14px;">
+            <label for="initial_context">{% translate "Initial context JSON" %} <span style="font-weight:400">({% translate "optional" %})</span></label>
+            <textarea id="initial_context" name="initial_context" rows="5"
+                      placeholder='{"customer":{"tier":"pro"},"ticket":"Cannot upload file."}'>{{ '{}' }}</textarea>
+            <span class="mc-field__hint">{% translate "JSON object passed to the agent before the first iteration." %}</span>
+          </div>
+
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 5: REVIEW (GAME) ---- #}
+        <div class="mc-step-panel" id="step-5">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 6 — Review" %}</div>
+              <h2>{% translate "Manifest &amp; create" %}</h2>
+            </div>
+          </div>
+          <div id="wiz-manifest" class="mc-manifest">
+            <div class="mc-mrow" style="color:var(--mc-muted)">
+              {% translate "Fill in the previous steps to see the manifest." %}
+            </div>
+          </div>
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="submit" class="mc-btn mc-btn--primary mc-btn--create">
+              &#x2713; {% translate "Create GAME session" %}
+            </button>
+          </div>
+        </div>
+
+        {# ======================================================= #}
+        {# ============= ORCHESTRATOR-specific steps ============= #}
+        {# ======================================================= #}
+        {% else %}
+
+        {# ---- STEP 2: PIPELINE ---- #}
+        <div class="mc-step-panel" id="step-2">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 3 — Pipeline" %}</div>
+              <h2>{% translate "Pipeline definition" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Name the pipeline. It will be created inactive — activate it after adding steps." %}
+              </p>
+            </div>
+          </div>
+          <div class="mc-field">
+            <label for="pipeline_name">{% translate "Pipeline name" %} *</label>
+            <input type="text" id="pipeline_name" name="pipeline_name"
+                   placeholder="{% translate 'e.g. Support triage pipeline' %}">
+            <span class="mc-field__hint">{% translate "Must be unique. Check existing pipelines before submitting." %}</span>
+            {% if errors.pipeline_name %}
+            <span class="mc-field__err" style="display:block">{{ errors.pipeline_name }}</span>
+            {% endif %}
+          </div>
+          <div class="mc-field">
+            <label for="pipeline_description">{% translate "Description" %} <span style="font-weight:400">({% translate "optional" %})</span></label>
+            <textarea id="pipeline_description" name="pipeline_description" rows="3"
+                      placeholder="{% translate 'What this pipeline does and when to use it.' %}"></textarea>
+          </div>
+          <div class="mc-subhead" style="margin-top:4px;">{% translate "Existing pipelines" %}</div>
+          {% if pipelines %}
+          <div style="font-family:var(--mc-mono);font-size:11.5px;color:var(--mc-muted);margin-bottom:12px;">
+            {% for p in pipelines %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+          {% else %}
+          <p style="font-size:12.5px;color:var(--mc-muted);margin-bottom:12px;">{% translate "No pipelines yet." %}</p>
+          {% endif %}
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 3: STEPS ---- #}
+        <div class="mc-step-panel" id="step-3">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 4 — Steps" %}</div>
+              <h2>{% translate "Pipeline steps" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Add one row per step. Click the step number to expand mappings." %}
+              </p>
+            </div>
+          </div>
+
+          {# hidden agent options template for JS cloning #}
+          <datalist id="agent-options-tmpl">
+            {% for a in agents %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+          </datalist>
+
+          <div class="mc-srows">
+            <div class="mc-srow">
+              <div class="mc-srow__top">
+                <span class="mc-srow__num" title="{% translate 'Click to expand mappings' %}">1</span>
+                <select name="step_agent_id">
+                  <option value="">— {% translate "Select agent" %} —</option>
+                  {% for a in agents %}
+                  <option value="{{ a.id }}">{{ a.name }}</option>
+                  {% endfor %}
+                </select>
+                <select name="step_on_error" style="width:110px">
+                  <option value="fail">fail</option>
+                  <option value="skip">skip</option>
+                  <option value="retry">retry</option>
+                </select>
+              </div>
+              <div class="mc-srow__details">
+                <div class="mc-srow__map">
+                  <div>
+                    <div class="mc-map-dir">agent key &larr; {% translate "from context path" %}</div>
+                    <textarea name="step_input_mapping" rows="3"
+                              placeholder='{"goal":"goal_text"}'></textarea>
+                  </div>
+                  <div>
+                    <div class="mc-map-dir">context key &larr; {% translate "from response path" %}</div>
+                    <textarea name="step_output_mapping" rows="3"
+                              placeholder='{"final_output":"llm.content"}'></textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="mc-add-row" data-add-step>
+            &#xFF0B; {% translate "Add step" %}
+          </button>
+
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 4: CONTRACTS ---- #}
+        <div class="mc-step-panel" id="step-4">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 5 — Contracts" %}</div>
+              <h2>{% translate "Global I/O contracts" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Optional. Validated before the pipeline runs and after the last step." %}
+              </p>
+            </div>
+          </div>
+          <div class="mc-field-row">
+            <div class="mc-field">
+              <label for="pipeline_input_contract">{% translate "Input contract (JSON)" %}</label>
+              <textarea id="pipeline_input_contract" name="pipeline_input_contract" rows="5"
+                        placeholder='{"required":["goal"],"properties":{"goal":{"type":"string"}}}'></textarea>
+              <span class="mc-field__hint">{% translate "Validated against initial_context before step 1." %}</span>
+            </div>
+            <div class="mc-field">
+              <label for="pipeline_output_contract">{% translate "Output contract (JSON)" %}</label>
+              <textarea id="pipeline_output_contract" name="pipeline_output_contract" rows="5"
+                        placeholder='{"required":["final_output"]}'></textarea>
+              <span class="mc-field__hint">{% translate "Validated against context after the last step." %}</span>
+            </div>
+          </div>
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 5: ACTIVATE ---- #}
+        <div class="mc-step-panel" id="step-5">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 6 — Activate" %}</div>
+              <h2>{% translate "Activation gate" %}</h2>
+              <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
+                {% translate "Leave unchecked to keep the pipeline inactive and continue editing after creation." %}
+              </p>
+            </div>
+          </div>
+          <div class="mc-wiz-banner mc-wiz-banner--warn">
+            &#x26A0; {% translate "Activation requires: ≥1 step, continuous order, and non-empty I/O contracts on every step agent. Starter agents have empty contracts — fill them first." %}
+          </div>
+          <div class="mc-gate">
+            <label>
+              <input type="checkbox" name="pipeline_activate">
+              {% translate "Activate immediately after creation" %}
+            </label>
+            <p class="mc-gate__note">{% translate "The wizard will attempt activation but will leave the pipeline inactive if the gate fails." %}</p>
+          </div>
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="button" class="mc-btn mc-btn--primary" data-wiz-next>{% translate "Next" %} &rarr;</button>
+          </div>
+        </div>
+
+        {# ---- STEP 6: REVIEW (Orchestrator) ---- #}
+        <div class="mc-step-panel" id="step-6">
+          <div class="mc-step-hd">
+            <div class="mc-step-hd__side">
+              <div class="mc-eyebrow">{% translate "Step 7 — Review" %}</div>
+              <h2>{% translate "Manifest &amp; create" %}</h2>
+            </div>
+          </div>
+          <div id="wiz-manifest" class="mc-manifest">
+            <div class="mc-mrow" style="color:var(--mc-muted)">
+              {% translate "Fill in the previous steps to see the manifest." %}
+            </div>
+          </div>
+          <div class="mc-wiz-foot">
+            <span class="mc-status-line"></span>
+            <button type="button" class="mc-btn" data-wiz-back>&larr; {% translate "Back" %}</button>
+            <button type="submit" class="mc-btn mc-btn--primary mc-btn--create">
+              &#x2713; {% translate "Create pipeline" %}
+            </button>
+          </div>
+        </div>
+
+        {% endif %}
+
+      </main>
+    </div>
+  </form>
+
+</div>
+{% endblock %}

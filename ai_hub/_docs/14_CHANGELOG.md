@@ -9,6 +9,23 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Build Console wizard
+
+- Added a multi-step guided creation wizard at `/admin/ai_hub/workspaces/build/` for both GAME and Orchestrator blueprints.
+- Wizard covers the full object-creation chain in one screen: engine (ProviderConfig + ModelConfig), agent (AgentProfile), toolbox assignments, knowledge (KnowledgeCollection + KnowledgeDocument), and workspace-specific configuration.
+- All objects are created inside a single `transaction.atomic()` block with a `_WizardRollback` sentinel; any validation error rolls back the entire transaction cleanly.
+- `get_or_create` used for ProviderConfig, ModelConfig, and AgentToolboxAssignment so re-running the wizard does not produce duplicate infrastructure objects.
+- Knowledge documents are created with `status=ACTIVE` to ensure agents can read them at runtime (draft documents are invisible to the runtime).
+- **GAME Simple blueprint**: creates `ExecutionSession(runtime_kind=GAME, status=PENDING)` with no goal record.
+- **GAME Advanced blueprint**: creates `GameWorkspace` (get_or_create by name) + `GameGoal` + a goal-bound `ExecutionSession`. Requires `AI_HUB_GAME_GOALS_ENABLED=True`.
+- **Orchestrator blueprint**: creates `PipelineDefinition` with optional step rows and optional immediate activation.
+- Added **Build Console** button to the AI Hub home primary nav, GAME workspace header, and Orchestrator workspace header.
+- Migrated `orchestrator.html` workspace view to Mission Deck `.ai-console`/`.mc-*` component system (parity with `game.html`).
+- CSS additions to `admin_control_center.css`: wizard vocabulary (`.mc-wiz`, `.mc-wiz-rail`, `.mc-wstep`, `.mc-step-panel`, `.mc-field`, `.mc-toggle-btn`, `.mc-sub`, `.mc-tboxes`, `.mc-tbox`, `.mc-kmode`, `.mc-kpane`, `.mc-srows`, `.mc-srow`, `.mc-manifest`, `.mc-mrow`, `.mc-wiz-foot`, `.mc-wiz-banner`, `.mc-gate`). Blueprint accent tokens: `--bp:#be123c` for GAME, `--bp:#047857` for Orchestrator.
+- JS additions to `admin_control_center.js`: `initWizard()` IIFE — multi-step navigation, toggle groups, toolbox chip selection, knowledge mode switching, step-row cloning, and live manifest rendering.
+- New template: `admin/ai_hub/workspaces/build.html`.
+- New documentation: `_docs/16_BUILD_CONSOLE.md`.
+
 #### Mission Deck admin control center
 
 - Reworked the Control Center and GAME workspace graph UI around a shared

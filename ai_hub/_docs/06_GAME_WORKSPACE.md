@@ -294,6 +294,10 @@ The workspace shows:
 - agents used in GAME,
 - agents that look prepared for GAME.
 
+### Build Console
+
+The **Build Console** button in the workspace header opens the guided creation wizard for a new GAME session. Use it when you want to create the full engine → agent → session chain in one transaction, without navigating multiple raw admin forms. See [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md).
+
 The GAME graph uses the same Mission Deck graph engine as the global Control
 Center. It maps goal, agent, decision, action, memory and stop nodes when those
 records exist in the selected context. Graph controls support search, node-kind

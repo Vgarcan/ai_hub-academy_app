@@ -255,6 +255,27 @@ For automated testing of the new tool platform, explicitly set the unified tool
 runtime flag when testing GAME reusable-tool actions, and explicitly disable
 legacy eager knowledge when testing retrieval-first behavior.
 
+## Provider Health Check Policy
+
+The Control Center can run a live health probe against Ollama providers
+(`GET <base_url>/api/tags`). Because the provider `base_url` is admin-controlled,
+this probe is a small SSRF surface and is governed by a trusted-endpoint policy:
+
+| Setting | Default | Use |
+| --- | --- | --- |
+| `AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS` | empty (permissive) | Comma-separated host allow-list for the live health probe. |
+
+Behavior:
+
+- The probe always requires an `http`/`https` base URL with a real host; anything
+  else (e.g. `file://`) is refused without making a request.
+- When the allow-list is **empty** (the default), any valid http(s) host is
+  allowed — this keeps local development against `http://localhost:11434` working.
+- When the allow-list is **non-empty**, only those hosts are probed; a provider
+  pointing elsewhere is reported as a health warning and **no outbound request is
+  made**. Set it in production, e.g.
+  `AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS="localhost,127.0.0.1,ollama.internal"`.
+
 ## Runtime Modes
 
 Execution sessions support:

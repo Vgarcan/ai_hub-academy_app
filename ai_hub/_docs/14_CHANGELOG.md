@@ -9,6 +9,14 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Continuous integration
+
+- Added `.github/workflows/ci.yml`: on push/PR to `main`, runs `manage.py check`, a missing-migration check (`makemigrations --check --dry-run`) and the full test suite on Python 3.12. Intended to be a required status check for `main` (branch protection enabled separately in repo settings).
+
+#### Operations Inbox authorization (explicit policy + tests)
+
+- Documented and test-proved the layered Operations Inbox authorization: opening requires admin view/change + `view_executionsession`; inline Approve/Reject render only with `approve_game_action`; the underlying POST endpoints re-check the permission server-side. Added per-role tests (viewer sees the queue without approval controls; approver sees them; the underlying endpoints reject direct POSTs without the permission).
+
 #### Admin information architecture (IA overhaul)
 
 - Re-architected the admin around **five areas** (Overview & Entry, Foundation, Orchestrator, GAME, Operations). Model `verbose_name_plural` prefixes were re-mapped to area-based numbering so the sidebar groups by area; metadata-only migration `0018_alter_*_options`.
@@ -313,6 +321,12 @@ Host-project features should be documented in the host project, not here.
   to test, monitor and recover from when possible.
 
 ### Fixed
+
+#### P0 hardening (review remediation)
+
+- **Build Console silent resource failures → field-level errors:** invalid toolbox selections, invalid knowledge-collection selections, invalid temperature and invalid initial-context JSON now surface as field errors and roll back the whole wizard transaction, instead of being swallowed with `pass`. Pipeline activation failures now raise a visible warning ("created but could not be activated: …") rather than silently deactivating.
+- **Wizard reuse-mode `UnboundLocalError`:** the builders used `_` both as the `gettext` alias and as a throwaway in `provider, _ = get_or_create(...)`, which shadowed `_` as a local — so *any* validation error on the reuse path raised a 500 instead of showing the field error. Throwaways renamed to `_created`; all wizard error messages render correctly now.
+- **Provider-health SSRF surface → trusted-endpoint policy:** the live Ollama probe now validates the `base_url` scheme/host and honours a new `AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS` allow-list (empty = permissive, keeps localhost dev working). A disallowed host is reported as a warning and makes **no** outbound request.
 
 #### Build Console wizard (doc-audit follow-up)
 

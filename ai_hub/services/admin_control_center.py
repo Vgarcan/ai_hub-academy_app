@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import requests
+from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Avg, Count, Max, Prefetch, Q
 from django.urls import reverse
@@ -239,6 +241,31 @@ def _provider_health_cache_key(provider: ProviderConfig) -> str:
     return f"ai_hub:provider_health:{provider.pk}:{updated_at}"
 
 
+def _validate_health_endpoint(base_url: str) -> tuple[bool, str]:
+    """Trusted-endpoint policy for the live provider-health check.
+
+    The base_url is admin-controlled, so the live check is a small SSRF surface.
+    This enforces: an http(s) scheme and a real host, plus an optional host
+    allow-list (``AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS``). The allow-list is empty
+    by default (permissive, so localhost Ollama keeps working); set it in settings
+    to restrict which hosts the server may probe in production.
+    """
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https"):
+        return False, f"Provider base_url must use http or https, not '{parsed.scheme or 'none'}'."
+    if not parsed.hostname:
+        return False, "Provider base_url has no host."
+    allowed = getattr(settings, "AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS", None)
+    if allowed:
+        allowed_hosts = {str(h).strip().lower() for h in allowed if str(h).strip()}
+        if parsed.hostname.lower() not in allowed_hosts:
+            return False, (
+                f"Host '{parsed.hostname}' is not in AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS; "
+                "live health check skipped."
+            )
+    return True, ""
+
+
 def _fetch_provider_health(provider: ProviderConfig) -> ProviderHealth:
     if not provider.is_active:
         return ProviderHealth("inactive", "Provider inactive", set())
@@ -246,6 +273,10 @@ def _fetch_provider_health(provider: ProviderConfig) -> ProviderHealth:
         return ProviderHealth("unknown", "Live checks are enabled for Ollama providers only.", set())
     if not provider.base_url:
         return ProviderHealth("warning", "Ollama provider has no base_url.", set())
+
+    endpoint_ok, endpoint_reason = _validate_health_endpoint(provider.base_url)
+    if not endpoint_ok:
+        return ProviderHealth("warning", endpoint_reason, set())
 
     try:
         response = requests.get(f"{provider.base_url.rstrip('/')}/api/tags", timeout=1.5)

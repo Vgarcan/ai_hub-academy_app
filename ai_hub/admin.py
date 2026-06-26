@@ -1,5 +1,5 @@
 import json
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django import forms
 from django.contrib import admin
@@ -241,7 +241,7 @@ def _wizard_build_game(request, data):
         if not provider_name:
             errors["engine_provider_name"] = _("Provider name is required.")
         else:
-            provider, _ = ProviderConfig.objects.get_or_create(
+            provider, _created = ProviderConfig.objects.get_or_create(
                 name=provider_name,
                 defaults={
                     "provider_type": data.get("engine_provider_type") or ProviderConfig.ProviderType.TRAINING,
@@ -251,9 +251,10 @@ def _wizard_build_game(request, data):
             model_name = (data.get("engine_model_name") or "training/starter").strip()
             try:
                 temp = Decimal(str(data.get("engine_temperature") or "0.30"))
-            except Exception:
+            except (InvalidOperation, ValueError, TypeError):
+                errors["engine_temperature"] = _("Temperature must be a number (e.g. 0.30).")
                 temp = Decimal("0.30")
-            model_config, _ = ModelConfig.objects.get_or_create(
+            model_config, _created = ModelConfig.objects.get_or_create(
                 provider=provider,
                 model_name=model_name,
                 defaults={"temperature_default": temp, "is_active": True},
@@ -296,7 +297,7 @@ def _wizard_build_game(request, data):
                 agent=agent, toolbox=tb, defaults={"is_enabled": True}
             )
         except (Toolbox.DoesNotExist, ValueError, TypeError):
-            pass
+            errors["agent_toolbox_ids"] = _("One or more selected toolboxes could not be found.")
 
     # 4. Knowledge
     knowledge_mode = data.get("knowledge_mode", "none")
@@ -305,7 +306,7 @@ def _wizard_build_game(request, data):
             coll = KnowledgeCollection.objects.get(pk=int(data.get("knowledge_collection_id", "")))
             agent.knowledge_collections.add(coll)
         except (KnowledgeCollection.DoesNotExist, ValueError, TypeError):
-            pass
+            errors["knowledge_collection_id"] = _("The selected knowledge collection could not be found.")
     elif knowledge_mode == "create":
         coll_name = (data.get("knowledge_collection_name") or "").strip()
         doc_title  = (data.get("knowledge_doc_title") or "").strip()
@@ -324,14 +325,19 @@ def _wizard_build_game(request, data):
     try:
         initial_context = json.loads(raw_ctx)
         if not isinstance(initial_context, dict):
+            errors["initial_context"] = _("Initial context must be a JSON object.")
             initial_context = {}
     except json.JSONDecodeError:
+        errors["initial_context"] = _("Initial context must be valid JSON.")
         initial_context = {}
 
     # 6. Session
     goal_text = (data.get("goal_text") or "").strip()
     if not goal_text:
         errors["goal_text"] = _("Goal is required.")
+
+    # Surface any field-level resource errors before creating the session.
+    if errors:
         return None, errors
 
     try:
@@ -360,7 +366,7 @@ def _wizard_build_game(request, data):
                 "max_action_runs_per_session": max(1, int(data.get("budget_max_actions") or 2)),
             },
         }
-        workspace, _ = GameWorkspace.objects.get_or_create(
+        workspace, _created = GameWorkspace.objects.get_or_create(
             name=ws_name,
             defaults={"default_policy": policy},
         )
@@ -414,7 +420,7 @@ def _wizard_build_orchestrator(request, data):
         if not provider_name:
             errors["engine_provider_name"] = _("Provider name is required.")
         else:
-            provider, _ = ProviderConfig.objects.get_or_create(
+            provider, _created = ProviderConfig.objects.get_or_create(
                 name=provider_name,
                 defaults={
                     "provider_type": data.get("engine_provider_type") or ProviderConfig.ProviderType.TRAINING,
@@ -424,9 +430,10 @@ def _wizard_build_orchestrator(request, data):
             model_name = (data.get("engine_model_name") or "training/starter").strip()
             try:
                 temp = Decimal(str(data.get("engine_temperature") or "0.30"))
-            except Exception:
+            except (InvalidOperation, ValueError, TypeError):
+                errors["engine_temperature"] = _("Temperature must be a number (e.g. 0.30).")
                 temp = Decimal("0.30")
-            model_config, _ = ModelConfig.objects.get_or_create(
+            model_config, _created = ModelConfig.objects.get_or_create(
                 provider=provider,
                 model_name=model_name,
                 defaults={"temperature_default": temp, "is_active": True},
@@ -472,7 +479,7 @@ def _wizard_build_orchestrator(request, data):
                 agent=entry_agent, toolbox=tb, defaults={"is_enabled": True}
             )
         except (Toolbox.DoesNotExist, ValueError, TypeError):
-            pass
+            errors["agent_toolbox_ids"] = _("One or more selected toolboxes could not be found.")
 
     knowledge_mode = data.get("knowledge_mode", "none")
     if knowledge_mode == "reuse":
@@ -480,7 +487,7 @@ def _wizard_build_orchestrator(request, data):
             coll = KnowledgeCollection.objects.get(pk=int(data.get("knowledge_collection_id", "")))
             entry_agent.knowledge_collections.add(coll)
         except (KnowledgeCollection.DoesNotExist, ValueError, TypeError):
-            pass
+            errors["knowledge_collection_id"] = _("The selected knowledge collection could not be found.")
     elif knowledge_mode == "create":
         coll_name = (data.get("knowledge_collection_name") or "").strip()
         doc_title  = (data.get("knowledge_doc_title") or "").strip()
@@ -493,6 +500,10 @@ def _wizard_build_orchestrator(request, data):
                 status=KnowledgeDocument.Status.ACTIVE,
             )
             entry_agent.knowledge_collections.add(coll)
+
+    # Surface any field-level resource errors before creating the pipeline.
+    if errors:
+        return None, errors
 
     # 4. Pipeline
     pipeline_name = (data.get("pipeline_name") or "").strip()
@@ -534,15 +545,25 @@ def _wizard_build_orchestrator(request, data):
             output_mapping=_parse_json_field(step_out_maps[i] if i < len(step_out_maps) else None, {}),
         )
 
-    # 6. Activate if requested
+    # 6. Activate if requested. The pipeline is already created; if activation
+    # validation fails we keep it inactive but surface a visible warning rather
+    # than silently swallowing the user's "activate" intent.
     if data.get("pipeline_activate") in ("on", "true", "1"):
         try:
             pipeline.is_active = True
             pipeline.full_clean()
             pipeline.save()
-        except Exception:
+        except ValidationError as exc:
             pipeline.is_active = False
             pipeline.save()
+            messages.warning(
+                request,
+                _(
+                    'Pipeline "%(name)s" was created but could not be activated: %(reason)s '
+                    "Fix the steps/contracts and activate it from the Orchestrator admin."
+                )
+                % {"name": pipeline.name, "reason": "; ".join(exc.messages) if exc.messages else str(exc)},
+            )
 
     return pipeline, {}
 

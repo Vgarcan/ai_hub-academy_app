@@ -2593,6 +2593,31 @@ class HubAdminControlCenterTests(TestCase):
         self.assertContains(response, 'data-tab="overview"')
         self.assertContains(response, "Fetch profile")        # tool listed in overview
 
+    def test_provider_health_rejects_non_http_scheme(self):
+        """P0: the live health check refuses non-http(s) base URLs (e.g. file://)."""
+        from ai_hub.services.admin_control_center import _validate_health_endpoint
+        ok, reason = _validate_health_endpoint("file:///etc/passwd")
+        self.assertFalse(ok)
+        self.assertIn("http", reason)
+
+    @override_settings(AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS=("ollama.internal",))
+    def test_provider_health_allowlist_blocks_other_hosts(self):
+        """P0: with an allow-list set, hosts outside it are rejected before any request."""
+        from ai_hub.services.admin_control_center import _validate_health_endpoint
+        ok, reason = _validate_health_endpoint("http://localhost:11434")
+        self.assertFalse(ok)
+        self.assertIn("not in", reason)
+
+    @override_settings(AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS=("ollama.internal",))
+    @patch("ai_hub.services.admin_control_center.requests.get")
+    def test_provider_health_disallowed_host_makes_no_request(self, mocked_get):
+        """P0 (SSRF): a disallowed host must NOT trigger an outbound HTTP request."""
+        from ai_hub.services.admin_control_center import _fetch_provider_health
+        cache.clear()
+        health = _fetch_provider_health(self.provider)  # base_url is http://localhost:11434
+        self.assertEqual(health.status, "warning")
+        mocked_get.assert_not_called()
+
     def test_operations_inbox_renders_empty(self):
         """IA Step 5: inbox renders the queue shell and an all-clear state when idle."""
         client = Client()
@@ -2632,6 +2657,31 @@ class HubAdminControlCenterTests(TestCase):
         client.force_login(weak_staff)
         response = client.get(reverse("admin:ai_hub_operations_inbox"))
         self.assertEqual(response.status_code, 403)
+
+    def test_operations_inbox_hides_approve_controls_without_approval_permission(self):
+        """P0 authz: a viewer (view perms, no approve_game_action) can open the inbox
+        but `can_approve` is False, so no inline Approve/Reject controls are offered."""
+        from django.contrib.auth.models import Permission
+        viewer = get_user_model().objects.create_user(
+            username="inbox_viewer", password="pw", is_staff=True
+        )
+        viewer.user_permissions.add(
+            Permission.objects.get(codename="view_pipelinedefinition"),
+            Permission.objects.get(codename="view_executionsession"),
+        )
+        client = Client()
+        client.force_login(viewer)
+        response = client.get(reverse("admin:ai_hub_operations_inbox"))
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["can_approve"])
+
+    def test_operations_inbox_shows_approve_controls_for_approver(self):
+        """P0 authz: a user holding approve_game_action gets `can_approve` True."""
+        client = Client()
+        client.force_login(self.user)  # superuser → holds approve_game_action
+        response = client.get(reverse("admin:ai_hub_operations_inbox"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["can_approve"])
 
     def test_clean_workspace_urls_render(self):
         client = Client()
@@ -2819,6 +2869,30 @@ class HubAdminControlCenterTests(TestCase):
         valid_on_error = {c[0] for c in PipelineStep.OnError.choices}
         self.assertIn(step.on_error, valid_on_error)
         step.full_clean()  # would raise if on_error were an invalid choice
+
+    def test_build_wizard_invalid_toolbox_surfaces_error_and_rolls_back(self):
+        """P0: a bad toolbox id must become a field-level error and roll back — not pass silently."""
+        from ai_hub.models import PipelineDefinition
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build") + "?kind=orchestrator",
+            {
+                "wizard_kind": "orchestrator",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "agent_toolbox_ids": ["999999"],  # nonexistent toolbox
+                "pipeline_name": "Should not exist",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)  # re-render, not a redirect
+        self.assertContains(response, "could not be found")
+        # Whole transaction rolled back: no pipeline created.
+        self.assertFalse(PipelineDefinition.objects.filter(name="Should not exist").exists())
 
     def test_home_vitals_running_and_waiting_counts_are_separate(self):
         """Regression: vitals must carry separate 'running' and 'waiting' keys, not a hardcoded zero."""

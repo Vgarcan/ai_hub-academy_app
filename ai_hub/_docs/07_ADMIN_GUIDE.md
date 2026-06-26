@@ -68,7 +68,13 @@ The Operations Inbox is the single cross-workspace queue for everything that nee
 - **Failures** — recently failed execution sessions (most recent 25);
 - **Blocked goals** — GAME goals in `blocked` status (most recent 25).
 
-Filter chips at the top narrow the list to one category. Approvals and waiting-info items are unbounded (they are the actionable gates); failures and blocked goals are capped. The page is reached from the home header, the home "Needs your attention" panel, and the Operations area card. It requires staff access and the `view_executionsession` permission.
+Filter chips at the top narrow the list to one category. Approvals and waiting-info items are unbounded (they are the actionable gates); failures and blocked goals are capped. The page is reached from the home header, the home "Needs your attention" panel, and the Operations area card.
+
+**Authorization (layered):**
+
+- **Opening the inbox** requires staff access, admin view/change permission, and the `ai_hub.view_executionsession` permission. Staff without it get a 403.
+- **Inline Approve / Reject** controls are rendered only when the user holds `ai_hub.approve_game_action` (the template's `can_approve` flag). A read-only operator sees the queue but no approval controls.
+- **Server-side enforcement:** the Approve/Reject buttons POST to the existing `ai_hub_gameactionapprovalrequest_approve` / `_reject` endpoints, which re-check `ai_hub.approve_game_action` on the server. Hiding the button is defense-in-depth, not the only gate — a direct POST without the permission is still refused.
 
 The Operations Inbox is the action queue; the Control Center (below) is the deeper diagnostics surface.
 

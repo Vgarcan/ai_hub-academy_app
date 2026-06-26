@@ -167,3 +167,14 @@ AI_HUB_GAME_DELEGATION_ENABLED = _env_bool("AI_HUB_GAME_DELEGATION_ENABLED", DEB
 AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED = _env_bool("AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED", False)
 AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED = _env_bool("AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", True)
 AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL = int(os.environ.get("AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL", "3"))
+
+# Trusted-endpoint allow-list for the live provider-health check (Ollama /api/tags).
+# The provider base_url is admin-controlled, so the live probe is a small SSRF
+# surface. Empty = permissive (any http(s) host, including localhost for dev
+# Ollama). Set a comma-separated host list to restrict which hosts may be probed
+# in production, e.g. AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS="localhost,127.0.0.1,ollama.internal".
+AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS = tuple(
+    item.strip()
+    for item in os.environ.get("AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS", "").split(",")
+    if item.strip()
+)

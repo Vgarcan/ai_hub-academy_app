@@ -421,8 +421,8 @@ def _seed_tutorial_missions(force_update=False):
                         "Every AI Hub run leaves a complete audit trail.\n\n"
                         "### Steps\n\n"
                         "1. Open [Admin → AI Hub → Execution sessions](/admin/ai_hub/executionsession/)\n"
-                        "2. Click on a successful session\n"
-                        "3. Scroll to **Execution step runs**\n"
+                        "2. Click on a successful session to open the **Session Explorer**\n"
+                        "3. Open the **Timeline** tab to see each step run\n"
                         "4. Expand a step run and read:\n"
                         "   - **Request payload**: what was sent to the model\n"
                         "   - **Response payload**: what the model returned\n"
@@ -507,12 +507,12 @@ def _seed_tutorial_missions(force_update=False):
 
     interface_mission = {
         "order": 2,
-        "title": "Inspect The Mission Deck",
+        "title": "Inspect The Control Center",
         "slug": "inspect-the-mission-deck",
         "goal": "Use the connection graph, node pop-up, full screen mode and Needs attention inbox.",
         "validation_key": "visited_control_room",
         "instructions": (
-            "## Inspect the Mission Deck\n\n"
+            "## Inspect the Control Center\n\n"
             "The Control Center is designed for answering one question quickly: "
             "`what is connected, what is healthy, and where do I click next?`\n\n"
             "### Steps\n\n"
@@ -536,17 +536,23 @@ def _seed_tutorial_missions(force_update=False):
         "enter-the-control-room": {
             "instructions": (
                 "## Welcome to AI Hub!\n\n"
-                "Your first mission is to learn the shape of the new AI Hub Admin interface.\n\n"
+                "Your first mission is to learn the shape of the AI Hub Admin cockpit.\n\n"
                 "### Steps\n\n"
-                "1. Open [AI Hub Admin](/admin/ai_hub/)\n"
+                "1. Open [AI Hub Admin](/admin/ai_hub/) — the cockpit home, organised into five areas "
+                "(Overview & Entry, Foundation, Orchestrator, GAME, Operations)\n"
                 "2. Open the [Control Center](/admin/ai_hub/pipelinedefinition/control-center/)\n"
-                "3. Open [Orchestrator Workspace](/admin/ai_hub/workspaces/orchestrator/)\n"
-                "4. Open [GAME Workspace](/admin/ai_hub/workspaces/game/)\n"
-                "5. Return here and click **Check Mission**\n\n"
+                "3. Open the [Build Console](/admin/ai_hub/workspaces/build/) — the guided wizard that creates a whole setup at once\n"
+                "4. Open [Orchestrator Workspace](/admin/ai_hub/workspaces/orchestrator/)\n"
+                "5. Open [GAME Workspace](/admin/ai_hub/workspaces/game/)\n"
+                "6. Open the [Operations Inbox](/admin/ai_hub/operations/) — the queue for everything that needs a human\n"
+                "7. Return here and click **Check Mission**\n\n"
                 "### What you will find\n\n"
-                "- The **Control Center** is the Mission Deck for system health, graph inspection and attention items\n"
+                "- The **cockpit home** shows live vitals, what needs a human, and the five-area navigation map\n"
+                "- The **Control Center** is the deep-diagnostics surface: system health, the connection graph and attention items\n"
+                "- The **Build Console** creates provider → model → agent → workspace in one atomic step\n"
                 "- The **Orchestrator** workspace manages fixed sequential pipelines\n"
                 "- The **GAME** workspace manages autonomous goal-driven sessions\n"
+                "- The **Operations Inbox** collects approvals, paused sessions, failures and blocked goals in one place\n"
                 "- Both runtimes share the same providers, models, agents, knowledge and tools\n"
             ),
         },
@@ -632,8 +638,8 @@ def _seed_tutorial_missions(force_update=False):
                 "Every AI Hub run leaves a complete audit trail.\n\n"
                 "### Steps\n\n"
                 "1. Open [Admin - AI Hub - Execution sessions](/admin/ai_hub/executionsession/)\n"
-                "2. Click on a successful or failed session\n"
-                "3. Scroll to **Execution step runs**\n"
+                "2. Click on a successful or failed session to open the **Session Explorer**\n"
+                "3. Open the **Timeline** tab to see each step run in order\n"
                 "4. Expand a step run and read:\n"
                 "   - **Request payload**: what was sent to the model\n"
                 "   - **Response payload**: what the model returned\n"

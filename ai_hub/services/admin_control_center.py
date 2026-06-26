@@ -7,7 +7,7 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Avg, Count, Max, Prefetch, Q
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 
 from ai_hub.models import (
     AgentProfile,
@@ -569,7 +569,7 @@ def build_ai_hub_home_context() -> dict:
     for category, model_name, label, reason in _HIDDEN_MODEL_CATALOG:
         try:
             url = _admin_changelist_url(model_name)
-        except Exception:
+        except NoReverseMatch:
             url = ""
         hidden_models.append({"category": category, "label": label, "reason": reason, "url": url})
 

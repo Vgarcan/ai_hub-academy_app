@@ -2894,6 +2894,42 @@ class HubAdminControlCenterTests(TestCase):
         # Whole transaction rolled back: no pipeline created.
         self.assertFalse(PipelineDefinition.objects.filter(name="Should not exist").exists())
 
+    def test_build_wizard_full_chain_rollback_on_late_failure(self):
+        """P1.3: a late failure rolls back the ENTIRE chain — newly created provider,
+        agent and knowledge collection — not just the failing object."""
+        from ai_hub.models import (
+            PipelineDefinition, ProviderConfig, AgentProfile, KnowledgeCollection,
+        )
+        PipelineDefinition.objects.create(name="DupPipeline")  # forces a duplicate-name failure
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build") + "?kind=orchestrator",
+            {
+                "wizard_kind": "orchestrator",
+                "engine_mode": "create",
+                "engine_provider_name": "RollbackProv",
+                "engine_provider_type": ProviderConfig.ProviderType.TRAINING,
+                "engine_model_name": "training/rollback",
+                "agent_mode": "create",
+                "agent_name": "RollbackAgent",
+                "agent_prompt": "do x",
+                "knowledge_mode": "create",
+                "knowledge_collection_name": "RollbackColl",
+                "knowledge_doc_title": "RollbackDoc",
+                "knowledge_doc_content": "content",
+                "pipeline_name": "DupPipeline",  # duplicate → fails AFTER engine/agent/knowledge
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "already exists")
+        # Everything created before the failure must be gone.
+        self.assertFalse(ProviderConfig.objects.filter(name="RollbackProv").exists())
+        self.assertFalse(AgentProfile.objects.filter(name="RollbackAgent").exists())
+        self.assertFalse(KnowledgeCollection.objects.filter(name="RollbackColl").exists())
+
     def test_home_vitals_running_and_waiting_counts_are_separate(self):
         """Regression: vitals must carry separate 'running' and 'waiting' keys, not a hardcoded zero."""
         from ai_hub.services.admin_control_center import build_ai_hub_home_context
@@ -4122,6 +4158,28 @@ class GamePauseApprovalResumeTests(TestCase):
         result = approve_action_run(action_run_id=action_run.pk, reviewed_by=self.approver)
         result.refresh_from_db()
         self.assertEqual(result.status, GameActionRun.Status.SUCCESS)
+
+    def test_double_approval_is_refused(self):
+        """P1.3 (approval race): a second approve on an already-approved action must
+        fail via the status guard, never double-execute. The service takes
+        select_for_update locks and re-checks status inside the transaction."""
+        action_run, _ = self._make_waiting_approval_run()
+        first = approve_action_run(action_run_id=action_run.pk, reviewed_by=self.approver)
+        first.refresh_from_db()
+        self.assertEqual(first.status, GameActionRun.Status.SUCCESS)
+
+        with self.assertRaises(ValidationError):
+            approve_action_run(action_run_id=action_run.pk, reviewed_by=self.approver)
+        # Still exactly one run; status unchanged.
+        action_run.refresh_from_db()
+        self.assertEqual(action_run.status, GameActionRun.Status.SUCCESS)
+
+    def test_reject_after_approve_is_refused(self):
+        """P1.3 (approval race): once approved, the same request cannot be rejected."""
+        action_run, _ = self._make_waiting_approval_run()
+        approve_action_run(action_run_id=action_run.pk, reviewed_by=self.approver)
+        with self.assertRaises(ValidationError):
+            reject_action_run(action_run_id=action_run.pk, reviewed_by=self.approver)
 
 
 # ============================================================
@@ -6161,3 +6219,61 @@ class GameOrphanedGoalCleanupTests(TestCase):
         self.assertIn("Cancelled 1", out.getvalue())
         goal.refresh_from_db()
         self.assertEqual(goal.status, GameGoal.Status.CANCELLED)
+
+
+class HubHealthEvaluatorTests(TestCase):
+    """P1.4: the reusable runtime-health evaluator (services/health.py)."""
+
+    def setUp(self):
+        self.provider = ProviderConfig.objects.create(
+            name="Health Ollama",
+            provider_type=ProviderConfig.ProviderType.OLLAMA,
+            base_url="http://localhost:11434",
+        )
+        self.model = ModelConfig.objects.create(provider=self.provider, model_name="ollama/qwen3:8b")
+        self.agent = AgentProfile.objects.create(
+            name="health-agent",
+            role="r",
+            model_config=self.model,
+            system_prompt="do the thing",
+            input_contract={"required": ["x"]},
+            output_contract={"required": ["y"]},
+        )
+
+    def test_provider_healthy(self):
+        from ai_hub.services.health import evaluate_provider, STATUS_OK
+        result = evaluate_provider(self.provider)
+        self.assertEqual(result.status, STATUS_OK)
+        self.assertTrue(result.ok)
+        self.assertTrue(all(c.ok for c in result.checks))
+
+    def test_provider_inactive(self):
+        from ai_hub.services.health import evaluate_provider, STATUS_INACTIVE
+        self.provider.is_active = False
+        self.provider.save(update_fields=["is_active"])
+        self.assertEqual(evaluate_provider(self.provider).status, STATUS_INACTIVE)
+
+    def test_provider_ollama_without_base_url_warns(self):
+        from ai_hub.services.health import evaluate_provider, STATUS_WARNING
+        self.provider.base_url = ""
+        self.provider.save(update_fields=["base_url"])
+        result = evaluate_provider(self.provider)
+        self.assertEqual(result.status, STATUS_WARNING)
+        self.assertIn("Base URL set", [c.label for c in result.failing])
+
+    def test_model_active_provider_off_is_warning(self):
+        from ai_hub.services.health import evaluate_model, STATUS_WARNING
+        self.provider.is_active = False
+        self.provider.save(update_fields=["is_active"])
+        result = evaluate_model(self.model)
+        self.assertEqual(result.status, STATUS_WARNING)
+
+    def test_agent_healthy_then_missing_contracts_warns(self):
+        from ai_hub.services.health import evaluate_agent, STATUS_OK, STATUS_WARNING
+        self.assertEqual(evaluate_agent(self.agent).status, STATUS_OK)
+        self.agent.input_contract = {}
+        self.agent.output_contract = {}
+        self.agent.save(update_fields=["input_contract", "output_contract"])
+        result = evaluate_agent(self.agent)
+        self.assertEqual(result.status, STATUS_WARNING)
+        self.assertIn("Contracts set", [c.label for c in result.failing])

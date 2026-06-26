@@ -322,6 +322,13 @@ Host-project features should be documented in the host project, not here.
 
 ### Fixed
 
+#### P1 hardening (review remediation)
+
+- **Shared Build Console builder service:** extracted the duplicated engine/agent/toolbox/knowledge resolution from the GAME and Orchestrator wizard builders into `ai_hub/services/build_console.py` (`resolve_engine`, `resolve_agent`, `attach_toolboxes`, `attach_knowledge`, `parse_json_field`). The two `admin.py` builders are now thin and cannot drift apart.
+- **Reusable runtime-health evaluator:** added `ai_hub/services/health.py` (`evaluate_provider`, `evaluate_model`, `evaluate_agent` → `HealthResult` with a coarse status + labelled checks). The Connectivity and Agent Composer overviews now use it as the single source of truth instead of inline health lists.
+- **Redacted logging on broad exception catches:** added an `ai_hub.admin` logger; the previously-silent agent-overview tool-manifest catch and the batch lifecycle/approval/run-session actions now log failures (object id + traceback, no payloads) while keeping their visible warnings and batch resilience. Typed the home `hidden_models` reverse lookup to `NoReverseMatch`.
+- **Integration tests:** full-chain Build Console rollback (a late failure rolls back newly created provider/agent/knowledge), approval race guards (double-approve and reject-after-approve are refused), and the health evaluator.
+
 #### P0 hardening (review remediation)
 
 - **Build Console silent resource failures → field-level errors:** invalid toolbox selections, invalid knowledge-collection selections, invalid temperature and invalid initial-context JSON now surface as field errors and roll back the whole wizard transaction, instead of being swallowed with `pass`. Pipeline activation failures now raise a visible warning ("created but could not be activated: …") rather than silently deactivating.

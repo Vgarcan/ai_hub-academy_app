@@ -1,5 +1,5 @@
 import json
-from decimal import Decimal, InvalidOperation
+import logging
 
 from django import forms
 from django.contrib import admin
@@ -50,11 +50,22 @@ from .services.admin_control_center import (
     build_game_graph_context,
     build_operations_inbox_context,
 )
+from .services.build_console import (
+    attach_knowledge,
+    attach_toolboxes,
+    parse_json_field,
+    resolve_agent,
+    resolve_engine,
+)
 from .services.execution_runner import run_execution_session
 from .services.game_goal_execution import create_goal_execution_session
 from .services.game_operational_ux import redact_payload, redact_text
 from .services.game_resume import approve_action_run, reject_action_run
+from .services.health import evaluate_agent, evaluate_provider
 from .services.tool_resolution import resolve_agent_tools
+
+
+logger = logging.getLogger(__name__)
 
 
 ACTIVE_EXECUTION_STATUSES = (
@@ -227,98 +238,19 @@ def _wizard_build_game(request, data):
     """Create the full GAME chain transactionally. Returns (session, errors_dict)."""
     errors = {}
 
-    # 1. Model config
-    engine_mode = data.get("engine_mode", "reuse")
-    model_config = None
-    if engine_mode == "reuse":
-        mid = data.get("engine_reuse_model_id", "")
-        try:
-            model_config = ModelConfig.objects.get(pk=int(mid))
-        except (ModelConfig.DoesNotExist, ValueError, TypeError):
-            errors["engine_reuse_model_id"] = _("Select a valid model.")
-    else:
-        provider_name = (data.get("engine_provider_name") or "").strip()
-        if not provider_name:
-            errors["engine_provider_name"] = _("Provider name is required.")
-        else:
-            provider, _created = ProviderConfig.objects.get_or_create(
-                name=provider_name,
-                defaults={
-                    "provider_type": data.get("engine_provider_type") or ProviderConfig.ProviderType.TRAINING,
-                    "is_active": True,
-                },
-            )
-            model_name = (data.get("engine_model_name") or "training/starter").strip()
-            try:
-                temp = Decimal(str(data.get("engine_temperature") or "0.30"))
-            except (InvalidOperation, ValueError, TypeError):
-                errors["engine_temperature"] = _("Temperature must be a number (e.g. 0.30).")
-                temp = Decimal("0.30")
-            model_config, _created = ModelConfig.objects.get_or_create(
-                provider=provider,
-                model_name=model_name,
-                defaults={"temperature_default": temp, "is_active": True},
-            )
-
+    # 1. Engine (shared)
+    model_config = resolve_engine(data, errors)
     if errors:
         return None, errors
 
-    # 2. Agent
-    agent_mode = data.get("agent_mode", "reuse")
-    agent = None
-    if agent_mode == "reuse":
-        aid = data.get("agent_reuse_id", "")
-        try:
-            agent = AgentProfile.objects.get(pk=int(aid))
-        except (AgentProfile.DoesNotExist, ValueError, TypeError):
-            errors["agent_reuse_id"] = _("Select a valid agent.")
-    else:
-        agent_name = (data.get("agent_name") or "").strip()
-        if not agent_name:
-            errors["agent_name"] = _("Agent name is required.")
-        else:
-            agent = AgentProfile.objects.create(
-                name=agent_name,
-                role=(data.get("agent_role") or "").strip(),
-                system_prompt=(data.get("agent_prompt") or "").strip(),
-                model_config=model_config,
-                is_active=True,
-            )
-
+    # 2. Agent (shared) — GAME agents are created without pipeline contracts
+    agent = resolve_agent(data, model_config, errors, with_contracts=False)
     if errors:
         return None, errors
 
-    # 3. Toolboxes
-    toolbox_ids = data.getlist("agent_toolbox_ids")
-    for tb_id in toolbox_ids:
-        try:
-            tb = Toolbox.objects.get(pk=int(tb_id))
-            AgentToolboxAssignment.objects.get_or_create(
-                agent=agent, toolbox=tb, defaults={"is_enabled": True}
-            )
-        except (Toolbox.DoesNotExist, ValueError, TypeError):
-            errors["agent_toolbox_ids"] = _("One or more selected toolboxes could not be found.")
-
-    # 4. Knowledge
-    knowledge_mode = data.get("knowledge_mode", "none")
-    if knowledge_mode == "reuse":
-        try:
-            coll = KnowledgeCollection.objects.get(pk=int(data.get("knowledge_collection_id", "")))
-            agent.knowledge_collections.add(coll)
-        except (KnowledgeCollection.DoesNotExist, ValueError, TypeError):
-            errors["knowledge_collection_id"] = _("The selected knowledge collection could not be found.")
-    elif knowledge_mode == "create":
-        coll_name = (data.get("knowledge_collection_name") or "").strip()
-        doc_title  = (data.get("knowledge_doc_title") or "").strip()
-        if coll_name and doc_title:
-            coll = KnowledgeCollection.objects.create(name=coll_name, is_active=True)
-            KnowledgeDocument.objects.create(
-                collection=coll,
-                title=doc_title,
-                curated_text=(data.get("knowledge_doc_content") or "").strip(),
-                status=KnowledgeDocument.Status.ACTIVE,
-            )
-            agent.knowledge_collections.add(coll)
+    # 3. Toolboxes + 4. Knowledge (shared)
+    attach_toolboxes(agent, data, errors)
+    attach_knowledge(agent, data, errors)
 
     # 5. Initial context
     raw_ctx = (data.get("initial_context") or "{}").strip()
@@ -406,100 +338,19 @@ def _wizard_build_orchestrator(request, data):
     """Create the full Orchestrator chain transactionally. Returns (pipeline, errors_dict)."""
     errors = {}
 
-    # 1. Model config (same logic as GAME)
-    engine_mode = data.get("engine_mode", "reuse")
-    model_config = None
-    if engine_mode == "reuse":
-        mid = data.get("engine_reuse_model_id", "")
-        try:
-            model_config = ModelConfig.objects.get(pk=int(mid))
-        except (ModelConfig.DoesNotExist, ValueError, TypeError):
-            errors["engine_reuse_model_id"] = _("Select a valid model.")
-    else:
-        provider_name = (data.get("engine_provider_name") or "").strip()
-        if not provider_name:
-            errors["engine_provider_name"] = _("Provider name is required.")
-        else:
-            provider, _created = ProviderConfig.objects.get_or_create(
-                name=provider_name,
-                defaults={
-                    "provider_type": data.get("engine_provider_type") or ProviderConfig.ProviderType.TRAINING,
-                    "is_active": True,
-                },
-            )
-            model_name = (data.get("engine_model_name") or "training/starter").strip()
-            try:
-                temp = Decimal(str(data.get("engine_temperature") or "0.30"))
-            except (InvalidOperation, ValueError, TypeError):
-                errors["engine_temperature"] = _("Temperature must be a number (e.g. 0.30).")
-                temp = Decimal("0.30")
-            model_config, _created = ModelConfig.objects.get_or_create(
-                provider=provider,
-                model_name=model_name,
-                defaults={"temperature_default": temp, "is_active": True},
-            )
-
+    # 1. Engine (shared)
+    model_config = resolve_engine(data, errors)
     if errors:
         return None, errors
 
-    # 2. Entry agent
-    agent_mode = data.get("agent_mode", "reuse")
-    entry_agent = None
-    if agent_mode == "reuse":
-        aid = data.get("agent_reuse_id", "")
-        try:
-            entry_agent = AgentProfile.objects.get(pk=int(aid))
-        except (AgentProfile.DoesNotExist, ValueError, TypeError):
-            errors["agent_reuse_id"] = _("Select a valid agent.")
-    else:
-        agent_name = (data.get("agent_name") or "").strip()
-        if not agent_name:
-            errors["agent_name"] = _("Agent name is required.")
-        else:
-            input_contract  = _parse_json_field(data.get("agent_input_contract"), {})
-            output_contract = _parse_json_field(data.get("agent_output_contract"), {})
-            entry_agent = AgentProfile.objects.create(
-                name=agent_name,
-                role=(data.get("agent_role") or "").strip(),
-                system_prompt=(data.get("agent_prompt") or "").strip(),
-                model_config=model_config,
-                input_contract=input_contract,
-                output_contract=output_contract,
-                is_active=True,
-            )
-
+    # 2. Entry agent (shared) — Orchestrator agents carry input/output contracts
+    entry_agent = resolve_agent(data, model_config, errors, with_contracts=True)
     if errors:
         return None, errors
 
-    # 3. Toolboxes + knowledge (same as GAME)
-    for tb_id in data.getlist("agent_toolbox_ids"):
-        try:
-            tb = Toolbox.objects.get(pk=int(tb_id))
-            AgentToolboxAssignment.objects.get_or_create(
-                agent=entry_agent, toolbox=tb, defaults={"is_enabled": True}
-            )
-        except (Toolbox.DoesNotExist, ValueError, TypeError):
-            errors["agent_toolbox_ids"] = _("One or more selected toolboxes could not be found.")
-
-    knowledge_mode = data.get("knowledge_mode", "none")
-    if knowledge_mode == "reuse":
-        try:
-            coll = KnowledgeCollection.objects.get(pk=int(data.get("knowledge_collection_id", "")))
-            entry_agent.knowledge_collections.add(coll)
-        except (KnowledgeCollection.DoesNotExist, ValueError, TypeError):
-            errors["knowledge_collection_id"] = _("The selected knowledge collection could not be found.")
-    elif knowledge_mode == "create":
-        coll_name = (data.get("knowledge_collection_name") or "").strip()
-        doc_title  = (data.get("knowledge_doc_title") or "").strip()
-        if coll_name and doc_title:
-            coll = KnowledgeCollection.objects.create(name=coll_name, is_active=True)
-            KnowledgeDocument.objects.create(
-                collection=coll,
-                title=doc_title,
-                curated_text=(data.get("knowledge_doc_content") or "").strip(),
-                status=KnowledgeDocument.Status.ACTIVE,
-            )
-            entry_agent.knowledge_collections.add(coll)
+    # 3. Toolboxes + knowledge (shared)
+    attach_toolboxes(entry_agent, data, errors)
+    attach_knowledge(entry_agent, data, errors)
 
     # Surface any field-level resource errors before creating the pipeline.
     if errors:
@@ -519,8 +370,8 @@ def _wizard_build_orchestrator(request, data):
         description=(data.get("pipeline_description") or "").strip(),
         entry_agent=entry_agent,
         is_active=False,
-        global_input_contract=_parse_json_field(data.get("pipeline_input_contract"), {}),
-        global_output_contract=_parse_json_field(data.get("pipeline_output_contract"), {}),
+        global_input_contract=parse_json_field(data.get("pipeline_input_contract"), {}),
+        global_output_contract=parse_json_field(data.get("pipeline_output_contract"), {}),
     )
 
     # 5. Steps
@@ -541,8 +392,8 @@ def _wizard_build_orchestrator(request, data):
             order=i + 1,
             agent=step_agent,
             on_error=step_on_errors[i] if i < len(step_on_errors) else PipelineStep.OnError.STOP,
-            input_mapping=_parse_json_field(step_in_maps[i] if i < len(step_in_maps) else None, {}),
-            output_mapping=_parse_json_field(step_out_maps[i] if i < len(step_out_maps) else None, {}),
+            input_mapping=parse_json_field(step_in_maps[i] if i < len(step_in_maps) else None, {}),
+            output_mapping=parse_json_field(step_out_maps[i] if i < len(step_out_maps) else None, {}),
         )
 
     # 6. Activate if requested. The pipeline is already created; if activation
@@ -566,16 +417,6 @@ def _wizard_build_orchestrator(request, data):
             )
 
     return pipeline, {}
-
-
-def _parse_json_field(raw, default):
-    if not raw:
-        return default
-    try:
-        parsed = json.loads(raw.strip())
-        return parsed if isinstance(parsed, dict) else default
-    except (json.JSONDecodeError, AttributeError):
-        return default
 
 
 # === REUSABLE AI PIPELINE CORE =============================================
@@ -834,17 +675,6 @@ class ProviderConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
         agents_qs = AgentProfile.objects.filter(model_config__provider=provider)
         agents = list(agents_qs.order_by("name").values("id", "name", "is_active")[:12])
         agents_total = agents_qs.count()
-        is_ollama = provider.provider_type == ProviderConfig.ProviderType.OLLAMA
-        if is_ollama:
-            creds_label, creds_ok = _("Base URL set"), bool(provider.base_url)
-        else:
-            creds_label, creds_ok = _("Credentials configured"), bool(provider.api_key_env_var)
-        health = [
-            {"label": _("Provider active"), "ok": provider.is_active},
-            {"label": _("Has models"), "ok": bool(models)},
-            {"label": _("Active model available"), "ok": active_models > 0},
-            {"label": creds_label, "ok": creds_ok},
-        ]
         return {
             "is_active": provider.is_active,
             "provider_type": provider.get_provider_type_display(),
@@ -857,7 +687,7 @@ class ProviderConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "models": models,
             "agents": agents,
             "agents_total": agents_total,
-            "health": health,
+            "health": evaluate_provider(provider).checks,
         }
 
 
@@ -1512,6 +1342,9 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
         try:
             manifest = resolve_agent_tools(agent).manifest() or []
         except Exception:
+            # Overview must never 500; degrade to an empty manifest but log it
+            # (without payloads) so the failure is not invisible.
+            logger.warning("Tool manifest resolution failed for agent %s", agent.pk, exc_info=True)
             manifest = []
         tool_names = []
         for entry in manifest:
@@ -1536,12 +1369,6 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
         game_total = sessions_qs.filter(runtime_kind=ExecutionSession.RuntimeKind.GAME).count()
         in_orch, in_game = bool(pipelines), game_total > 0
         usage_label = "Both" if (in_orch and in_game) else "Orchestrator" if in_orch else "GAME" if in_game else "Unused"
-        health = [
-            {"label": _("Model active"), "ok": bool(agent.model_config and agent.model_config.is_active)},
-            {"label": _("Agent active"), "ok": agent.is_active},
-            {"label": _("Prompt set"), "ok": bool((agent.system_prompt or "").strip())},
-            {"label": _("Contracts set"), "ok": bool(agent.input_contract) and bool(agent.output_contract)},
-        ]
         return {
             "model": str(agent.model_config) if agent.model_config else None,
             "usage_label": usage_label,
@@ -1555,7 +1382,7 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "tool_names": tool_names,
             "collections": collections,
             "sessions": sessions,
-            "health": health,
+            "health": evaluate_agent(agent).checks,
         }
 
 
@@ -2109,6 +1936,7 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
                 transition_goal_status(goal, GameGoal.Status.QUEUED, reason="queued from admin")
                 success += 1
             except Exception as exc:
+                logger.warning("Goal lifecycle action failed for goal %s", goal.pk, exc_info=True)
                 self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
         if success:
             self.message_user(request, f"{success} goal(s) queued.", level=messages.SUCCESS)
@@ -2122,6 +1950,7 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
                 transition_goal_status(goal, GameGoal.Status.CANCELLED, reason="cancelled from admin")
                 success += 1
             except Exception as exc:
+                logger.warning("Goal lifecycle action failed for goal %s", goal.pk, exc_info=True)
                 self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
         if success:
             self.message_user(request, f"{success} goal(s) cancelled.", level=messages.SUCCESS)
@@ -2138,6 +1967,7 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
                     transition_goal_status(goal, GameGoal.Status.QUEUED, reason="requeued from admin")
                 success += 1
             except Exception as exc:
+                logger.warning("Goal lifecycle action failed for goal %s", goal.pk, exc_info=True)
                 self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
         if success:
             self.message_user(request, f"{success} goal(s) reopened.", level=messages.SUCCESS)
@@ -2165,6 +1995,7 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
                 resume_goal_execution(session_id=waiting_session.pk, resolved_by=request.user)
                 success += 1
             except Exception as exc:
+                logger.warning("Goal lifecycle action failed for goal %s", goal.pk, exc_info=True)
                 self.message_user(request, f"Goal #{goal.pk}: {exc}", level=messages.WARNING)
         if success:
             self.message_user(request, f"{success} goal session(s) resumed.", level=messages.SUCCESS)
@@ -2538,6 +2369,7 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
                     completed += 1
             except Exception as exc:
                 blocked += 1
+                logger.warning("Session run action failed for session %s", session.id, exc_info=True)
                 self.message_user(
                     request,
                     f"Session #{session.id} could not be started: {exc}",
@@ -3194,6 +3026,7 @@ class GameActionApprovalRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
                 )
                 success += 1
             except Exception as exc:
+                logger.warning("Approval action failed for request %s", approval_req.pk, exc_info=True)
                 self.message_user(request, f"Approval #{approval_req.pk}: {exc}", level=messages.WARNING)
         if success:
             self.message_user(request, f"{success} action(s) approved.", level=messages.SUCCESS)
@@ -3216,6 +3049,7 @@ class GameActionApprovalRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
                 )
                 success += 1
             except Exception as exc:
+                logger.warning("Approval action failed for request %s", approval_req.pk, exc_info=True)
                 self.message_user(request, f"Approval #{approval_req.pk}: {exc}", level=messages.WARNING)
         if success:
             self.message_user(request, f"{success} action(s) rejected.", level=messages.SUCCESS)

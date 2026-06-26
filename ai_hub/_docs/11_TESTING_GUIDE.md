@@ -220,6 +220,8 @@ Test these pages:
 - `/admin/ai_hub/`
 - `/admin/ai_hub/workspaces/orchestrator/`
 - `/admin/ai_hub/workspaces/game/`
+- `/admin/ai_hub/workspaces/build/` (Build Console wizard; `?kind=game` and `?kind=orchestrator`)
+- `/admin/ai_hub/operations/` (Operations Inbox)
 - `/admin/ai_hub/pipelinedefinition/control-center/`
 - Provider changelist and form.
 - Model changelist and form.

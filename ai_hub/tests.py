@@ -2786,7 +2786,7 @@ class HubAdminControlCenterTests(TestCase):
         PipelineDefinition.objects.create(), but the model fields are
         global_input_contract/global_output_contract — a TypeError on submit.
         """
-        from ai_hub.models import PipelineDefinition
+        from ai_hub.models import PipelineDefinition, PipelineStep
         client = Client()
         client.force_login(self.user)
 
@@ -2802,6 +2802,8 @@ class HubAdminControlCenterTests(TestCase):
                 "pipeline_description": "Built by the wizard",
                 "pipeline_input_contract": '{"required": ["dream_id"]}',
                 "pipeline_output_contract": '{"required": ["result"]}',
+                "step_agent_id": [str(self.agent.pk)],
+                "step_on_error": ["stop"],
             },
         )
 
@@ -2810,6 +2812,13 @@ class HubAdminControlCenterTests(TestCase):
         self.assertIsNotNone(pipeline, "Orchestrator wizard should have created a pipeline")
         self.assertEqual(pipeline.global_input_contract, {"required": ["dream_id"]})
         self.assertEqual(pipeline.global_output_contract, {"required": ["result"]})
+        # Steps must be created with a VALID on_error choice (regression: the wizard
+        # select previously offered fail/skip/retry, none of which are valid).
+        step = pipeline.steps.first()
+        self.assertIsNotNone(step, "Wizard should have created the step row")
+        valid_on_error = {c[0] for c in PipelineStep.OnError.choices}
+        self.assertIn(step.on_error, valid_on_error)
+        step.full_clean()  # would raise if on_error were an invalid choice
 
     def test_home_vitals_running_and_waiting_counts_are_separate(self):
         """Regression: vitals must carry separate 'running' and 'waiting' keys, not a hardcoded zero."""

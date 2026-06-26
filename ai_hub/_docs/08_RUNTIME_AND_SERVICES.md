@@ -370,4 +370,48 @@ It returns:
 Each attention item has a stable local id, severity, source type, relevance,
 optional incident timestamp, hover detail and optional Admin URL. The service does
 not archive or silence incidents. Archive and silence are UI preferences stored in
-the browser by the Mission Deck JavaScript.
+the browser by the Control Center JavaScript.
+
+## AI Hub Home Context
+
+`ai_hub.services.admin_control_center.build_ai_hub_home_context()` builds the
+cockpit home page (`/admin/ai_hub/`). Like the Control Center context, it is a
+read-only query/aggregation service. It returns, under `ai_hub_home`:
+
+- `vitals` — separate `running` and `waiting` counts plus `live` (= running +
+  waiting), `needs_attention`, `open_goals`, `sessions` and `failed`,
+- `metrics` and per-area pulse counts (orchestrator, game),
+- an `action_queue` (the home "needs your attention" preview),
+- `recent_sessions`, a `health_summary`, a setup `checklist` with a
+  `recommended_action`, and example blueprints,
+- `hidden_models` — the catalog of models demoted from the index via
+  `AIHubHideFromIndexMixin`, each with a category and the reason it is hidden,
+  used to render the "Show supporting tables" toggle.
+
+## Operations Inbox Context
+
+`ai_hub.services.admin_control_center.build_operations_inbox_context()` powers the
+Operations Inbox (`/admin/ai_hub/operations/`). It aggregates, cross-workspace,
+everything that needs a human into one `operations_inbox` payload with four
+categories and a `counts` summary:
+
+- **approvals** — pending `GameActionApprovalRequest` records (unbounded), each
+  with inline approve/reject URLs,
+- **waiting** — pending `GameContinuationRequest` records (unbounded),
+- **failures** — failed `ExecutionSession` records (most recent 25),
+- **blocked** — `GameGoal` records in `blocked` status (most recent 25).
+
+Approvals and waiting items are unbounded because they are the actionable gates;
+failures and blocked goals are capped.
+
+## Composed change-page overviews
+
+Several admin classes add a `change_view` override that injects a read-only
+"at a glance" overview into the change page context via a `_build_*_overview()`
+helper: `_build_provider_overview`, `_build_collection_overview`,
+`_build_toolbox_overview` (Foundation hubs) and `_build_agent_overview`,
+`_build_pipeline_overview`, `_build_workspace_overview` plus the Session Explorer
+overview (root entities). These live in `ai_hub/admin.py` rather than
+`services/`, but they follow the same read-only aggregation pattern: they
+summarize what the entity contains, what uses it, and a small health checklist for
+the Overview tab, and never mutate data.

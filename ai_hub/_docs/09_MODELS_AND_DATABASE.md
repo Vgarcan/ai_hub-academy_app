@@ -71,7 +71,7 @@ Important fields:
 - `description`: what the tool does.
 - `tool_kind`: runtime tool category.
 - `risk_level`: low, medium or high operational risk.
-- `operation_mode`: read, write, external write or prompt macro.
+- `operation_mode`: read, draft write, state write, external write or execute.
 - `requires_approval`: whether execution should pause for review.
 - `is_system_tool`: marks built-in platform tools.
 - `input_schema`: expected input shape.
@@ -288,7 +288,7 @@ Important fields:
 
 - `runtime_kind`: orchestrator or GAME.
 - `runtime_mode`: sync, async or host-specific mode.
-- `status`: pending, running, success, failed, waiting or stopped.
+- `status`: pending, running, waiting_async, success, failed or cancelled.
 - `pipeline`: pipeline used by Orchestrator sessions.
 - `entry_agent`: entry agent used by GAME sessions.
 - `goal`: optional durable GAME goal; null for legacy GAME and Orchestrator sessions.
@@ -303,7 +303,7 @@ Important fields:
 
 Host projects should link their own records to this model.
 
-The goal relation uses `PROTECT`, so a goal with execution history cannot be deleted accidentally. One goal may have multiple historical sessions, while a conditional database constraint permits only one pending, running, or waiting session for a goal.
+The goal relation uses `PROTECT`, so a goal with execution history cannot be deleted accidentally. One goal may have multiple historical sessions, while a conditional database constraint (`aihub_unique_active_goal`) permits only one active session per goal — where "active" means status `pending`, `running` or `waiting_async`.
 
 Example host relation:
 
@@ -325,7 +325,7 @@ Important fields:
 - `pipeline_step`: related pipeline step when applicable.
 - `agent`: agent used for this step.
 - `action_name`: GAME action or tool/action label.
-- `status`: pending, running, success, failed, skipped or waiting.
+- `status`: pending, running, success, failed or skipped.
 - `request_payload`: payload sent to the runtime.
 - `response_payload`: response received from the runtime.
 - `observation_payload`: observations or tool results.
@@ -344,7 +344,10 @@ Important fields:
 - `step_run`: optional parent step.
 - `agent`: agent that requested the tool.
 - `tool`: tool definition executed.
-- `status`: success, failure or waiting-approval outcome.
+- `status`: pending, running, waiting_approval, success, failed or skipped.
+- `risk_level`: operational risk captured at execution time.
+- `approval_state`: approval outcome when the tool is approval-gated.
+- `idempotency_key`: dedupe key so a retried call is not executed twice.
 - `input_payload`, `output_payload`, `error_detail`: audit payloads.
 - `latency_ms`: measured execution time.
 
@@ -376,8 +379,10 @@ Recommended status meaning:
 | `running` | Runtime is currently working. |
 | `success` | Finished successfully. |
 | `failed` | Finished with an error. |
-| `waiting` | Paused for external input or continuation. |
-| `stopped` | Ended because a limit or stop condition was reached. |
+| `waiting_async` | Paused for external input or asynchronous continuation. |
+| `waiting_approval` | Paused pending a human approval (tool/action runs). |
+| `cancelled` | Ended deliberately (e.g. orphaned-goal cleanup, manual cancel). |
+| `skipped` | Step/tool run not executed (e.g. an unmet condition). |
 
 Host projects can display friendlier text, but should not change the core
 meaning.

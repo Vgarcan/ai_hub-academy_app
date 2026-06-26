@@ -529,7 +529,7 @@ def _wizard_build_orchestrator(request, data):
             pipeline=pipeline,
             order=i + 1,
             agent=step_agent,
-            on_error=step_on_errors[i] if i < len(step_on_errors) else "fail",
+            on_error=step_on_errors[i] if i < len(step_on_errors) else PipelineStep.OnError.STOP,
             input_mapping=_parse_json_field(step_in_maps[i] if i < len(step_in_maps) else None, {}),
             output_mapping=_parse_json_field(step_out_maps[i] if i < len(step_out_maps) else None, {}),
         )

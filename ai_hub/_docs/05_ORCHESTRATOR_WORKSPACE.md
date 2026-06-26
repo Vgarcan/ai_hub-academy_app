@@ -144,6 +144,12 @@ The control center graph shows how providers, models, agents, knowledge, tools, 
 
 The **Build Console** button in the workspace header opens the guided creation wizard for a new pipeline. Use it to create the full engine → agent → pipeline → steps chain in one transaction. See [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md).
 
+### Orchestrator Designer (pipeline change page)
+
+A `PipelineDefinition` opens as a composed **Orchestrator Designer** change page: a header plus tabs for **Overview**, **Configuration** and **Steps**. The Overview tab is read-only and shows at a glance the step/agent/session counts, a small health checklist, and recent sessions; the Configuration tab holds the pipeline form and the Steps tab holds the ordered step rows.
+
+`PipelineStep` is no longer listed as a standalone admin changelist — it is demoted from the index and managed inside the pipeline's Steps tab (it is still reachable from the home "Show supporting tables" toggle for debugging).
+
 The graph is intentionally data-driven. Columns only appear when that node type
 exists in the current configuration. For example:
 

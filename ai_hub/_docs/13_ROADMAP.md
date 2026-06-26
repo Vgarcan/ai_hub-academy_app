@@ -19,7 +19,10 @@ AI Hub already has the core platform pieces:
 - Tool definitions.
 - Orchestrator pipeline definitions and steps.
 - Execution sessions and step runs.
-- Admin workspaces, control center, guided forms and changelists.
+- Admin workspaces, Control Center, guided forms and changelists.
+- A five-area admin information architecture (Overview & Entry, Foundation, Orchestrator, GAME, Operations) with a cockpit home, supporting tables demoted from the index behind a toggle, and composed tabbed change pages for the root entities and Foundation hubs.
+- A Build Console wizard for guided GAME/Orchestrator creation in one atomic transaction.
+- An Operations Inbox: one cross-workspace queue for approvals, waiting-info, failures and blocked goals.
 - Runtime services and the host adapter pattern.
 - Toolboxes, per-agent tool grants, deliberate tool execution, and starter tool seeds.
 - Knowledge document chunks with read-only browse/search/read/citation services.
@@ -58,14 +61,13 @@ If a feature only helps one host project, it probably belongs in that host app.
 
 The admin is the main product surface.
 
-Delivered: workspace-specific GAME dashboards, goal-detail enrichment panels, and readable scheduler/outcome summaries.
+Delivered: workspace-specific GAME dashboards, goal-detail enrichment panels, readable scheduler/outcome summaries, the five-area information architecture and cockpit home, the Build Console guided setup wizard, the Operations Inbox, and composed tabbed change pages with at-a-glance overviews.
 
 Still recommended:
 
-- More guided setup flows.
+- More guided setup flows beyond the Build Console (e.g. an editing/clone wizard for existing objects).
 - Better empty states.
-- Clear "next action" panels.
-- Inline examples for prompts and contracts.
+- Inline examples for prompts and contracts (expand coverage).
 - Safer JSON editing.
 - Responsive improvements for all model pages.
 

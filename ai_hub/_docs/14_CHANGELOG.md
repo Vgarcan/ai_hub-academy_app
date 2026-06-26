@@ -314,6 +314,15 @@ Host-project features should be documented in the host project, not here.
 
 ### Fixed
 
+#### Build Console wizard (doc-audit follow-up)
+
+- **Orchestrator wizard 500 on submit:** `_wizard_build_orchestrator()` passed `input_contract`/`output_contract` to `PipelineDefinition.objects.create()`, but the model fields are `global_input_contract`/`global_output_contract` — a `TypeError` on every Orchestrator submit. Corrected the kwargs; added a regression test (`test_build_wizard_orchestrator_creates_pipeline`).
+- **Invalid step `on_error` values:** the wizard step row (template + cloned-row JS) offered `fail`/`skip`/`retry`, none of which are valid `PipelineStep.OnError` choices (`stop`/`continue`/`fallback_agent`), so every wizard-created step stored an invalid value. Replaced the options with `stop` (default) and `continue`, and changed the server-side fallback from `"fail"` to `PipelineStep.OnError.STOP`. The regression test now asserts the created step passes `full_clean()`.
+
+#### Documentation alignment with the admin IA overhaul
+
+- Realigned `_docs/` with the shipped admin information architecture: corrected static-asset paths in `02_INSTALLATION.md` (`admin_control_center.css/js`), rewrote the home/changelist sections and added Operations Inbox, hidden-supporting-tables and composed-change-page coverage in `07_ADMIN_GUIDE.md`, corrected the Build Console governance/contracts/runtime details in `16_BUILD_CONSOLE.md`, fixed enum value lists in `09_MODELS_AND_DATABASE.md`, and updated `01`, `04`, `05`, `08`, `11`, `12`, `13` and `README`. Standardized the diagnostics screen name as **Control Center** ("Mission Deck" now refers only to the CSS/JS design system).
+
 #### Post-Phase-12 stabilization
 
 - Delegated sessions now recover workspace policy from their durable delegation record, use strict least-privilege read actions, and cannot execute approval-gated child actions.

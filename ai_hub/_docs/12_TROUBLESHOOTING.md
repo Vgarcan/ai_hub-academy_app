@@ -18,6 +18,28 @@ restart `runserver`. Django usually reloads templates and Python modules, but a
 stale autoreloader process can still leave you looking at an older in-memory
 version.
 
+## A Model Disappeared From The Admin Sidebar
+
+Supporting tables — bridge/link records, structural children and runtime/audit
+records — are intentionally **demoted from the admin index and sidebar** via
+`AIHubHideFromIndexMixin`. They are still registered and their URLs still work;
+they are just not listed. This affects, among others: knowledge document chunks,
+toolbox↔tool and agent↔toolbox/grant links, pipeline steps, goal
+dependencies/plans/plan-steps, workspace actions/agents, memory entries, and the
+runtime audit records (execution step runs, tool execution runs, GAME action
+runs, delegation runs).
+
+Where to find them:
+
+- Open the AI Hub home (`/admin/ai_hub/`) and use the **"Show supporting tables"**
+  toggle on the *All records* panel. It lists each hidden model, grouped by
+  category, with a one-line reason and a direct link to its changelist.
+- Or manage them from their parent page (e.g. pipeline steps inside the Pipeline
+  Designer, document chunks inside their document).
+
+This is by design, not a permissions bug. If you genuinely need a record promoted
+back to the sidebar, remove `AIHubHideFromIndexMixin` from that model's admin.
+
 ## Admin Form Looks Unguided
 
 Confirm the model admin uses the `ai_hub` styled change form or mixins.

@@ -21,15 +21,20 @@ Open:
 /admin/ai_hub/
 ```
 
-The home page shows:
+The home page is a **cockpit**, not a raw model index. It is organized as:
 
-- a guided overview,
-- setup metrics,
-- recommended next action,
-- Orchestrator and GAME entry points,
-- shared resources,
-- examples and blueprints,
-- advanced Django records.
+- a **header** with the primary entry points: Control Center, Build Console, Orchestrator, GAME and Operations;
+- a **vitals strip** — *Live now* (running + waiting sessions), *Needs you* (approvals, info requests, failures), *Goals in flight*, and *Sessions*;
+- an inventory line (providers · models · agents · pipelines · GAME sessions);
+- a **Needs your attention** queue that links to the Operations Inbox, plus a Recent activity feed;
+- a **five-area navigation map**:
+  - **0 · Overview & Entry** — Control Center, Build Console;
+  - **1 · Foundation** — Connectivity, Knowledge Library, Tool Registry, Agent Composer;
+  - **2 · Orchestrator** — the Orchestrator workspace and new pipelines;
+  - **3 · GAME** — the GAME workspace and new GAME sessions;
+  - **4 · Operations** — Operations Inbox, Session Explorer;
+- a **System health** bar and a **setup checklist** with a recommended next action;
+- an **All records** panel (the raw Django tables, grouped by stage) with a **"Show supporting tables"** toggle that reveals the supporting/bridge tables demoted from the index (see *Guided Changelists* below).
 
 Use this page as the first stop for new admins.
 
@@ -48,24 +53,42 @@ Use the Build Console when starting from scratch or testing a new configuration.
 
 See [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) for the full step-by-step reference.
 
+## Operations Inbox
+
+Open:
+
+```text
+/admin/ai_hub/operations/
+```
+
+The Operations Inbox is the single cross-workspace queue for everything that needs a human. It aggregates four categories:
+
+- **Approvals** — pending `GameActionApprovalRequest` records, with inline **Approve** / **Reject** buttons (shown only to users holding `ai_hub.approve_game_action`) and an **Open** link;
+- **Waiting info** — paused sessions with a pending `GameContinuationRequest`, linking to the goal;
+- **Failures** — recently failed execution sessions (most recent 25);
+- **Blocked goals** — GAME goals in `blocked` status (most recent 25).
+
+Filter chips at the top narrow the list to one category. Approvals and waiting-info items are unbounded (they are the actionable gates); failures and blocked goals are capped. The page is reached from the home header, the home "Needs your attention" panel, and the Operations area card. It requires staff access and the `view_executionsession` permission.
+
+The Operations Inbox is the action queue; the Control Center (below) is the deeper diagnostics surface.
+
 ## Guided Changelists
 
 Resource list pages include a short explanation and quick actions.
 
-Guided sections exist for:
+Guided sections exist for the primary resources:
 
-- Providers,
+- Providers (Connectivity),
 - Models,
-- Tools,
-- Toolboxes,
-- Knowledge collections,
-- Knowledge documents,
-- Knowledge document chunks,
-- Agents,
-- Pipeline steps,
-- Execution step runs.
+- Tools and Toolboxes (Tool Registry),
+- Knowledge collections and documents (Knowledge Library),
+- Agents (Agent Composer).
 
-Each page should explain what the resource is and where it fits in the system.
+### Supporting tables hidden from the index
+
+Bridge tables, structural children and runtime/audit records are **demoted from the admin index and sidebar** via `AIHubHideFromIndexMixin` (it returns empty model perms so the model is registered and its URLs work, but it is not listed). These are normally managed through their parent page (e.g. pipeline steps inside the Pipeline Designer, document chunks inside their document) and include: knowledge document chunks, toolbox↔tool and agent↔toolbox/grant links, pipeline steps, goal dependencies/plans/plan-steps, workspace actions/agents, memory entries, and the runtime audit records (execution step runs, tool execution runs, GAME action runs, delegation runs).
+
+They remain fully reachable from the **"Show supporting tables"** toggle on the *All records* panel of the AI Hub home, which lists each one grouped by category (Bridge tables · GAME structural children · Runtime / audit) with a one-line reason it is hidden. If a model "disappeared" from the sidebar, this is where to find it.
 
 ## Guided Forms
 
@@ -94,6 +117,15 @@ Examples appear in fields such as:
 
 These examples are intentionally small. They should teach shape, not become huge templates.
 
+## Composed change pages
+
+The most important entities open as **composed change pages**: a header, a tab bar, and an at-a-glance **Overview** tab in front of the editable **Configuration** form. Tabs progressively enhance — without JavaScript the panels stack; with it they group, and on a validation error the page lands on the Configuration tab so the errors are visible.
+
+- **Root entities** (drive the flows): Agent Composer (`AgentProfile`), Orchestrator Designer (`PipelineDefinition`), GAME Workspace (`GameWorkspace`), Goal Detail (`GameGoal`), Session Explorer (`ExecutionSession`).
+- **Foundation hubs** (the reusable parts): Connectivity (`ProviderConfig`), Knowledge Library (`KnowledgeCollection`), Tool Registry (`Toolbox`).
+
+Each Overview summarizes what the entity contains, what uses it, and a small health checklist; the Configuration tab holds the normal Django form and inlines. Leaf records (e.g. `ModelConfig`, `KnowledgeDocument`, `ToolDefinition`) keep the standard guided form.
+
 ## Control Center
 
 Open:
@@ -115,7 +147,7 @@ The control center shows global operational health:
 - average latency,
 - warnings.
 
-It also includes the Mission Deck visual console:
+It also includes the Control Center visual console (built on the shared "Mission Deck" graph engine):
 
 - vitals and inventory,
 - a connection graph,
@@ -220,7 +252,7 @@ Use this when one agent receives a goal and decides the next action.
 The workspace shows:
 
 - GAME metrics,
-- a GAME decision graph using the same Mission Deck graph engine,
+- a GAME decision graph using the same shared graph engine,
 - recent GAME sessions,
 - recommended GAME agents.
 
@@ -254,12 +286,14 @@ The change form for a `GameGoal` includes additional read-only panels below the 
 
 ### Approval operations
 
-The `GAME action approval requests` changelist supports two bulk actions:
+The primary place to act on approvals is the **Operations Inbox** (`/admin/ai_hub/operations/`), which lists every pending request with inline **Approve** / **Reject** buttons. The approval change page also exposes per-record POST approve/reject controls.
+
+For bulk handling, the `GAME action approval requests` changelist supports two actions:
 
 - **Approve selected action requests** — calls `approve_action_run()` for each selected pending request.
 - **Reject selected action requests** — calls `reject_action_run()` for each selected pending request.
 
-Both actions require the `ai_hub.approve_game_action` permission. Users without the permission do not see these actions in the dropdown and cannot execute them even via a direct POST.
+All of these paths require the `ai_hub.approve_game_action` permission. Users without it do not see the controls and cannot execute them even via a direct POST.
 
 Approval is gated by `AI_HUB_GAME_ACTION_DISPATCH_ENABLED`: when that kill-switch is off, approving is refused outright so an action is never left approved-but-unexecuted.
 

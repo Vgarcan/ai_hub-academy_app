@@ -93,16 +93,21 @@ Important: when creating documents, the wizard forces `status=ACTIVE` on every d
 
 (Advanced flavor only. Skipped for Simple.)
 
-- **Workspace name**: used for `get_or_create` on `GameWorkspace`. If a workspace with this name already exists, the new goal is added to it.
-- **Safety checkboxes**: `strict_response_contract`, `game_action_dispatch_enabled`.
-- **Budget**: max actions per session, stored in `runtime_config.policy.max_budget_actions`.
+These choices are written to the **workspace's `default_policy`**, not to the session's `runtime_config`.
+
+- **Workspace name**: used for `get_or_create` on `GameWorkspace`. If a workspace with this name already exists, the new goal is added to it. **Caveat:** the policy below is only applied when the workspace is *newly created* — `get_or_create` does not overwrite the policy of an existing workspace.
+- **Safety checkboxes**: `safety_require_approval_medium` and `safety_require_approval_high` → stored as `default_policy.safety.require_approval_for_medium_risk` and `…require_approval_for_high_risk`. External writes are always locked (`safety.allow_external_writes = False`).
+- **Budget**: the `budget_max_actions` field → `default_policy.budget.max_action_runs_per_session` (defaults to 2, minimum 1). `default_policy.budget.max_iterations_per_session` is set from the Max iterations field.
+- `default_policy.allowed_actions` is seeded with `["submit_for_approval"]`.
 
 ### Step 4 — Runtime
 
 - **Max iterations**: the `max_iterations` key in `runtime_config`. Keep at 3–5 for initial tests. Increase only after the session timeline looks correct.
-- **Runtime mode**: `async` (default) or `sync`.
-- **Strict response contract**: if checked, missing keys or invalid JSON from the agent fail the session immediately.
-- **Initial context**: optional JSON string prepopulated into the session's starting context.
+- **Runtime mode**: `async` (default) or `sync`. *(Simple flavor only.)*
+- **Strict response contract**: if checked, missing keys or invalid JSON from the agent fail the session immediately. Stored in `runtime_config.strict_response_contract`.
+- **Initial context**: optional JSON string prepopulated into the session's starting context. *(Simple flavor only.)*
+
+> **Advanced flavor note:** the goal-bound session is built by `create_goal_execution_session()`, which always runs **async** and derives the starting context from `goal.context`. The **Runtime mode** and **Initial context** fields are therefore ignored in Advanced mode — only **Max iterations** and **Strict response contract** (carried in `runtime_config`) take effect.
 
 ### Step 5 — Review
 
@@ -130,10 +135,10 @@ The wizard creates the steps in order. Step `input_mapping` and `output_mapping`
 
 ### Step 4 — Contracts
 
-- **Input contract**: JSON schema or free-form keys expected at pipeline entry.
-- **Output contract**: JSON schema or keys the pipeline should produce.
+- **Input contract**: JSON object describing the keys expected at pipeline entry.
+- **Output contract**: JSON object describing the keys the pipeline should produce.
 
-Both are stored as strings on `PipelineDefinition`. Leave blank if contracts are not yet defined.
+Both are parsed as JSON and stored on `PipelineDefinition.global_input_contract` and `PipelineDefinition.global_output_contract` (JSON fields, default `{}`). Leave blank if contracts are not yet defined.
 
 ### Step 5 — Activate
 

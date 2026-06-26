@@ -855,7 +855,7 @@
           '  <span class="mc-srow__num" title="Expand mappings">' + idx + '</span>' +
           '  <select name="step_agent_id"><option value="">— Select agent —</option>' +
           agentOptsTmpl.innerHTML + '</select>' +
-          '  <select name="step_on_error" style="width:110px"><option value="fail">fail</option><option value="skip">skip</option><option value="retry">retry</option></select>' +
+          '  <select name="step_on_error" style="width:110px"><option value="stop">stop</option><option value="continue">continue</option></select>' +
           '  <button type="button" class="mc-srow__rm" title="Remove">&#x2715;</button>' +
           '</div>' +
           '<div class="mc-srow__details"><div class="mc-srow__map">' +

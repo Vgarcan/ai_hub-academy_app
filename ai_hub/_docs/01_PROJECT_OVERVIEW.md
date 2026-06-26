@@ -50,7 +50,8 @@ The workspaces are visually separated in Admin, but they share the same technica
 - per-capability GAME feature flags,
 - staff-only execution endpoints,
 - execution sessions and step logs,
-- Mission Deck control center metrics, graph inspection, attention inbox and
+- a guided Build Console wizard and a cross-workspace Operations Inbox,
+- Control Center metrics, graph inspection, attention inbox and
   operational GAME dashboards,
 - guided forms and examples.
 
@@ -73,14 +74,14 @@ The Admin experience is part of the product.
 
 `ai_hub` should feel like an operational backend, not only a raw Django model list. It uses:
 
-- an AI Hub home dashboard,
-- separate Orchestrator and GAME workspaces,
-- shared resource sections,
-- a visual connection graph with full-screen mode and draggable node details,
+- a cockpit AI Hub home organized into five areas (Overview & Entry, Foundation, Orchestrator, GAME, Operations), with vitals, a needs-attention queue and a setup checklist,
+- separate Orchestrator and GAME workspaces under the Foundation/Orchestrator/GAME areas,
+- an Operations Inbox — one cross-workspace queue for approvals, waiting-info, failures and blocked goals,
+- composed tabbed change pages (Overview + Configuration) for the root entities and Foundation hubs, with supporting tables demoted from the index behind a toggle,
+- a Control Center visual connection graph with full-screen mode and draggable node details,
 - a non-destructive attention inbox for configuration and runtime incidents,
 - recent sessions and health metrics,
-- guided changelists,
-- guided forms with examples and placeholders,
+- guided changelists and forms with examples and placeholders,
 - readable execution timelines.
 
 The design goal is that a non-expert admin can understand what to create next and why.

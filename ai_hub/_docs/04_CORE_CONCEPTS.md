@@ -14,6 +14,14 @@ Execution sessions record what happened.
 The host app owns domain-specific persistence.
 ```
 
+The AI Hub home expresses the same chain as a single flow:
+
+```text
+Provider → Model → Agent → Workspace → Session
+```
+
+where "Workspace" is the Orchestrator or GAME context the agent runs in.
+
 ## Provider
 
 A provider is an AI service account, endpoint or local model server.
@@ -303,7 +311,8 @@ Sessions store:
 - Runtime mode.
 - Status.
 - Pipeline or entry agent.
-- Goal text.
+- Goal (FK to a durable `GameGoal` for goal-bound GAME sessions; null for legacy GAME and Orchestrator sessions) and goal text.
+- Runtime config.
 - Initial context.
 - Final context.
 - Error detail.

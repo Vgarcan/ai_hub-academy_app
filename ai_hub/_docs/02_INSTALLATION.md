@@ -123,9 +123,13 @@ python manage.py collectstatic
 Confirm that these files are served:
 
 ```text
-ai_hub/admin/ai_hub_admin.css
-ai_hub/admin/ai_hub_admin.js
+ai_hub/admin_control_center.css
+ai_hub/admin_control_center.js
 ```
+
+(Both live in `ai_hub/static/ai_hub/` and are the single CSS/JS bundles that
+power the AI Hub home, Control Center, workspaces, Build Console and the composed
+change pages.)
 
 If the page renders without the guided UI styling, the most likely cause is a
 static files deployment issue.

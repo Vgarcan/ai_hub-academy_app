@@ -26,15 +26,17 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 
 `ai_hub` currently provides:
 
-- a guided app home at `/admin/ai_hub/`,
+- a **cockpit app home** at `/admin/ai_hub/` organized into five areas (Overview & Entry, Foundation, Orchestrator, GAME, Operations), with vitals, a "needs your attention" queue, recent activity and a setup checklist,
 - a **Build Console wizard** at `/admin/ai_hub/workspaces/build/` for guided GAME session and Orchestrator pipeline creation in one atomic transaction,
+- an **Operations Inbox** at `/admin/ai_hub/operations/` — one cross-workspace queue for pending approvals (inline approve/reject), sessions waiting for information, failed sessions and blocked goals,
 - a visual Orchestrator workspace for fixed ordered pipelines,
 - a full GAME subsystem: durable goals, deterministic scheduling, action dispatch, scoped memory, pause/approval/resume, policies and budgets, plans, and sub-agent delegation,
 - per-capability GAME feature flags (fail-closed in the reusable layer),
 - operational GAME dashboards, goal-detail enrichment, and lifecycle/approval bulk actions,
-- a Mission Deck control center with a shared graph engine, full-screen graph
+- a **Control Center** with a shared graph engine, full-screen graph
   mode, draggable node details and a non-destructive attention inbox,
-- guided forms with examples and placeholders,
+- **composed change pages** (tabbed Overview + Configuration) for the root entities and Foundation hubs,
+- guided forms with examples and placeholders, with supporting/bridge tables demoted from the index behind a "Show supporting tables" toggle,
 - reusable provider/model/agent/tool/knowledge configuration,
 - generic execution sessions and step telemetry,
 - staff-only execution endpoints.

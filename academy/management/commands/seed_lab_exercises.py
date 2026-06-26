@@ -35,10 +35,10 @@ Always be encouraging and educational, never harsh."""
 
 # Keyed by module ORDER number → list of exercise dicts
 EXERCISES = {
-    0: [  # Orientation and Mission Deck
+    0: [  # Orientation and Control Center
         {
-            "title": "Mission Deck Interface Audit",
-            "slug": "mission-deck-interface-audit",
+            "title": "Control Center Interface Audit",
+            "slug": "control-center-interface-audit",
             "order": 1,
             "difficulty": "beginner",
             "requires_api": False,
@@ -53,7 +53,7 @@ EXERCISES = {
                 "5) how to use Needs attention filters, sorting, archive/restore and Silence 24h safely."
             ),
             "context": (
-                "The Control Center includes the Mission Deck graph and the Needs attention inbox. "
+                "The Control Center includes the connection graph and the Needs attention inbox. "
                 "Hovering a graph node only shows a compact preview. Selecting a node opens a draggable "
                 "detail pop-up with relation counts and an Open record in admin action. "
                 "Isolate is off by default and only hides nodes outside the selected hop range after a node is selected. "
@@ -350,7 +350,7 @@ EXERCISES = {
                 "what warning should appear for an active pipeline with no steps, and what Admin records they should check."
             ),
             "context": (
-                "The Mission Deck graph is built from actual AI Hub Admin records. "
+                "The Control Center connection graph is built from actual AI Hub Admin records. "
                 "If no PipelineDefinition records exist, the Pipeline column is absent. "
                 "If pipelines exist but have no PipelineStep records, the Step column is absent. "
                 "If a pipeline is active with no steps, Needs attention should show a warning that links to the pipeline record."

@@ -23,7 +23,7 @@ Use it to learn how AI pipelines work, explore live execution telemetry, and und
 
 ```bash
 git clone https://github.com/Vgarcan/ai_hub-academy_app.git
-cd ai_hub_academy
+cd ai_hub-academy_app
 ```
 
 ---
@@ -34,18 +34,27 @@ cd ai_hub_academy
 python setup_dev.py
 ```
 
-That's it. The script will:
-- create a virtual environment (`venv/`)
+That's it. The script does everything for you (it takes a few minutes — installing
+the packages is the slow part). It will:
+- create a virtual environment (`venv/` — an isolated, private copy of Python just for this project)
 - install all packages
 - create `.env` with a generated secret key
 - run database migrations
 - seed tutorial and training data
 - import documentation from `docs_source/`
-- create an admin superuser (`admin` with a generated password printed once)
+- create an admin superuser (`admin` with a generated password)
+
+> ⚠️ **Copy the admin password now.** When the script finishes it prints a line like
+> `Admin login:  admin / <random-password>`. This is the only time it is shown. Paste
+> it somewhere safe — you'll need it to log into `/admin/`. (Lost it? See *Troubleshooting*.)
 
 ---
 
 ### 3. Activate the venv and start the server
+
+"Activating the venv" tells your terminal to use this project's private Python (the
+one with all the packages installed) instead of your system Python. You do this in
+**every new terminal window** before running project commands.
 
 **Windows**
 ```cmd
@@ -59,7 +68,16 @@ source venv/bin/activate
 python manage.py runserver
 ```
 
-Open **http://localhost:8000/** in your browser.
+You'll know it worked when your prompt starts with `(venv)`. After `runserver`, leave
+that terminal open — it's running the website. You should see
+`Starting development server at http://127.0.0.1:8000/`.
+
+Now open **http://localhost:8000/** in your browser.
+
+> **To stop the server:** press `Ctrl + C` in that terminal.
+> **To start it again later:** open a terminal, `cd` into the project, activate the
+> venv (step above), and run `python manage.py runserver` again. You only run
+> `setup_dev.py` once, ever.
 
 ---
 
@@ -118,7 +136,7 @@ Provides:
 ### `academy` — the learning layer
 
 - Documentation browser (Markdown → database, full-text search)
-- Interactive tutorials: 8 modules, 13 missions — each validates real Admin state
+- Interactive tutorials: 9 modules, 14 missions — each validates real Admin state
 - AI Documentation Assistant powered by an ExecutionSession for auditability
 - Progress tracking per user
 
@@ -301,8 +319,12 @@ Every AI call creates an `ExecutionSession` with one `ExecutionStepRun` per step
 
 ## Troubleshooting
 
+**I lost the admin password printed by `setup_dev.py`**
+→ Set a new one. Activate the venv, then run `python manage.py changepassword admin`
+and type a new password (the characters stay hidden as you type — that's normal).
+
 **`ModuleNotFoundError: No module named 'django'`**
-→ Activate the virtual environment first: `venv\Scripts\activate` (Windows) or `source venv/bin/activate` (macOS/Linux)
+→ Activate the virtual environment first: `venv\Scripts\activate` (Windows) or `source venv/bin/activate` (macOS/Linux). Your prompt should then start with `(venv)`.
 
 **`OperationalError: no such table`**
 → Run `python manage.py migrate`

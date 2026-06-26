@@ -218,7 +218,7 @@ def main() -> None:
         _abort(
             "manage.py not found in the current directory.\n"
             "Run this script from the project root:\n"
-            "    cd ai_hub_academy\n"
+            "    cd ai_hub-academy_app\n"
             "    python setup_dev.py"
         )
 

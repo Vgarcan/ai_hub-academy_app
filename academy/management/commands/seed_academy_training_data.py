@@ -88,13 +88,30 @@ def _get_or_create_normalizer(model):
             ),
             "model_config": model,
             "input_contract": {"required": ["ticket_title", "ticket_text"]},
-            "output_contract": {"required": ["normalized_title", "normalized_body"]},
+            # Agent contracts validate the agent's wrapper payload {agent, llm, tools},
+            # not the model's business output. The business keys (normalized_*) are
+            # surfaced via the pipeline step output_mapping + the pipeline's
+            # global_output_contract — see the "Make The Agent Specific" mission.
+            "output_contract": {"required": ["agent", "llm", "tools"]},
             "is_active": True,
         },
     )
     if created:
         print("  Created: Input Normalizer")
+    else:
+        _repair_agent_output_contract(agent, {"required": ["agent", "llm", "tools"]})
     return agent
+
+
+# Agents seeded before the contract fix carried business keys in their
+# output_contract (e.g. normalized_title), which validate against the wrapper
+# payload {agent, llm, tools} and therefore always fail. Repair existing agents
+# in place so re-running the seed unbreaks the golden path.
+def _repair_agent_output_contract(agent, correct_contract):
+    if agent.output_contract != correct_contract:
+        agent.output_contract = correct_contract
+        agent.save(update_fields=["output_contract"])
+        print(f"  Repaired output_contract: {agent.name}")
 
 
 def _get_or_create_classifier(model):
@@ -112,12 +129,17 @@ def _get_or_create_classifier(model):
             ),
             "model_config": model,
             "input_contract": {"required": ["ticket_title", "ticket_text"]},
-            "output_contract": {"required": ["category", "priority", "reason"]},
+            # See Input Normalizer: agent output_contract describes the wrapper
+            # payload. Business keys (category/priority/reason) are declared on the
+            # pipeline's global_output_contract, not here.
+            "output_contract": {"required": ["agent", "llm", "tools"]},
             "is_active": True,
         },
     )
     if created:
         print("  Created: Ticket Classifier")
+    else:
+        _repair_agent_output_contract(agent, {"required": ["agent", "llm", "tools"]})
     return agent
 
 
@@ -136,6 +158,14 @@ def _get_or_create_knowledge():
 
 def _seed_tutorial_missions(force_update=False):
     from academy.models import TutorialMission, TutorialModule
+
+    # Migrate the legacy slug so existing progress is preserved and no orphan
+    # mission is left behind when this mission is re-seeded under its new slug.
+    TutorialMission.objects.filter(
+        slug="inspect-the-mission-deck"
+    ).exclude(
+        slug="inspect-the-control-center"
+    ).update(slug="inspect-the-control-center")
 
     modules_data = [
         {
@@ -188,6 +218,9 @@ def _seed_tutorial_missions(force_update=False):
                         "4. Leave **API key env var** empty (training providers don't need keys)\n"
                         "5. Set **Is active** to checked\n"
                         "6. Save\n\n"
+                        "![The Add Provider config form: Name, Provider type, Is active, Base url, "
+                        "Default timeout and the Api key env var field]"
+                        "(/static/academy/img/tutorials/provider-form.png)\n\n"
                         "### Why Training Mode?\n\n"
                         "The Training provider returns deterministic responses without calling any external API. "
                         "This lets you complete all missions without spending API credits.\n"
@@ -210,6 +243,9 @@ def _seed_tutorial_missions(force_update=False):
                         "5. Set **Max tokens default** to `2000`\n"
                         "6. Set **Is active** to checked\n"
                         "7. Save\n\n"
+                        "![The Add Model config form: Provider, Model name, Temperature default, "
+                        "Max tokens default and Is active]"
+                        "(/static/academy/img/tutorials/model-form.png)\n\n"
                         "### Notes\n\n"
                         "The model name `training/assistant` is intercepted by the training stub "
                         "and returns deterministic responses.\n"
@@ -240,6 +276,9 @@ def _seed_tutorial_missions(force_update=False):
                         "5. Write a system prompt explaining what the agent should do\n"
                         "6. Set **Is active** to checked\n"
                         "7. Save\n\n"
+                        "![The Add Agent profile form: Agent identity (Name, Role, Is active), "
+                        "Model config and the System prompt field]"
+                        "(/static/academy/img/tutorials/agent-form.png)\n\n"
                         "### Good agent names are concrete\n\n"
                         "- ✅ Input Normalizer\n"
                         "- ✅ Ticket Classifier\n"
@@ -256,7 +295,8 @@ def _seed_tutorial_missions(force_update=False):
                     "validation_key": "added_agent_contract",
                     "instructions": (
                         "## Add Contracts\n\n"
-                        "**Contracts** define what data an agent expects as input and produces as output.\n\n"
+                        "**Contracts** define what data an agent expects as input and what shape its "
+                        "result payload must have.\n\n"
                         "### Steps\n\n"
                         "1. Open your `Input Normalizer` agent in Admin\n"
                         "2. Set **Input contract** to:\n"
@@ -265,12 +305,26 @@ def _seed_tutorial_missions(force_update=False):
                         "   ```\n"
                         "3. Set **Output contract** to:\n"
                         "   ```json\n"
-                        '   {"required": ["normalized_title", "normalized_body"]}\n'
+                        '   {"required": ["agent", "llm", "tools"]}\n'
                         "   ```\n"
                         "4. Save\n\n"
+                        "![The Contracts section of the agent form, with the Input contract and "
+                        "Output contract fields]"
+                        "(/static/academy/img/tutorials/agent-contracts.png)\n\n"
+                        "### Input vs output contracts — read this carefully\n\n"
+                        "- The **input contract** checks the data going *into* the agent. If a pipeline "
+                        "step hands this agent a payload without `ticket_title` or `ticket_text`, the "
+                        "session fails immediately with a clear message.\n"
+                        "- The **output contract** checks the agent's *result wrapper*, which always has "
+                        "the keys `agent`, `llm` and `tools`. The model's own answer lives **inside** "
+                        "`llm.content` as JSON.\n"
+                        "- So the agent's business output (like `normalized_title`) is **not** declared "
+                        "here. You expose it later, at the pipeline level, using a step **output mapping** "
+                        "and the pipeline **global output contract** — you will do exactly that in the "
+                        "Orchestrator module.\n\n"
                         "### Why contracts matter\n\n"
-                        "- Contracts enforce data quality at every pipeline step\n"
-                        "- A session fails immediately if a required field is missing\n"
+                        "- Input contracts enforce data quality at every pipeline step\n"
+                        "- A session fails immediately if a required input field is missing\n"
                         "- This prevents silent failures deep in multi-agent pipelines\n"
                     ),
                 },
@@ -297,6 +351,8 @@ def _seed_tutorial_missions(force_update=False):
                         "3. Add a Knowledge Document with curated text about AI Hub concepts\n"
                         "4. Set the document status to `Active`\n"
                         "5. Save\n\n"
+                        "![The Add Knowledge collection form: Name, Description and Is active]"
+                        "(/static/academy/img/tutorials/knowledge-form.png)\n\n"
                         "### Tip\n\n"
                         "The Documentation section of this Academy already has the official docs imported. "
                         "You can copy relevant text from there into a knowledge document.\n"
@@ -456,9 +512,12 @@ def _seed_tutorial_missions(force_update=False):
                         "The `support_demo` app shows this pattern with support tickets.\n\n"
                         "### Steps\n\n"
                         "1. Open [Admin → Support Demo → Support tickets](/admin/support_demo/supportticket/)\n"
-                        "2. Select a ticket and use the **Run AI triage** action\n"
+                        "2. Tick a ticket's checkbox, then choose the **Run AI triage on selected tickets** action and click **Go**\n"
                         "3. Refresh and check that the ticket now shows an AI session link\n"
                         "4. Click the session link to see the full execution audit trail\n\n"
+                        "![The Support tickets list with a ticket checked and the Run AI triage on "
+                        "selected tickets action selected, next to the Run button]"
+                        "(/static/academy/img/tutorials/triage-action.png)\n\n"
                         "### The adapter pattern\n\n"
                         "The `support_demo/services/ai_hub_adapter.py` file shows the clean integration:\n"
                         "- Create an ExecutionSession with domain data as `initial_context`\n"
@@ -496,7 +555,7 @@ def _seed_tutorial_missions(force_update=False):
                         "### Steps\n\n"
                         "1. Go to [Support Demo → Tickets](/admin/support_demo/supportticket/)\n"
                         "2. Create a ticket (or use the seeded demo tickets)\n"
-                        "3. Select it and run **Run AI triage**\n"
+                        "3. Tick its checkbox, choose **Run AI triage on selected tickets** and click **Go**\n"
                         "4. Verify the session completed with `success`\n"
                         "5. Click **Check Mission**\n"
                     ),
@@ -508,7 +567,7 @@ def _seed_tutorial_missions(force_update=False):
     interface_mission = {
         "order": 2,
         "title": "Inspect The Control Center",
-        "slug": "inspect-the-mission-deck",
+        "slug": "inspect-the-control-center",
         "goal": "Use the connection graph, node pop-up, full screen mode and Needs attention inbox.",
         "validation_key": "visited_control_room",
         "instructions": (
@@ -523,6 +582,9 @@ def _seed_tutorial_missions(force_update=False):
             "5. Turn **Isolate** on only after selecting a node; it hides nodes outside the selected hop range\n"
             "6. Use **Full screen**, then exit with the same button or `Esc`\n"
             "7. In **Needs attention**, try the view tabs, severity/source filter and sort menu\n\n"
+            "![The Control Center: connection graph on top, the All pipelines menu and "
+            "Full screen / Isolate controls, and the Needs attention inbox below]"
+            "(/static/academy/img/tutorials/control-center.png)\n\n"
             "### Operator rules\n\n"
             "- Hover gives brief information only; it should not hide the rest of the graph\n"
             "- Selection opens the detail pop-up and can drive hop isolation\n"
@@ -539,9 +601,15 @@ def _seed_tutorial_missions(force_update=False):
                 "Your first mission is to learn the shape of the AI Hub Admin cockpit.\n\n"
                 "### Steps\n\n"
                 "1. Open [AI Hub Admin](/admin/ai_hub/) — the cockpit home, organised into five areas "
-                "(Overview & Entry, Foundation, Orchestrator, GAME, Operations)\n"
+                "(Overview & Entry, Foundation, Orchestrator, GAME, Operations)\n\n"
+                "![AI Hub cockpit home: the vitals strip, the inventory line, the Needs your "
+                "attention panel and the five-area navigation map]"
+                "(/static/academy/img/tutorials/home-cockpit.png)\n\n"
                 "2. Open the [Control Center](/admin/ai_hub/pipelinedefinition/control-center/)\n"
-                "3. Open the [Build Console](/admin/ai_hub/workspaces/build/) — the guided wizard that creates a whole setup at once\n"
+                "3. Open the [Build Console](/admin/ai_hub/workspaces/build/) — the guided wizard that creates a whole setup at once\n\n"
+                "![Build Console: the numbered wizard steps (Engine, Agent, Goal, Governance, "
+                "Runtime, Review) that create a whole setup in one transaction]"
+                "(/static/academy/img/tutorials/build-console.png)\n\n"
                 "4. Open [Orchestrator Workspace](/admin/ai_hub/workspaces/orchestrator/)\n"
                 "5. Open [GAME Workspace](/admin/ai_hub/workspaces/game/)\n"
                 "6. Open the [Operations Inbox](/admin/ai_hub/operations/) — the queue for everything that needs a human\n"
@@ -559,15 +627,36 @@ def _seed_tutorial_missions(force_update=False):
         "build-your-first-conveyor-belt": {
             "instructions": (
                 "## Create a Pipeline\n\n"
-                "A **Pipeline** is a sequence of agent steps that run in order.\n\n"
+                "A **Pipeline** is a sequence of agent steps that run in order. This is where the "
+                "business output you could not put on the agent (back in *Make The Agent Specific*) "
+                "is finally surfaced.\n\n"
                 "### Steps\n\n"
                 "1. Go to [Admin - AI Hub - Pipeline definitions](/admin/ai_hub/pipelinedefinition/add/)\n"
                 "2. Name it `Ticket Triage Pipeline`\n"
                 "3. Save it as draft while you add steps\n"
-                "4. Add **Step 1**: agent = `Input Normalizer`, order = 1\n"
-                "5. Add **Step 2**: agent = `Ticket Classifier`, order = 2\n"
-                "6. Activate the pipeline and save\n"
-                "7. Open the [Control Center](/admin/ai_hub/pipelinedefinition/control-center/) and select the pipeline scope\n\n"
+                "4. Add **Step 1**: agent = `Input Normalizer`, order = 1. In its **Output mapping** set:\n"
+                "   ```json\n"
+                '   {"final_output": "llm.content"}\n'
+                "   ```\n"
+                "5. Add **Step 2**: agent = `Ticket Classifier`, order = 2, with the same **Output mapping**:\n"
+                "   ```json\n"
+                '   {"final_output": "llm.content"}\n'
+                "   ```\n"
+                "6. Set the pipeline **Global output contract** to:\n"
+                "   ```json\n"
+                '   {"required": ["category", "priority"]}\n'
+                "   ```\n"
+                "7. Activate the pipeline and save\n"
+                "8. Open the [Control Center](/admin/ai_hub/pipelinedefinition/control-center/) and pick this pipeline in the **All pipelines** menu\n\n"
+                "![The Pipeline definition form with its two ordered steps inline and the "
+                "global output contract]"
+                "(/static/academy/img/tutorials/pipeline-form.png)\n\n"
+                "### How the output gets out of the agent\n\n"
+                "- Each agent returns a wrapper payload; the model's JSON answer is the string in `llm.content`\n"
+                "- The step **output mapping** `{\"final_output\": \"llm.content\"}` copies that JSON into the "
+                "run context, where AI Hub merges its keys (`category`, `priority`, `reason`) into the context\n"
+                "- The pipeline **global output contract** then checks those merged business keys exist\n"
+                "- This is why the agent output contract only described the wrapper, not the business keys\n\n"
                 "### Reading the graph\n\n"
                 "- Pipeline columns appear only after pipeline records exist\n"
                 "- Step columns appear only after step records exist\n"
@@ -590,6 +679,9 @@ def _seed_tutorial_missions(force_update=False):
                 "5. Save, then click **Run Session** from the session detail page\n"
                 "6. Refresh and check the status is `success`\n"
                 "7. Return to Control Center and check whether **Needs attention** changed\n\n"
+                "![The Session Explorer Overview showing status SUCCESS, the step and event "
+                "counts and zero failed steps]"
+                "(/static/academy/img/tutorials/session-success.png)\n\n"
                 "### Operator habit\n\n"
                 "Use **Open incident** on attention items and **Open record in admin** on graph nodes "
                 "to move from dashboard signal to the exact Admin record.\n"
@@ -609,6 +701,8 @@ def _seed_tutorial_missions(force_update=False):
                 "6. Set **Runtime config** to: `{\"max_iterations\": 3}`\n"
                 "7. Save and run\n"
                 "8. Use the GAME graph to inspect the entry agent, model, knowledge and tool links\n\n"
+                "![The Create GAME session form: Entry agent, Goal, Max iterations and Runtime fields]"
+                "(/static/academy/img/tutorials/game-new.png)\n\n"
                 "### Interface note\n\n"
                 "The GAME graph uses the same interaction model as the Control Center graph: "
                 "hover for a brief preview, select for the draggable detail pop-up and use full screen when the graph needs room.\n"
@@ -645,6 +739,9 @@ def _seed_tutorial_missions(force_update=False):
                 "   - **Response payload**: what the model returned\n"
                 "   - **Latency ms**: how long the call took\n"
                 "5. Return to Control Center and compare this with **Needs attention**\n\n"
+                "![The Timeline tab of the Session Explorer, listing each step run with its "
+                "status, action, time and latency, and an Open button]"
+                "(/static/academy/img/tutorials/timeline-tab.png)\n\n"
                 "### Why this matters\n\n"
                 "Failed step runs surface as attention incidents with dates and an **Open incident** action. "
                 "Use the incident link to jump to the latest failed step run, then use telemetry to diagnose the cause.\n"
@@ -668,10 +765,13 @@ def _seed_tutorial_missions(force_update=False):
                 "### Steps\n\n"
                 "1. Go to [Support Demo - Tickets](/admin/support_demo/supportticket/)\n"
                 "2. Create a ticket or use the seeded demo tickets\n"
-                "3. Select it and run **Run AI triage**\n"
+                "3. Tick its checkbox, choose **Run AI triage on selected tickets** and click **Go**\n"
                 "4. Verify the session completed with `success`\n"
                 "5. Open Control Center and confirm the graph and attention inbox match the workflow state\n"
-                "6. Click **Check Mission**\n"
+                "6. Click **Check Mission**\n\n"
+                "![A triaged support ticket: Status is Triaged, the AI session is linked, and the "
+                "Ticket Analysis shows the category, priority and reason the pipeline produced]"
+                "(/static/academy/img/tutorials/ticket-triaged.png)\n"
             ),
         },
     }

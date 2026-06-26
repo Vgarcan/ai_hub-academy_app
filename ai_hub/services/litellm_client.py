@@ -13,7 +13,9 @@ def _training_completion_call(*, model: str, messages: list, **kwargs) -> dict:
     Deterministic stub for the 'training' provider.
 
     Inspects the system prompt to decide what kind of response to return
-    so demos and tests can run without any external API.
+    so demos and tests can run without any external API. The 'normaliz'
+    branch is checked before classification so that a normalizer agent
+    whose prompt also mentions "ticket" still returns normalized_* keys.
     """
     system_content = ""
     user_content = ""
@@ -30,6 +32,16 @@ def _training_completion_call(*, model: str, messages: list, **kwargs) -> dict:
             "message": "Training model: goal complete.",
             "complete": True,
             "final_answer": "This is a training stub response. Configure a real provider for production use.",
+        })
+        return {"status": "ok", "model": model, "content": content, "provider": "training", "stubbed": True}
+
+    # Input normalization expects normalized_title/normalized_body. Checked
+    # before classification because a normalizer prompt commonly says "ticket".
+    if "normaliz" in system_content:
+        content = json.dumps({
+            "normalized_title": "Normalized ticket title (training stub).",
+            "normalized_body": "Normalized ticket body with HTML stripped and whitespace trimmed (training stub).",
+            "word_count": 12,
         })
         return {"status": "ok", "model": model, "content": content, "provider": "training", "stubbed": True}
 

@@ -228,10 +228,14 @@ class AcademySeedCommandTests(TestCase):
         # describes the cockpit + Control Center rather than "Mission Deck")
         self.assertIn("Control Center", mission.instructions_markdown)
         self.assertTrue(
+            TutorialMission.objects.filter(slug="inspect-the-control-center").exists()
+        )
+        # The legacy slug must not linger after the rename migration runs.
+        self.assertFalse(
             TutorialMission.objects.filter(slug="inspect-the-mission-deck").exists()
         )
 
-    def test_seed_lab_exercises_adds_mission_deck_interface_lab(self):
+    def test_seed_lab_exercises_adds_control_center_interface_lab(self):
         TutorialModule.objects.create(
             title="Orientation",
             slug="orientation",
@@ -240,7 +244,7 @@ class AcademySeedCommandTests(TestCase):
 
         call_command("seed_lab_exercises", "--force", stdout=StringIO())
 
-        exercise = LabExercise.objects.get(slug="mission-deck-interface-audit")
+        exercise = LabExercise.objects.get(slug="control-center-interface-audit")
         self.assertEqual(exercise.module.slug, "orientation")
         self.assertFalse(exercise.requires_api)
         self.assertIn("Open record in admin", exercise.context)

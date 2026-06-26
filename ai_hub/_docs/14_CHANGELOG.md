@@ -322,6 +322,11 @@ Host-project features should be documented in the host project, not here.
 
 ### Fixed
 
+#### Static asset modularization (P2)
+
+- Split the two large admin static files by feature responsibility. `admin_control_center.css` (5,392 lines) → barrel of `@import`s over `static/ai_hub/CSS/` (`base.css` tokens+forms, `mission-deck.css`, `build-wizard.css`, `workspace.css`); `admin_control_center.js` (1,058 lines) → ES-module barrel importing `static/ai_hub/JS/` (`graph.js`, `build-wizard.js`, `entity-tabs.js`, three already-`"use strict"` IIFEs). Source was split by line range and verified byte-identical to the originals.
+- Templates keep referencing the single `admin_control_center.css/.js` entrypoints (no per-feature wiring); the 11 JS `<script>` tags gained `type="module"` so the barrel's imports resolve. Verified over HTTP: all barrels and partials serve 200 with correct MIME (`text/javascript`/`text/css`). Cache-bust query unified to `?v=20260626-modular-v1`.
+
 #### P1 hardening (review remediation)
 
 - **Shared Build Console builder service:** extracted the duplicated engine/agent/toolbox/knowledge resolution from the GAME and Orchestrator wizard builders into `ai_hub/services/build_console.py` (`resolve_engine`, `resolve_agent`, `attach_toolboxes`, `attach_knowledge`, `parse_json_field`). The two `admin.py` builders are now thin and cannot drift apart.

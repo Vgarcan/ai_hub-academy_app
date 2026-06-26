@@ -3,13 +3,13 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260623-missiondeck-v10">
+<link rel="stylesheet" href="{% static 'ai_hub/admin_control_center.css' %}?v=20260626-modular-v1">
 {% endblock %}
 
 {% block extrahead %}
 {{ block.super }}
 {{ game_graph.graph|json_script:"ai-control-graph-data" }}
-<script defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260623-missiondeck-v10"></script>
+<script type="module" defer src="{% static 'ai_hub/admin_control_center.js' %}?v=20260626-modular-v1"></script>
 {% endblock %}
 
 {% block breadcrumbs %}

@@ -2764,9 +2764,11 @@ class HubAdminControlCenterTests(TestCase):
         self.assertContains(response, "data-mc-tabs")
         self.assertContains(response, "Connection graph")
         self.assertContains(response, "Needs attention")
-        # themed stylesheet + graph engine wired with the refreshed cache key
-        self.assertContains(response, "admin_control_center.css?v=20260623-missiondeck-v10")
-        self.assertContains(response, "admin_control_center.js?v=20260623-missiondeck-v10")
+        # themed stylesheet + graph engine wired (cache-bust version is not asserted
+        # so it can change freely; the JS is loaded as an ES module barrel).
+        self.assertContains(response, "admin_control_center.css?v=")
+        self.assertContains(response, 'type="module"')
+        self.assertContains(response, "admin_control_center.js?v=")
 
     def test_game_workspace_uses_shared_graph_engine(self):
         client = Client()

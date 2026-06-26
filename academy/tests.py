@@ -224,7 +224,9 @@ class AcademySeedCommandTests(TestCase):
             call_command("seed_academy_training_data", "--force-update", stdout=StringIO())
 
         mission.refresh_from_db()
-        self.assertIn("Mission Deck", mission.instructions_markdown)
+        # marker from the refreshed real content (enter-the-control-room now
+        # describes the cockpit + Control Center rather than "Mission Deck")
+        self.assertIn("Control Center", mission.instructions_markdown)
         self.assertTrue(
             TutorialMission.objects.filter(slug="inspect-the-mission-deck").exists()
         )

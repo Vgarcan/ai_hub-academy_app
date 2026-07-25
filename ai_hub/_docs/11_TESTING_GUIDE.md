@@ -250,6 +250,12 @@ Test expectations:
 - Main action links point to valid admin URLs.
 - Guided copy is visible.
 - Forms include help text for important fields.
+- Every editable `ai_hub` `JSONField`, including inline fields, uses the safe
+  JSON form field and local editor assets.
+- Invalid JSON and wrong object/array roots fail in the form without losing the
+  submitted value; optional blanks normalize to `{}` or `[]`.
+- Runtime/audit payloads stay excluded from editable forms and use redacted
+  read-only renderers.
 - Layout does not depend on a desktop-only viewport.
 
 Control Center / Mission Deck expectations:

@@ -41,15 +41,24 @@ def landing(request):
 
 def docs_list(request):
     pages = DocumentationPage.objects.filter(
-        is_active=True).select_related("source").order_by("order")
+        is_active=True,
+        source__is_active=True,
+    ).select_related("source").order_by("order")
     return render(request, "academy/docs_list.html", {"pages": pages})
 
 
 def docs_detail(request, slug):
-    page = get_object_or_404(DocumentationPage, slug=slug, is_active=True)
+    page = get_object_or_404(
+        DocumentationPage,
+        slug=slug,
+        is_active=True,
+        source__is_active=True,
+    )
     chunks = page.chunks.filter(is_active=True).order_by("order")
     all_pages = DocumentationPage.objects.filter(
-        is_active=True).order_by("order")
+        is_active=True,
+        source__is_active=True,
+    ).order_by("order")
     return render(request, "academy/docs_detail.html", {
         "page": page,
         "chunks": chunks,
@@ -135,7 +144,10 @@ def tutorial_mission(request, module_slug, mission_slug):
         TutorialModule, slug=module_slug, is_active=True)
     mission = get_object_or_404(
         TutorialMission, slug=mission_slug, module=module, is_active=True)
-    related_docs = mission.related_docs.filter(is_active=True)
+    related_docs = mission.related_docs.filter(
+        is_active=True,
+        source__is_active=True,
+    )
 
     progress = None
     if request.user.is_authenticated:

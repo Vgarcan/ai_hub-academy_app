@@ -44,8 +44,9 @@ def _trigger_doc_sync():
         runtime_kind=ExecutionSession.RuntimeKind.GAME,
         entry_agent=agent,
         goal_text=(
-            "Synchronize the documentation database with the Markdown source files. "
-            "Check all .md files, update any that have changed, and report what was done."
+            "Synchronize the documentation database with the configured reusable "
+            "AI Hub and Academy Markdown roots. Update changed files and report "
+            "what was done."
         ),
         initial_context={},
         # Host-specific compatibility: doc sync is an explicitly trusted action

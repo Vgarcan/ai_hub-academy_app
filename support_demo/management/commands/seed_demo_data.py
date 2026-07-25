@@ -50,7 +50,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--with-docs",
             action="store_true",
-            help="Also import documentation from docs_source/.",
+            help="Also import platform and Academy documentation.",
         )
 
     def handle(self, *args, **options):

@@ -27,10 +27,10 @@
 <!-- Header card -->
 <div class="card border-0 shadow-sm mb-4">
   <div class="card-body">
-    {% if session.goal_text %}
+    {% if goal_text_redacted %}
     <div class="alert alert-light border mb-3">
       <strong class="d-block mb-1 text-muted small">Goal</strong>
-      <span>{{ session.goal_text }}</span>
+      <span>{{ goal_text_redacted }}</span>
     </div>
     {% endif %}
 
@@ -73,10 +73,10 @@
       {% endif %}
     </div>
 
-    {% if session.error_detail %}
+    {% if error_detail_redacted %}
     <div class="alert alert-danger mb-0">
       <strong><i class="bi bi-exclamation-triangle me-1"></i>Error:</strong>
-      <pre class="mb-0 mt-1 small" style="white-space:pre-wrap;overflow-x:auto;max-height:300px;overflow-y:auto;">{{ session.error_detail }}</pre>
+      <pre class="mb-0 mt-1 small" style="white-space:pre-wrap;overflow-x:auto;max-height:300px;overflow-y:auto;">{{ error_detail_redacted }}</pre>
     </div>
     {% endif %}
   </div>
@@ -94,9 +94,9 @@
 {% endif %}
 
 <!-- Initial context collapsible -->
-{% if session.initial_context %}
+{% if initial_context_redacted %}
 <div class="accordion mb-4">
-  {% include "dashboard/partials/_json_block.html" with label="Initial Context" json_str=session.initial_context|pretty_json collapse_id="initial-context" %}
+  {% include "dashboard/partials/_json_block.html" with label="Initial Context" json_str=initial_context_redacted|pretty_json collapse_id="initial-context" %}
 </div>
 {% endif %}
 

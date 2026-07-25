@@ -49,7 +49,7 @@ INSTALLED_APPS = [
     "academy",
     # Support Demo — realistic workflow scenario
     "support_demo",
-    # Dashboard — read-only visual explorer for all AI Hub entities
+    # Dashboard — read-only explorer for core configuration and execution records
     "dashboard",
 ]
 
@@ -113,9 +113,9 @@ LOGIN_URL = "/admin/login/"
 LOGIN_REDIRECT_URL = "/"
 
 # Markdown documentation roots imported into the DB.
-# AIHUB_DOCS_SOURCE is the canonical reusable-platform doc set (files 01-14);
-# ACADEMY_DOCS_SOURCE holds only academy-specific docs (15+). The importer reads
-# both, so there is a single source of truth and no duplicated/ drifting copies.
+# AIHUB_DOCS_SOURCE is the complete canonical reusable-platform doc set;
+# ACADEMY_DOCS_SOURCE holds Academy-specific docs. The importer reads both, so
+# there is one source of truth and no duplicated or drifting copies.
 AIHUB_DOCS_SOURCE = BASE_DIR / "ai_hub" / "_docs"
 ACADEMY_DOCS_SOURCE = BASE_DIR / "docs_source"
 

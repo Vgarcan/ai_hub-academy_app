@@ -14,6 +14,15 @@ from django.db.models import Q
 from academy.models import DocumentationChunk
 
 
+def _searchable_chunks():
+    """Return chunks whose chunk, page, and source are all active."""
+    return DocumentationChunk.objects.filter(
+        is_active=True,
+        page__is_active=True,
+        page__source__is_active=True,
+    )
+
+
 def search_documentation(query: str, limit: int = 5) -> list:
     """Return up to `limit` DocumentationChunk objects ranked by relevance."""
     if not query or not query.strip():
@@ -31,7 +40,7 @@ def _semantic_search(query: str, limit: int) -> list:
     from academy.services.embeddings import cosine_similarity, get_embedding
 
     # Only attempt if we have embedded chunks
-    if not DocumentationChunk.objects.filter(is_active=True, embedding__isnull=False).exists():
+    if not _searchable_chunks().filter(embedding__isnull=False).exists():
         return []
 
     query_emb = get_embedding(query)
@@ -39,7 +48,7 @@ def _semantic_search(query: str, limit: int) -> list:
         return []
 
     chunks = (
-        DocumentationChunk.objects.filter(is_active=True, embedding__isnull=False)
+        _searchable_chunks().filter(embedding__isnull=False)
         .select_related("page")
     )
 
@@ -65,7 +74,7 @@ def _keyword_search(query: str, limit: int) -> list:
         Q(),
     )
     chunks = (
-        DocumentationChunk.objects.filter(is_active=True)
+        _searchable_chunks()
         .filter(db_filter)
         .select_related("page")
     )

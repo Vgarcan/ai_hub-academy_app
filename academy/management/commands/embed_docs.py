@@ -31,13 +31,23 @@ class Command(BaseCommand):
         model = options["model"]
         force = options["force"]
 
-        qs = DocumentationChunk.objects.filter(is_active=True).select_related("page")
+        qs = DocumentationChunk.objects.filter(
+            is_active=True,
+            page__is_active=True,
+            page__source__is_active=True,
+        ).select_related("page")
         if not force:
             qs = qs.filter(embedding__isnull=True)
 
         total = qs.count()
         if not total:
-            self.stdout.write("All chunks already embedded. Use --force to refresh.")
+            if force:
+                self.stdout.write("No active documentation chunks found.")
+            else:
+                self.stdout.write(
+                    "All active documentation chunks already embedded. "
+                    "Use --force to refresh."
+                )
             return
 
         self.stdout.write(f"Embedding {total} chunk(s) with '{model}'...")

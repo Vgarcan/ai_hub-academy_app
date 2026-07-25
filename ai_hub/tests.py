@@ -3470,16 +3470,20 @@ class HubAdminControlCenterTests(TestCase):
 
     def test_provider_health_rejects_non_http_scheme(self):
         """P0: the live health check refuses non-http(s) base URLs (e.g. file://)."""
-        from ai_hub.services.admin_control_center import _validate_health_endpoint
-        ok, reason = _validate_health_endpoint("file:///etc/passwd")
+        from ai_hub.services.admin_control_center import (
+            validate_provider_health_endpoint,
+        )
+        ok, reason = validate_provider_health_endpoint("file:///etc/passwd")
         self.assertFalse(ok)
         self.assertIn("http", reason)
 
     @override_settings(AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS=("ollama.internal",))
     def test_provider_health_allowlist_blocks_other_hosts(self):
         """P0: with an allow-list set, hosts outside it are rejected before any request."""
-        from ai_hub.services.admin_control_center import _validate_health_endpoint
-        ok, reason = _validate_health_endpoint("http://localhost:11434")
+        from ai_hub.services.admin_control_center import (
+            validate_provider_health_endpoint,
+        )
+        ok, reason = validate_provider_health_endpoint("http://localhost:11434")
         self.assertFalse(ok)
         self.assertIn("not in", reason)
 
@@ -3770,6 +3774,277 @@ class HubAdminControlCenterTests(TestCase):
         self.assertContains(response, "could not be found")
         # Whole transaction rolled back: no pipeline created.
         self.assertFalse(PipelineDefinition.objects.filter(name="Should not exist").exists())
+
+    def test_build_wizard_rejects_invalid_contract_json(self):
+        from ai_hub.models import PipelineDefinition
+
+        client = Client()
+        client.force_login(self.user)
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build") + "?kind=orchestrator",
+            {
+                "wizard_kind": "orchestrator",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "pipeline_name": "Invalid contract pipeline",
+                "pipeline_input_contract": '{"required": ',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pipeline input contract must be valid JSON.")
+        self.assertFalse(
+            PipelineDefinition.objects.filter(
+                name="Invalid contract pipeline"
+            ).exists()
+        )
+
+    def test_build_wizard_rejects_tampered_provider_type(self):
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "engine_mode": "create",
+                "engine_provider_name": "Tampered provider",
+                "engine_provider_type": "not-a-provider",
+                "engine_model_name": "anything",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Select a valid provider type.")
+        self.assertFalse(
+            ProviderConfig.objects.filter(name="Tampered provider").exists()
+        )
+
+    def test_build_wizard_validates_new_model_configuration(self):
+        client = Client()
+        client.force_login(self.user)
+
+        invalid_name_response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "engine_mode": "create",
+                "engine_provider_name": "Training validation",
+                "engine_provider_type": ProviderConfig.ProviderType.TRAINING,
+                "engine_model_name": "real-model-name",
+                "engine_temperature": "0.3",
+            },
+        )
+        invalid_temperature_response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "engine_mode": "create",
+                "engine_provider_name": "Temperature validation",
+                "engine_provider_type": ProviderConfig.ProviderType.OTHER,
+                "engine_model_name": "custom-model",
+                "engine_temperature": "3",
+            },
+        )
+
+        self.assertContains(
+            invalid_name_response,
+            "Training-provider models must be named",
+        )
+        self.assertContains(
+            invalid_temperature_response,
+            "Temperature must be between 0 and 2.",
+        )
+        self.assertFalse(
+            ProviderConfig.objects.filter(
+                name__in=["Training validation", "Temperature validation"]
+            ).exists()
+        )
+
+    def test_build_wizard_rejects_inactive_reused_model(self):
+        self.model.is_active = False
+        self.model.save(update_fields=["is_active"])
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            "Select an active model with an active provider.",
+        )
+
+    def test_build_wizard_choices_hide_inactive_engine_chains(self):
+        inactive_provider = ProviderConfig.objects.create(
+            name="Inactive engine provider",
+            provider_type=ProviderConfig.ProviderType.OTHER,
+            is_active=False,
+        )
+        hidden_model = ModelConfig.objects.create(
+            provider=inactive_provider,
+            model_name="hidden-model",
+            is_active=True,
+        )
+        hidden_agent = AgentProfile.objects.create(
+            name="Hidden engine agent",
+            role="hidden",
+            model_config=hidden_model,
+            is_active=True,
+        )
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.get(reverse("admin:ai_hub_workspace_build"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(hidden_model, list(response.context_data["model_configs"]))
+        self.assertNotIn(hidden_agent, list(response.context_data["agents"]))
+
+    def test_build_wizard_rejects_invalid_game_flavor(self):
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "game_flavor": "tampered",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Select a valid GAME session flavor.")
+
+    def test_build_wizard_requires_content_for_new_knowledge(self):
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "knowledge_mode": "create",
+                "knowledge_collection_name": "Empty knowledge",
+                "knowledge_doc_title": "Empty document",
+                "knowledge_doc_content": "",
+                "goal_text": "Should not be created",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            "Document content is required to create a retrievable chunk.",
+        )
+        self.assertFalse(
+            KnowledgeCollection.objects.filter(name="Empty knowledge").exists()
+        )
+
+    def test_build_wizard_rejects_inactive_pipeline_step_agent(self):
+        inactive_agent = AgentProfile.objects.create(
+            name="Inactive step agent",
+            role="inactive",
+            model_config=self.model,
+            is_active=False,
+            input_contract={"required": ["input"]},
+            output_contract={"required": ["output"]},
+        )
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build") + "?kind=orchestrator",
+            {
+                "wizard_kind": "orchestrator",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "pipeline_name": "Inactive step pipeline",
+                "step_agent_id": [str(inactive_agent.pk)],
+                "step_on_error": ["stop"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            "must use an active agent with an active engine",
+        )
+        self.assertFalse(
+            PipelineDefinition.objects.filter(name="Inactive step pipeline").exists()
+        )
+
+    def test_build_wizard_rejects_invalid_step_mapping_json(self):
+        from ai_hub.models import PipelineDefinition
+
+        client = Client()
+        client.force_login(self.user)
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build") + "?kind=orchestrator",
+            {
+                "wizard_kind": "orchestrator",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "pipeline_name": "Invalid mapping pipeline",
+                "step_agent_id": [str(self.agent.pk)],
+                "step_on_error": ["stop"],
+                "step_input_mapping": ["[]"],
+                "step_output_mapping": ["{}"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Step 1 input mapping must be a JSON object.")
+        self.assertFalse(
+            PipelineDefinition.objects.filter(
+                name="Invalid mapping pipeline"
+            ).exists()
+        )
+
+    def test_build_wizard_rejects_invalid_advanced_budget(self):
+        client = Client()
+        client.force_login(self.user)
+        response = client.post(
+            reverse("admin:ai_hub_workspace_build"),
+            {
+                "wizard_kind": "game",
+                "game_flavor": "advanced",
+                "engine_mode": "reuse",
+                "engine_reuse_model_id": self.model.pk,
+                "agent_mode": "reuse",
+                "agent_reuse_id": self.agent.pk,
+                "goal_text": "Invalid budget",
+                "workspace_name": "Invalid budget workspace",
+                "max_iterations": "3",
+                "budget_max_actions": "many",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            "Maximum action runs must be a whole number.",
+        )
+        self.assertFalse(
+            GameWorkspace.objects.filter(name="Invalid budget workspace").exists()
+        )
 
     def test_build_wizard_full_chain_rollback_on_late_failure(self):
         """P1.3: a late failure rolls back the ENTIRE chain — newly created provider,

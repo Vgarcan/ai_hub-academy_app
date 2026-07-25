@@ -2,9 +2,9 @@
 Import Markdown documentation files into the database.
 
 By default it reads two roots: the canonical reusable-platform docs
-(AIHUB_DOCS_SOURCE, files 01-14) and the academy-specific docs
-(ACADEMY_DOCS_SOURCE, 15+). This keeps a single source of truth — the platform
-docs are not duplicated into docs_source.
+(AIHUB_DOCS_SOURCE) and the academy-specific docs (ACADEMY_DOCS_SOURCE). This
+keeps a single source of truth — the platform docs are not duplicated into
+docs_source.
 
 Usage:
     python manage.py import_academy_docs            # reads both configured roots
@@ -105,8 +105,8 @@ def collect_doc_files(explicit_path=None):
 
     With ``explicit_path`` it behaves as a single-root import (legacy ``--path``).
     Otherwise it reads the canonical reusable-platform docs first
-    (``AIHUB_DOCS_SOURCE``, files 01-14) and then the academy-specific docs
-    (``ACADEMY_DOCS_SOURCE``, 15+). The platform ``README`` is skipped (it is a
+    (``AIHUB_DOCS_SOURCE``) and then the academy-specific docs
+    (``ACADEMY_DOCS_SOURCE``). The platform ``README`` is skipped (it is a
     developer index, not a published page) and duplicate page slugs are dropped so
     the first (platform) root wins. This gives one source of truth with no
     duplicated, drifting copies.
@@ -138,6 +138,123 @@ def collect_doc_files(explicit_path=None):
     return files
 
 
+def sync_documentation_files(
+    doc_files,
+    *,
+    source_name: str,
+    deactivate_missing: bool = False,
+):
+    """Synchronize an ordered documentation inventory without needless churn.
+
+    Unchanged pages keep their chunks and embeddings. Content changes replace
+    the page chunks atomically, while metadata-only changes preserve them.
+    ``deactivate_missing`` is safe only for a complete inventory of the source.
+    """
+    source_slug = slugify(source_name)
+    source, source_created = DocumentationSource.objects.get_or_create(
+        slug=source_slug,
+        defaults={"name": source_name, "is_active": True},
+    )
+    source_updates = []
+    if source.name != source_name:
+        source.name = source_name
+        source_updates.append("name")
+    if not source.is_active:
+        source.is_active = True
+        source_updates.append("is_active")
+    if source_updates:
+        source.save(update_fields=source_updates)
+
+    result = {
+        "source_created": source_created,
+        "checked": 0,
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "deactivated": 0,
+        "chunks_created": 0,
+        "details": [],
+    }
+    current_slugs = []
+
+    for order, (md_file, root) in enumerate(doc_files, start=1):
+        result["checked"] += 1
+        title = _page_title_from_filename(md_file)
+        page_slug = slugify(md_file.stem)[:50]
+        current_slugs.append(page_slug)
+        body = md_file.read_text(encoding="utf-8")
+        source_path = str(md_file.relative_to(root.parent))
+        existing = DocumentationPage.objects.filter(slug=page_slug).first()
+
+        metadata = {
+            "source": source,
+            "title": title,
+            "source_path": source_path,
+            "order": order,
+            "is_active": True,
+        }
+        content_changed = existing is None or existing.body_markdown != body
+        metadata_changed = existing is not None and any(
+            getattr(existing, field) != value
+            for field, value in metadata.items()
+        )
+
+        if existing is not None and not content_changed and not metadata_changed:
+            result["unchanged"] += 1
+            result["details"].append(
+                {
+                    "file": md_file.name,
+                    "status": "unchanged",
+                    "chunks": existing.chunks.count(),
+                }
+            )
+            continue
+
+        with transaction.atomic():
+            page, page_created = DocumentationPage.objects.update_or_create(
+                slug=page_slug,
+                defaults={**metadata, "body_markdown": body},
+            )
+            chunks_created = 0
+            if content_changed:
+                page.chunks.all().delete()
+                raw_chunks = _split_into_chunks(body)
+                bulk = [
+                    DocumentationChunk(
+                        page=page,
+                        heading=chunk["heading"],
+                        anchor=chunk["anchor"],
+                        body_markdown=chunk["body"],
+                        order=index,
+                        search_text=_strip_markdown(chunk["body"]),
+                        token_estimate=_estimate_tokens(chunk["body"]),
+                        is_active=True,
+                    )
+                    for index, chunk in enumerate(raw_chunks, start=1)
+                ]
+                DocumentationChunk.objects.bulk_create(bulk)
+                chunks_created = len(bulk)
+
+        status = "created" if page_created else "updated"
+        result[status] += 1
+        result["chunks_created"] += chunks_created
+        result["details"].append(
+            {
+                "file": md_file.name,
+                "status": status,
+                "chunks": page.chunks.count(),
+            }
+        )
+
+    if deactivate_missing:
+        stale_pages = DocumentationPage.objects.filter(source=source, is_active=True)
+        if current_slugs:
+            stale_pages = stale_pages.exclude(slug__in=current_slugs)
+        result["deactivated"] = stale_pages.update(is_active=False)
+
+    return result
+
+
 class Command(BaseCommand):
     help = "Import Markdown files from a directory into the documentation database."
 
@@ -146,7 +263,10 @@ class Command(BaseCommand):
             "--path",
             type=str,
             default=None,
-            help="Directory containing .md files (default: ACADEMY_DOCS_SOURCE in settings).",
+            help=(
+                "Directory containing .md files. By default both "
+                "AIHUB_DOCS_SOURCE and ACADEMY_DOCS_SOURCE are imported."
+            ),
         )
         parser.add_argument(
             "--source-name",
@@ -172,69 +292,27 @@ class Command(BaseCommand):
             self.stderr.write("No .md files found to import.")
             return
 
-        source_name = options["source_name"]
-        source_slug = slugify(source_name)
-        source, created = DocumentationSource.objects.get_or_create(
-            slug=source_slug,
-            defaults={"name": source_name, "is_active": True},
+        result = sync_documentation_files(
+            doc_files,
+            source_name=options["source_name"],
+            deactivate_missing=options["path"] is None,
         )
-        if created:
-            self.stdout.write(f"Created source: {source_name}")
-
-        pages_created = 0
-        chunks_created = 0
-
-        for order, (md_file, root) in enumerate(doc_files, start=1):
-            title = _page_title_from_filename(md_file)
-            page_slug = slugify(md_file.stem)[:50]
-            body = md_file.read_text(encoding="utf-8")
-
-            page, page_created = DocumentationPage.objects.update_or_create(
-                slug=page_slug,
-                defaults={
-                    "source": source,
-                    "title": title,
-                    "source_path": str(md_file.relative_to(root.parent)),
-                    "body_markdown": body,
-                    "order": order,
-                    "is_active": True,
-                },
+        if result["source_created"]:
+            self.stdout.write(f"Created source: {options['source_name']}")
+        for detail in result["details"]:
+            self.stdout.write(
+                f"  {detail['status'].title()}: {detail['file']} "
+                f"({detail['chunks']} chunks)"
             )
-            if page_created:
-                pages_created += 1
-            else:
-                # Refresh chunks for updated pages
-                page.chunks.all().delete()
-
-            raw_chunks = _split_into_chunks(body)
-            # Re-number chunks sequentially from 1 regardless of heading nesting
-            for i, c in enumerate(raw_chunks, 1):
-                c["order"] = i
-
-            with transaction.atomic():
-                if not page_created:
-                    page.chunks.all().delete()
-                bulk = [
-                    DocumentationChunk(
-                        page=page,
-                        heading=c["heading"],
-                        anchor=c["anchor"],
-                        body_markdown=c["body"],
-                        order=c["order"],
-                        search_text=_strip_markdown(c["body"]),
-                        token_estimate=_estimate_tokens(c["body"]),
-                        is_active=True,
-                    )
-                    for c in raw_chunks
-                ]
-                DocumentationChunk.objects.bulk_create(bulk)
-            chunks_created += len(bulk)
-
-            self.stdout.write(f"  Imported: {md_file.name} ({len(raw_chunks)} chunks)")
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Done. {pages_created} pages created, {chunks_created} chunks created."
+                "Done. "
+                f"{result['created']} pages created, "
+                f"{result['updated']} updated, "
+                f"{result['unchanged']} unchanged, "
+                f"{result['deactivated']} deactivated, "
+                f"{result['chunks_created']} chunks created."
             )
         )
 

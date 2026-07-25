@@ -251,6 +251,10 @@ class _WizardRollback(Exception):
 def _wizard_build_game(request, data):
     """Create the full GAME chain transactionally. Returns (session, errors_dict)."""
     errors = {}
+    game_flavor = data.get("game_flavor") or "simple"
+    if game_flavor not in {"simple", "advanced"}:
+        errors["game_flavor"] = _("Select a valid GAME session flavor.")
+        return None, errors
 
     # 1. Engine (shared)
     model_config = resolve_engine(data, errors)
@@ -289,17 +293,32 @@ def _wizard_build_game(request, data):
     try:
         max_iter = max(1, min(25, int(data.get("max_iterations") or 3)))
     except (ValueError, TypeError):
+        errors["max_iterations"] = _("Max iterations must be a whole number.")
         max_iter = 3
 
     runtime_mode = data.get("runtime_mode") or ExecutionSession.RuntimeMode.ASYNC
+    if runtime_mode not in {
+        ExecutionSession.RuntimeMode.SYNC,
+        ExecutionSession.RuntimeMode.ASYNC,
+    }:
+        errors["runtime_mode"] = _("Runtime mode must be sync or async.")
     strict = data.get("strict_response_contract") in ("on", "true", "1")
     runtime_config = {"max_iterations": max_iter, "strict_response_contract": strict}
+    if errors:
+        return None, errors
 
-    if data.get("game_flavor") == "advanced":
+    if game_flavor == "advanced":
         # Advanced: workspace → goal → goal-bound session via service.
         # create_goal_execution_session enforces the aihub_unique_active_goal constraint
         # and transitions goal queued → running atomically.
         ws_name = (data.get("workspace_name") or f"Workspace for {agent.name}").strip()
+        try:
+            max_actions = max(1, int(data.get("budget_max_actions") or 2))
+        except (ValueError, TypeError):
+            errors["budget_max_actions"] = _(
+                "Maximum action runs must be a whole number."
+            )
+            return None, errors
         policy = {
             "allowed_actions": ["submit_for_approval"],
             "safety": {
@@ -309,7 +328,7 @@ def _wizard_build_game(request, data):
             },
             "budget": {
                 "max_iterations_per_session":  max_iter,
-                "max_action_runs_per_session": max(1, int(data.get("budget_max_actions") or 2)),
+                "max_action_runs_per_session": max_actions,
             },
         }
         workspace, _created = GameWorkspace.objects.get_or_create(
@@ -379,13 +398,30 @@ def _wizard_build_orchestrator(request, data):
         errors["pipeline_name"] = _(f'A pipeline named "{pipeline_name}" already exists.')
         return None, errors
 
+    pipeline_input_contract = parse_json_field(
+        data.get("pipeline_input_contract"),
+        {},
+        errors=errors,
+        field_name="pipeline_input_contract",
+        label=_("Pipeline input contract"),
+    )
+    pipeline_output_contract = parse_json_field(
+        data.get("pipeline_output_contract"),
+        {},
+        errors=errors,
+        field_name="pipeline_output_contract",
+        label=_("Pipeline output contract"),
+    )
+    if errors:
+        return None, errors
+
     pipeline = PipelineDefinition.objects.create(
         name=pipeline_name,
         description=(data.get("pipeline_description") or "").strip(),
         entry_agent=entry_agent,
         is_active=False,
-        global_input_contract=parse_json_field(data.get("pipeline_input_contract"), {}),
-        global_output_contract=parse_json_field(data.get("pipeline_output_contract"), {}),
+        global_input_contract=pipeline_input_contract,
+        global_output_contract=pipeline_output_contract,
     )
 
     # 5. Steps
@@ -398,17 +434,55 @@ def _wizard_build_orchestrator(request, data):
         if not agent_id:
             continue
         try:
-            step_agent = AgentProfile.objects.get(pk=int(agent_id))
+            step_agent = AgentProfile.objects.get(
+                pk=int(agent_id),
+                is_active=True,
+                model_config__is_active=True,
+                model_config__provider__is_active=True,
+            )
         except (AgentProfile.DoesNotExist, ValueError, TypeError):
+            errors[f"step_agent_id_{i + 1}"] = _(
+                "Pipeline step %(number)s must use an active agent with an active engine."
+            ) % {"number": i + 1}
+            continue
+        on_error = (
+            step_on_errors[i]
+            if i < len(step_on_errors)
+            else PipelineStep.OnError.STOP
+        )
+        valid_on_errors = {choice for choice, _label in PipelineStep.OnError.choices}
+        if on_error not in valid_on_errors:
+            errors[f"step_on_error_{i + 1}"] = _(
+                "Pipeline step %(number)s has an invalid error strategy."
+            ) % {"number": i + 1}
+            continue
+        input_mapping = parse_json_field(
+            step_in_maps[i] if i < len(step_in_maps) else None,
+            {},
+            errors=errors,
+            field_name=f"step_input_mapping_{i + 1}",
+            label=_("Step %(number)s input mapping") % {"number": i + 1},
+        )
+        output_mapping = parse_json_field(
+            step_out_maps[i] if i < len(step_out_maps) else None,
+            {},
+            errors=errors,
+            field_name=f"step_output_mapping_{i + 1}",
+            label=_("Step %(number)s output mapping") % {"number": i + 1},
+        )
+        if errors:
             continue
         PipelineStep.objects.create(
             pipeline=pipeline,
             order=i + 1,
             agent=step_agent,
-            on_error=step_on_errors[i] if i < len(step_on_errors) else PipelineStep.OnError.STOP,
-            input_mapping=parse_json_field(step_in_maps[i] if i < len(step_in_maps) else None, {}),
-            output_mapping=parse_json_field(step_out_maps[i] if i < len(step_out_maps) else None, {}),
+            on_error=on_error,
+            input_mapping=input_mapping,
+            output_mapping=output_mapping,
         )
+
+    if errors:
+        return None, errors
 
     # 6. Activate if requested. The pipeline is already created; if activation
     # validation fails we keep it inactive but surface a visible warning rather
@@ -1676,7 +1750,10 @@ class PipelineDefinitionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
                     if wizard_kind == "orchestrator":
                         self.message_user(
                             request,
-                            _(f'Pipeline "{obj.name}" created. Add steps and activate when ready.'),
+                            _(
+                                f'Pipeline "{obj.name}" created. Review its steps and '
+                                "activate it when ready."
+                            ),
                             level=messages.SUCCESS,
                         )
                         success_url = reverse("admin:ai_hub_pipelinedefinition_change", args=[obj.id])
@@ -1700,8 +1777,15 @@ class PipelineDefinitionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
             "title": _("Build Console"),
             "kind": kind,
             "errors": errors,
-            "agents": AgentProfile.objects.filter(is_active=True).order_by("name"),
-            "model_configs": ModelConfig.objects.select_related("provider").filter(is_active=True).order_by("provider__name", "model_name"),
+            "agents": AgentProfile.objects.filter(
+                is_active=True,
+                model_config__is_active=True,
+                model_config__provider__is_active=True,
+            ).order_by("name"),
+            "model_configs": ModelConfig.objects.select_related("provider").filter(
+                is_active=True,
+                provider__is_active=True,
+            ).order_by("provider__name", "model_name"),
             "provider_types": ProviderConfig.ProviderType.choices,
             "toolboxes": Toolbox.objects.prefetch_related("tool_entries__tool").filter(is_active=True).order_by("name"),
             "knowledge_collections": KnowledgeCollection.objects.filter(is_active=True).order_by("name"),

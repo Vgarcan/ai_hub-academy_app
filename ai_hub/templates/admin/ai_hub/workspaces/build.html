@@ -368,10 +368,10 @@
                            placeholder="{% translate 'e.g. Triage guidelines v1' %}">
                   </div>
                   <div class="mc-field">
-                    <label for="knowledge_doc_content">{% translate "Document content (curated text)" %}</label>
+                    <label for="knowledge_doc_content">{% translate "Document content (curated text)" %} *</label>
                     <textarea id="knowledge_doc_content" name="knowledge_doc_content" rows="6"
                               placeholder="{% translate 'Paste the text the agent should know. Plain text, no chunking needed.' %}"></textarea>
-                    <span class="mc-field__hint">{% translate "Injected directly into the agent context — no embeddings required." %}</span>
+                    <span class="mc-field__hint">{% translate "Saved as one initial retrieval chunk. Lexical retrieval works without embeddings." %}</span>
                   </div>
                 </div>
               </div>
@@ -397,7 +397,7 @@
               <div class="mc-eyebrow">{% translate "Step 3 — Goal" %}</div>
               <h2>{% translate "Goal &amp; session flavor" %}</h2>
               <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
-                {% translate "Write what needs to be achieved. Simple mode runs immediately; Advanced adds workspace governance." %}
+                {% translate "Write what needs to be achieved. Simple creates a standalone pending session; Advanced adds workspace governance." %}
               </p>
             </div>
           </div>
@@ -417,7 +417,7 @@
           <div class="mc-subhead" style="margin-top:16px;">{% translate "Session flavor" %}</div>
           <div class="mc-toggle-row" data-toggle-group="game_flavor">
             <button type="button" class="mc-toggle-btn is-on" data-toggle-value="simple">
-              Simple &mdash; {% translate "runs immediately" %}
+              Simple &mdash; {% translate "standalone session" %}
             </button>
             <button type="button" class="mc-toggle-btn" data-toggle-value="advanced">
               Advanced &mdash; {% translate "workspace + governance" %}
@@ -568,7 +568,7 @@
               <div class="mc-eyebrow">{% translate "Step 3 — Pipeline" %}</div>
               <h2>{% translate "Pipeline definition" %}</h2>
               <p style="margin:4px 0 0;font-size:13px;color:var(--mc-text-soft)">
-                {% translate "Name the pipeline. It will be created inactive — activate it after adding steps." %}
+                {% translate "Name the pipeline now; choose whether to activate it after reviewing the steps and contracts." %}
               </p>
             </div>
           </div>

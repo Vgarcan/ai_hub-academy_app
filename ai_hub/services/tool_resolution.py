@@ -3,6 +3,11 @@ from dataclasses import dataclass
 from django.core.exceptions import ValidationError
 
 from ai_hub.models import AgentProfile, AgentToolGrant, ToolDefinition, ToolboxTool
+from ai_hub.services.knowledge_tooling import (
+    KNOWLEDGE_RETRIEVAL_TOOL_CALLABLES,
+    KNOWLEDGE_RETRIEVAL_TOOL_NAMES,
+    is_bound_knowledge_tool,
+)
 from ai_hub.services.tools_runtime import ALLOWED_TOOL_KINDS
 
 
@@ -158,10 +163,30 @@ def _add_tool(
 def resolve_agent_tools(agent: AgentProfile, workspace=None, execution_context=None) -> AgentToolResolution:
     """Resolve the tools an agent is allowed to see.
 
-    This service is intentionally read-only. It does not execute tools and does
-    not replace the legacy runtime path until later phases wire it in.
+    This service is intentionally read-only. It is the capability source for
+    normal agent calls, Admin manifests and unified GAME tool adapters; actual
+    execution remains in the runtime/dispatcher layers.
     """
     resolved: dict[int, ResolvedTool] = {}
+
+    if agent.knowledge_collections.filter(is_active=True).exists():
+        knowledge_tools = ToolDefinition.objects.filter(
+            name__in=KNOWLEDGE_RETRIEVAL_TOOL_NAMES,
+            is_system_tool=True,
+            is_active=True,
+        )
+        for tool in knowledge_tools:
+            if not is_bound_knowledge_tool(tool):
+                continue
+            if (tool.config or {}).get("callable") != KNOWLEDGE_RETRIEVAL_TOOL_CALLABLES[tool.name]:
+                continue
+            _add_tool(
+                resolved,
+                tool=tool,
+                source="knowledge_retrieval",
+                permission_level=AgentToolGrant.PermissionLevel.READ_ONLY,
+                workspace=workspace,
+            )
 
     toolbox_entries = (
         ToolboxTool.objects.select_related("tool", "toolbox")

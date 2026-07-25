@@ -24,7 +24,9 @@ AI Hub already has the core platform pieces:
 - A Build Console wizard for guided GAME/Orchestrator creation in one atomic transaction.
 - An Operations Inbox: one cross-workspace queue for approvals, waiting-info, failures and blocked goals.
 - Runtime services and the host adapter pattern.
-- Toolboxes, per-agent tool grants, deliberate tool execution, and starter tool seeds.
+- Toolboxes, per-agent tool grants, a default resolved deliberate runner,
+  linked `ToolExecutionRun` audit, an explicit legacy rollback shim, and starter
+  tool seeds.
 - Knowledge document chunks with read-only browse/search/read/citation services.
 
 The GAME subsystem is now a full feature line, not just a session mode:
@@ -33,7 +35,8 @@ The GAME subsystem is now a full feature line, not just a session mode:
 - Deterministic scheduler with transparent priority bonuses.
 - Goal-bound execution sessions with central, idempotent outcome mapping.
 - Explicit action dispatcher with audited `GameActionRun` records, closed allow-lists, and payload redaction.
-- Scoped memory (workspace/goal/session) with bounded context and compaction.
+- Scoped memory (workspace/goal/session) with bounded selection and a manual
+  expiry-style compaction helper.
 - Pause / approval / resume with permission-gated review.
 - Workspace policies and budgets; external writes closed by default.
 - Goal plans and one-level sub-agent delegation.
@@ -122,10 +125,19 @@ Slow two-minute model runs do not block the user interface and do not create dup
 
 Tools are powerful and need strict controls.
 
-Delivered: explicit allow-lists (callable registry, HTTP allowed-hosts, GET/HEAD context rule), toolbox/grant resolution, model-facing manifest redaction, deliberate tool execution audit via `ToolExecutionRun`, tool/action audit logs via `GameActionRun`, optional unified GAME tool dispatch, starter toolboxes, and timeout clamping.
+Delivered: explicit allow-lists (callable registry, HTTP allowed-hosts, GET/HEAD
+context rule), toolbox/grant resolution, model-facing manifest redaction,
+default deliberate runner integration, session/step-linked tool audit via
+`ToolExecutionRun`, tool/action audit logs via `GameActionRun`, context-only
+GAME manifests, an explicit legacy pre-execution shim, optional unified GAME
+tool dispatch, starter toolboxes, and timeout clamping.
 
 Still recommended:
 
+- Add a persisted generic approval checkpoint before advertising
+  approval-requiring tools outside governed GAME actions.
+- Remove the compatibility shim and direct-tools M2M after deployed sessions,
+  demos and host adapters no longer select them.
 - Safe callable registry expansion and signing.
 - Tool error normalization.
 - Clearer model compatibility rules.
@@ -146,7 +158,10 @@ Delivered:
 - Chunking strategy.
 - Per-agent retrieval scoping.
 - Source citation metadata.
-- Retrieval-first context mode.
+- Retrieval-first context mode as the default.
+- Automatic canonical read-only retrieval capabilities for agents with attached
+  active collections.
+- Server-bound agent identity and bounded prompt/tool outputs.
 
 Still recommended:
 
@@ -155,6 +170,7 @@ Still recommended:
 - Per-agent retrieval limits.
 - Knowledge freshness status.
 - Admin preview of injected context.
+- Automated file ingestion and semantic/hybrid retrieval.
 
 Target outcome:
 

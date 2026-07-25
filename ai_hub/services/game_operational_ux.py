@@ -243,7 +243,7 @@ def build_goal_detail_context(goal, *, user=None):
         action_runs = list(
             GameActionRun.objects.filter(session__goal=goal)
             .select_related("action", "session")
-            .order_by("started_at")
+            .order_by("session__created_at", "iteration", "pk")
         )
     memory_entries = []
     if user is None or user.has_perm("ai_hub.view_gamememoryentry"):

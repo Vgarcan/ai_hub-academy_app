@@ -4,14 +4,31 @@ import time
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db.models import Count
 from django.utils import timezone
 
 from ai_hub.models import AgentProfile, ToolExecutionRun
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.litellm_client import completion_call
+from ai_hub.services.knowledge_tooling import KNOWLEDGE_RETRIEVAL_TOOL_NAMES
 from ai_hub.services.provider_registry import resolve_model_config
 from ai_hub.services.tool_resolution import resolve_agent_tools
-from ai_hub.services.tools_runtime import TOOL_POLICY_ALL, execute_tool, execute_tools
+from ai_hub.services.tools_runtime import (
+    GAME_CONTEXT_TOOL,
+    TOOL_POLICY_ALL,
+    TOOL_POLICY_GAME_CONTEXT_ONLY,
+    bind_tool_runtime_context,
+    execute_tool,
+    execute_tools,
+    get_game_tool_category,
+)
+
+KNOWLEDGE_PROMPT_MAX_COLLECTIONS = 20
+KNOWLEDGE_PROMPT_MAX_DOCUMENTS_PER_COLLECTION = 50
+KNOWLEDGE_PROMPT_MAX_DESCRIPTION_CHARS = 500
+KNOWLEDGE_PROMPT_MAX_TAGS_PER_DOCUMENT = 20
+KNOWLEDGE_PROMPT_MAX_TAG_CHARS = 100
+DEFAULT_MAX_TOOL_OBSERVATION_CHARS = 12000
 
 
 def get_mapped_value(source: dict, source_key: str):
@@ -45,32 +62,67 @@ def read_document_text(document) -> str:
         return ""
 
 
-def build_agent_knowledge_context(agent: AgentProfile) -> dict:
+def _bounded_knowledge_tags(tags) -> list[str]:
+    if not isinstance(tags, list):
+        return []
+    return [
+        str(tag)[:KNOWLEDGE_PROMPT_MAX_TAG_CHARS]
+        for tag in tags[:KNOWLEDGE_PROMPT_MAX_TAGS_PER_DOCUMENT]
+    ]
+
+
+def build_agent_knowledge_context(agent: AgentProfile, *, workspace=None) -> dict:
     max_chars = max(agent.knowledge_max_chars or 0, 0)
     documents = []
     remaining = max_chars
     collections = agent.knowledge_collections.filter(is_active=True).prefetch_related("documents")
 
-    if not getattr(settings, "AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", True):
+    if not getattr(settings, "AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", False):
         collection_data = []
-        for collection in collections:
-            active_documents = collection.documents.filter(status="active").order_by("title")
+        total_collections = collections.count()
+        selected_collections = list(
+            collections.order_by("name")[:KNOWLEDGE_PROMPT_MAX_COLLECTIONS]
+        )
+        index_truncated = len(selected_collections) < total_collections
+        for collection in selected_collections:
+            active_documents = (
+                collection.documents.filter(status="active")
+                .annotate(chunk_total=Count("chunks"))
+                .order_by("title")
+            )
+            total_documents = active_documents.count()
+            selected_documents = list(
+                active_documents[:KNOWLEDGE_PROMPT_MAX_DOCUMENTS_PER_COLLECTION]
+            )
+            if len(selected_documents) < total_documents:
+                index_truncated = True
             collection_data.append(
                 {
                     "name": collection.name,
-                    "description": collection.description,
+                    "description": str(collection.description or "")[
+                        :KNOWLEDGE_PROMPT_MAX_DESCRIPTION_CHARS
+                    ],
                     "documents": [
                         {
                             "id": document.pk,
                             "title": document.title,
                             "language": document.language,
-                            "tags": document.tags,
-                            "chunk_count": document.chunks.count(),
+                            "tags": _bounded_knowledge_tags(document.tags),
+                            "chunk_count": document.chunk_total,
                         }
-                        for document in active_documents
+                        for document in selected_documents
                     ],
+                    "total_documents": total_documents,
+                    "returned_documents": len(selected_documents),
+                    "has_more_documents": len(selected_documents) < total_documents,
                 }
             )
+        resolved_names = set(
+            resolve_agent_tools(agent, workspace=workspace).tool_names()
+        )
+        available_retrieval_tools = [
+            name for name in KNOWLEDGE_RETRIEVAL_TOOL_NAMES if name in resolved_names
+        ]
         return {
             "collections": [collection["name"] for collection in collection_data],
             "collection_indexes": collection_data,
@@ -78,15 +130,15 @@ def build_agent_knowledge_context(agent: AgentProfile) -> dict:
             "text": "",
             "truncated": False,
             "max_chars": max_chars,
-            "retrieval_required": True,
-            "available_retrieval_tools": [
-                "list_knowledge_libraries",
-                "browse_knowledge_index",
-                "search_knowledge",
-                "read_knowledge_chunk",
-                "read_document_section",
-                "cite_knowledge_source",
-            ],
+            "retrieval_required": bool(total_collections),
+            "available_retrieval_tools": available_retrieval_tools,
+            "retrieval_available": bool(available_retrieval_tools),
+            "total_collections": total_collections,
+            "index_truncated": index_truncated,
+            "index_limits": {
+                "collections": KNOWLEDGE_PROMPT_MAX_COLLECTIONS,
+                "documents_per_collection": KNOWLEDGE_PROMPT_MAX_DOCUMENTS_PER_COLLECTION,
+            },
         }
 
     for collection in collections:
@@ -123,9 +175,9 @@ def build_agent_knowledge_context(agent: AgentProfile) -> dict:
     }
 
 
-def prepare_agent_payload(agent: AgentProfile, context: dict, mapping: dict) -> dict:
+def prepare_agent_payload(agent: AgentProfile, context: dict, mapping: dict, *, workspace=None) -> dict:
     payload = apply_mapping(context, mapping or {})
-    payload["knowledge_context"] = build_agent_knowledge_context(agent)
+    payload["knowledge_context"] = build_agent_knowledge_context(agent, workspace=workspace)
     return payload
 
 
@@ -184,6 +236,30 @@ def _decode_agent_tool_decision(llm_result: dict) -> dict:
     return decision
 
 
+def _plain_final_decision(llm_result: dict) -> dict | None:
+    """Adapt existing non-tool model responses at the runner boundary.
+
+    A response that already declares ``type`` is never adapted: malformed tool
+    protocol must remain an error instead of being mistaken for a final answer.
+    """
+    content = (llm_result or {}).get("content", "")
+    if isinstance(content, dict):
+        if "type" in content:
+            return None
+        answer = json.dumps(content, default=str)
+    elif isinstance(content, str):
+        try:
+            decoded = json.loads(_extract_json_object_text(content))
+        except Exception:
+            decoded = None
+        if isinstance(decoded, dict) and "type" in decoded:
+            return None
+        answer = content
+    else:
+        return None
+    return {"type": "final", "answer": answer}
+
+
 def _safe_tool_error(exc: Exception, tool_name: str) -> str:
     # Fix #6: ValidationError messages are already human-readable and safe to surface
     # (they describe contract violations, not internal state). All other exceptions
@@ -192,6 +268,38 @@ def _safe_tool_error(exc: Exception, tool_name: str) -> str:
     if isinstance(exc, ValidationError):
         return str(exc)
     return f"Tool '{tool_name}' failed during execution."
+
+
+def _bounded_tool_observation(tool_name: str, result: dict) -> dict:
+    try:
+        max_chars = int(
+            getattr(
+                settings,
+                "AI_HUB_MAX_TOOL_OBSERVATION_CHARS",
+                DEFAULT_MAX_TOOL_OBSERVATION_CHARS,
+            )
+        )
+    except (TypeError, ValueError):
+        max_chars = DEFAULT_MAX_TOOL_OBSERVATION_CHARS
+    max_chars = min(max(max_chars, 256), 100000)
+    serialized = json.dumps(result, sort_keys=True)
+    if len(serialized) <= max_chars:
+        return result
+
+    marker = {
+        "truncated": True,
+        "tool_name": tool_name,
+        "original_chars": len(serialized),
+    }
+    preview_size = max_chars
+    while preview_size > 0:
+        marker["json_preview"] = serialized[:preview_size]
+        marker_size = len(json.dumps(marker, sort_keys=True))
+        if marker_size <= max_chars:
+            return marker
+        preview_size -= max(marker_size - max_chars, 1)
+    marker.pop("json_preview", None)
+    return marker
 
 
 def _structured_tool_system_prompt(agent: AgentProfile) -> str:
@@ -242,12 +350,29 @@ def execute_agent_deliberate(
     workspace=None,
     execution_context=None,
     max_tool_rounds: int | None = None,
+    tool_policy: str = TOOL_POLICY_ALL,
+    allow_plain_final: bool = False,
+    unwrap_final_answer: bool = False,
+    allow_approval_requests: bool = True,
 ) -> dict:
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
     model_cfg = resolve_model_config(agent.model_config)
     resolution = resolve_agent_tools(agent, workspace=workspace, execution_context=execution_context)
-    tool_manifest = resolution.manifest()
-    tools_by_name = {resolved.tool.name: resolved for resolved in resolution.tools}
+    if tool_policy not in {TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY}:
+        raise ValidationError(f"Unknown tool execution policy '{tool_policy}'.")
+    resolved_tools = resolution.tools
+    if tool_policy == TOOL_POLICY_GAME_CONTEXT_ONLY:
+        resolved_tools = tuple(
+            resolved
+            for resolved in resolved_tools
+            if get_game_tool_category(resolved.tool) == GAME_CONTEXT_TOOL
+        )
+    if not allow_approval_requests:
+        resolved_tools = tuple(
+            resolved for resolved in resolved_tools if not resolved.requires_approval
+        )
+    tool_manifest = [resolved.manifest() for resolved in resolved_tools]
+    tools_by_name = {resolved.tool.name: resolved for resolved in resolved_tools}
     max_rounds = max_tool_rounds
     if max_rounds is None:
         max_rounds = int(getattr(settings, "AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL", 3))
@@ -271,6 +396,7 @@ def execute_agent_deliberate(
     last_llm_result = {}
 
     for tool_round in range(max_rounds + 1):
+        response_mode = "tool_protocol"
         last_llm_result = completion_call(
             model=model_cfg["model"],
             messages=messages,
@@ -283,7 +409,11 @@ def execute_agent_deliberate(
         try:
             decision = _decode_agent_tool_decision(last_llm_result)
         except ValidationError as exc:
-            if tool_round < max_rounds:
+            compatible_decision = _plain_final_decision(last_llm_result) if allow_plain_final else None
+            if compatible_decision is not None:
+                decision = compatible_decision
+                response_mode = "plain_final_compatibility"
+            elif tool_round < max_rounds:
                 # Retry: inject the raw response as an assistant turn so the model
                 # sees its own output, then add a one-line contract correction.
                 raw_content = (last_llm_result or {}).get("content", "")
@@ -299,28 +429,40 @@ def execute_agent_deliberate(
                     ),
                 })
                 continue
-            output_payload = {
-                "agent": agent.name,
-                "tools": tools_data,
-                "tool_runs": tool_run_ids,
-                "tool_manifest": tool_manifest,
-                "llm": last_llm_result,
-                "status": "invalid_model_response",
-                "error": str(exc),
-            }
-            validate_payload(output_payload, agent.output_contract or {}, f"Agent '{agent.name}' output")
-            return output_payload
+            else:
+                output_payload = {
+                    "agent": agent.name,
+                    "tools": tools_data,
+                    "tool_runs": tool_run_ids,
+                    "tool_manifest": tool_manifest,
+                    "llm": last_llm_result,
+                    "status": "invalid_model_response",
+                    "error": str(exc),
+                }
+                validate_payload(output_payload, agent.output_contract or {}, f"Agent '{agent.name}' output")
+                return output_payload
 
         if decision["type"] == "final":
+            llm_payload = last_llm_result
+            raw_tool_protocol_llm = None
+            if unwrap_final_answer and response_mode == "tool_protocol":
+                raw_tool_protocol_llm = last_llm_result
+                llm_payload = {
+                    **last_llm_result,
+                    "content": decision.get("answer", ""),
+                }
             output_payload = {
                 "agent": agent.name,
                 "tools": tools_data,
                 "tool_runs": tool_run_ids,
                 "tool_manifest": tool_manifest,
-                "llm": last_llm_result,
+                "llm": llm_payload,
                 "status": "final",
                 "final_answer": decision.get("answer", ""),
+                "model_response_mode": response_mode,
             }
+            if raw_tool_protocol_llm is not None:
+                output_payload["tool_protocol_llm"] = raw_tool_protocol_llm
             validate_payload(output_payload, agent.output_contract or {}, f"Agent '{agent.name}' output")
             return output_payload
 
@@ -338,7 +480,6 @@ def execute_agent_deliberate(
             return output_payload
 
         tool_name = decision["tool_name"].strip()
-        arguments = decision["arguments"]
         resolved_tool = tools_by_name.get(tool_name)
         if resolved_tool is None:
             output_payload = {
@@ -353,6 +494,11 @@ def execute_agent_deliberate(
             validate_payload(output_payload, agent.output_contract or {}, f"Agent '{agent.name}' output")
             return output_payload
 
+        arguments = bind_tool_runtime_context(
+            resolved_tool.tool,
+            decision["arguments"],
+            agent=agent,
+        )
         if resolved_tool.requires_approval:
             tool_run = _create_tool_run(
                 execution_context=execution_context,
@@ -387,16 +533,22 @@ def execute_agent_deliberate(
         tool_run.save(update_fields=["started_at"])
         start = time.perf_counter()
         try:
-            tool_result = execute_tool(resolved_tool.tool, arguments)
+            tool_result = execute_tool(resolved_tool.tool, arguments, agent=agent)
             tool_run.status = ToolExecutionRun.Status.SUCCESS
             tool_run.output_payload = tool_result
-            tools_data[tool_name] = tool_result
+            prompt_observation = _bounded_tool_observation(tool_name, tool_result)
+            tools_data[tool_name] = prompt_observation
             messages.append({"role": "assistant", "content": json.dumps(decision, default=str)})
             messages.append(
                 {
                     "role": "user",
                     "content": json.dumps(
-                        {"tool_observation": {"tool_name": tool_name, "result": tool_result}},
+                        {
+                            "tool_observation": {
+                                "tool_name": tool_name,
+                                "result": prompt_observation,
+                            }
+                        },
                         default=str,
                     ),
                 }
@@ -440,14 +592,22 @@ def execute_agent_deliberate(
 
 def execute_agent(agent: AgentProfile, payload: dict, *, tool_policy: str = TOOL_POLICY_ALL) -> dict:
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
-    tools_data = execute_tools(agent.tools.filter(is_active=True), payload, policy=tool_policy)
+    tools_data = execute_tools(
+        agent.tools.filter(is_active=True),
+        payload,
+        policy=tool_policy,
+        agent=agent,
+    )
     model_cfg = resolve_model_config(agent.model_config)
 
     # Include tool results in the same LLM call so the agent can reason about them immediately.
     # Without this, tool output only appears in previous_response on the *next* iteration.
     user_content: dict = {"context": payload}
     if tools_data:
-        user_content["tool_results"] = tools_data
+        user_content["tool_results"] = {
+            tool_name: _bounded_tool_observation(tool_name, tool_result)
+            for tool_name, tool_result in tools_data.items()
+        }
     user_message = json.dumps(user_content, default=str)
 
     llm_result = completion_call(

@@ -2,8 +2,22 @@ from functools import reduce
 
 from django.core.exceptions import ValidationError
 from django.db.models import Q
+from django.db.models.functions import Length, Substr
 
 from ai_hub.models import AgentProfile, KnowledgeDocument, KnowledgeDocumentChunk
+
+
+MAX_COLLECTION_RESULTS = 100
+MAX_COLLECTION_DESCRIPTION_CHARS = 500
+MAX_BROWSE_DOCUMENT_RESULTS = 100
+MAX_BROWSE_CHUNKS_PER_DOCUMENT = 100
+MAX_SEARCH_RESULTS = 20
+MAX_SEARCH_CANDIDATES = 1000
+MAX_SEARCH_CANDIDATE_CONTENT_CHARS = 20000
+MAX_SEARCH_QUERY_CHARS = 1000
+MAX_SEARCH_QUERY_WORDS = 20
+MAX_DOCUMENT_TAGS = 20
+MAX_DOCUMENT_TAG_CHARS = 100
 
 
 def _agent_collection_ids(agent: AgentProfile) -> set[int]:
@@ -23,31 +37,89 @@ def _accessible_chunks(agent: AgentProfile):
     )
 
 
-def list_knowledge_libraries(agent: AgentProfile) -> dict:
+def _bounded_tags(tags) -> list[str]:
+    if not isinstance(tags, list):
+        return []
+    return [
+        str(tag)[:MAX_DOCUMENT_TAG_CHARS]
+        for tag in tags[:MAX_DOCUMENT_TAGS]
+    ]
+
+
+def _bounded_integer(value, *, name: str, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"{name} must be an integer.") from exc
+    return min(max(parsed, minimum), maximum)
+
+
+def list_knowledge_libraries(agent: AgentProfile, *, limit: int = 50) -> dict:
     collections = agent.knowledge_collections.filter(is_active=True).order_by("name")
+    total = collections.count()
+    bounded_limit = _bounded_integer(
+        limit,
+        name="limit",
+        minimum=1,
+        maximum=MAX_COLLECTION_RESULTS,
+    )
     libraries = []
-    for collection in collections:
+    for collection in collections[:bounded_limit]:
         active_documents = collection.documents.filter(status=KnowledgeDocument.Status.ACTIVE)
         libraries.append(
             {
                 "collection_id": collection.pk,
                 "name": collection.name,
-                "description": collection.description,
+                "description": str(collection.description or "")[:MAX_COLLECTION_DESCRIPTION_CHARS],
                 "active_documents": active_documents.count(),
                 "chunk_count": KnowledgeDocumentChunk.objects.filter(document__in=active_documents).count(),
             }
         )
-    return {"libraries": libraries, "total": len(libraries)}
+    return {
+        "libraries": libraries,
+        "total": total,
+        "returned": len(libraries),
+        "has_more": len(libraries) < total,
+    }
 
 
-def browse_knowledge_index(agent: AgentProfile, *, collection_id=None) -> dict:
+def browse_knowledge_index(
+    agent: AgentProfile,
+    *,
+    collection_id=None,
+    limit: int = 50,
+    chunk_limit: int = 25,
+) -> dict:
     collections = agent.knowledge_collections.filter(is_active=True).order_by("name")
     if collection_id is not None:
         collections = collections.filter(pk=collection_id)
+    collection_count = collections.count()
+    collections = list(collections[:MAX_COLLECTION_RESULTS])
+    document_limit = _bounded_integer(
+        limit,
+        name="limit",
+        minimum=1,
+        maximum=MAX_BROWSE_DOCUMENT_RESULTS,
+    )
+    per_document_chunk_limit = _bounded_integer(
+        chunk_limit,
+        name="chunk_limit",
+        minimum=1,
+        maximum=MAX_BROWSE_CHUNKS_PER_DOCUMENT,
+    )
     index = []
+    returned_documents = 0
+    total_documents = sum(
+        collection.documents.filter(status=KnowledgeDocument.Status.ACTIVE).count()
+        for collection in collections
+    )
     for collection in collections:
         documents = []
         for document in collection.documents.filter(status=KnowledgeDocument.Status.ACTIVE).order_by("title"):
+            if returned_documents >= document_limit:
+                break
+            chunk_queryset = document.chunks.order_by("chunk_index")
+            total_chunks = chunk_queryset.count()
             chunks = [
                 {
                     "chunk_id": chunk.pk,
@@ -55,42 +127,73 @@ def browse_knowledge_index(agent: AgentProfile, *, collection_id=None) -> dict:
                     "section_title": chunk.section_title,
                     "token_estimate": chunk.token_estimate,
                 }
-                for chunk in document.chunks.order_by("chunk_index")
+                for chunk in chunk_queryset[:per_document_chunk_limit]
             ]
             documents.append(
                 {
                     "document_id": document.pk,
                     "title": document.title,
                     "language": document.language,
-                    "tags": document.tags,
+                    "tags": _bounded_tags(document.tags),
                     "chunks": chunks,
+                    "total_chunks": total_chunks,
+                    "returned_chunks": len(chunks),
+                    "chunks_have_more": len(chunks) < total_chunks,
                 }
             )
+            returned_documents += 1
         index.append(
             {
                 "collection_id": collection.pk,
                 "name": collection.name,
-                "description": collection.description,
+                "description": str(collection.description or "")[:MAX_COLLECTION_DESCRIPTION_CHARS],
                 "documents": documents,
             }
         )
-    return {"collections": index, "total": len(index)}
+        if returned_documents >= document_limit:
+            break
+    return {
+        "collections": index,
+        "total": collection_count,
+        "returned_collections": len(index),
+        "collections_have_more": len(index) < collection_count,
+        "total_documents": total_documents,
+        "returned_documents": returned_documents,
+        "has_more": returned_documents < total_documents,
+    }
 
 
 def _query_words(query: str) -> list[str]:
-    return [word.lower() for word in str(query or "").split() if len(word.strip()) > 1]
+    words = []
+    seen = set()
+    for word in str(query or "").split():
+        normalized = word.strip().lower()
+        if len(normalized) <= 1 or normalized in seen:
+            continue
+        words.append(normalized)
+        seen.add(normalized)
+        if len(words) >= MAX_SEARCH_QUERY_WORDS:
+            break
+    return words
 
 
-def _score_chunk(chunk: KnowledgeDocumentChunk, words: list[str]) -> int:
+def _score_chunk(
+    chunk: KnowledgeDocumentChunk,
+    words: list[str],
+    *,
+    content: str | None = None,
+) -> int:
     title = chunk.document.title.lower()
     tags = " ".join(str(tag).lower() for tag in (chunk.document.tags or []))
     section = chunk.section_title.lower()
-    content = chunk.content.lower()
+    searchable_content = (
+        chunk.content if content is None else content
+    ).lower()
     return (
         sum(1 for word in words if word in title) * 4
         + sum(1 for word in words if word in tags) * 3
         + sum(1 for word in words if word in section) * 3
-        + sum(1 for word in words if word in content)
+        + sum(1 for word in words if word in searchable_content)
     )
 
 
@@ -106,18 +209,29 @@ def _snippet(content: str, words: list[str], max_chars: int = 500) -> str:
 
 
 def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, limit: int = 5) -> dict:
-    query = str(query or "").strip()
+    query = str(query or "").strip()[:MAX_SEARCH_QUERY_CHARS]
     if not query:
         raise ValidationError("search_knowledge requires a non-empty query.")
     words = _query_words(query)
     if not words:
-        return {"query": query, "results": [], "total": 0}
+        return {
+            "query": query,
+            "results": [],
+            "total": 0,
+            "candidates_scanned": 0,
+            "candidate_limit": MAX_SEARCH_CANDIDATES,
+            "candidates_truncated": False,
+        }
 
     chunks = _accessible_chunks(agent)
     if collection_id is not None:
-        if int(collection_id) not in _agent_collection_ids(agent):
+        try:
+            requested_collection_id = int(collection_id)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("collection_id must be an integer.") from exc
+        if requested_collection_id not in _agent_collection_ids(agent):
             raise ValidationError("Knowledge collection is not accessible to this agent.")
-        chunks = chunks.filter(document__collection_id=collection_id)
+        chunks = chunks.filter(document__collection_id=requested_collection_id)
 
     db_filter = reduce(
         lambda acc, word: (
@@ -130,13 +244,37 @@ def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, lim
         Q(),
     )
 
+    candidate_chunks = list(
+        chunks.filter(db_filter)
+        .annotate(
+            search_content=Substr(
+                "content",
+                1,
+                MAX_SEARCH_CANDIDATE_CONTENT_CHARS,
+            ),
+            search_content_chars=Length("content"),
+        )
+        .defer("content", "metadata")[:MAX_SEARCH_CANDIDATES + 1]
+    )
+    candidates_truncated = len(candidate_chunks) > MAX_SEARCH_CANDIDATES
+    candidate_chunks = candidate_chunks[:MAX_SEARCH_CANDIDATES]
     scored = []
-    for chunk in chunks.filter(db_filter):
-        score = _score_chunk(chunk, words)
+    for chunk in candidate_chunks:
+        score = _score_chunk(chunk, words, content=chunk.search_content)
+        # The database filter may match beyond the bounded scoring window.
+        # Keep that candidate at low relevance without loading the full body.
+        if score == 0:
+            score = 1
         if score > 0:
             scored.append((score, chunk.document.title, chunk.chunk_index, chunk))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
-    selected = [item for item in scored[: max(int(limit), 0)]]
+    bounded_limit = _bounded_integer(
+        limit,
+        name="limit",
+        minimum=0,
+        maximum=MAX_SEARCH_RESULTS,
+    )
+    selected = [item for item in scored[:bounded_limit]]
 
     results = [
         {
@@ -146,13 +284,24 @@ def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, lim
             "collection": chunk.document.collection.name,
             "section_title": chunk.section_title,
             "chunk_index": chunk.chunk_index,
-            "snippet": _snippet(chunk.content, words),
+            "snippet": _snippet(chunk.search_content, words),
+            "content_window_truncated": (
+                chunk.search_content_chars
+                > MAX_SEARCH_CANDIDATE_CONTENT_CHARS
+            ),
             "score": score,
-            "citation": cite_knowledge_source(agent, chunk_id=chunk.pk)["citation"],
+            "citation": _citation_for_chunk(chunk),
         }
         for score, _title, _index, chunk in selected
     ]
-    return {"query": query, "results": results, "total": len(results)}
+    return {
+        "query": query,
+        "results": results,
+        "total": len(results),
+        "candidates_scanned": len(candidate_chunks),
+        "candidate_limit": MAX_SEARCH_CANDIDATES,
+        "candidates_truncated": candidates_truncated,
+    }
 
 
 def read_knowledge_chunk(agent: AgentProfile, *, chunk_id: int) -> dict:
@@ -188,12 +337,8 @@ def read_document_section(agent: AgentProfile, *, document_id: int, section_titl
     return read_knowledge_chunk(agent, chunk_id=chunk.pk)
 
 
-def cite_knowledge_source(agent: AgentProfile, *, chunk_id: int) -> dict:
-    try:
-        chunk = _accessible_chunks(agent).get(pk=chunk_id)
-    except KnowledgeDocumentChunk.DoesNotExist as exc:
-        raise ValidationError("Knowledge chunk not found or not accessible to this agent.") from exc
-    citation = {
+def _citation_for_chunk(chunk: KnowledgeDocumentChunk) -> dict:
+    return {
         "collection": chunk.document.collection.name,
         "document_id": chunk.document_id,
         "document_title": chunk.document.title,
@@ -201,6 +346,13 @@ def cite_knowledge_source(agent: AgentProfile, *, chunk_id: int) -> dict:
         "section_title": chunk.section_title,
         "chunk_index": chunk.chunk_index,
         "language": chunk.document.language,
-        "tags": chunk.document.tags,
+        "tags": _bounded_tags(chunk.document.tags),
     }
-    return {"citation": citation}
+
+
+def cite_knowledge_source(agent: AgentProfile, *, chunk_id: int) -> dict:
+    try:
+        chunk = _accessible_chunks(agent).get(pk=chunk_id)
+    except KnowledgeDocumentChunk.DoesNotExist as exc:
+        raise ValidationError("Knowledge chunk not found or not accessible to this agent.") from exc
+    return {"citation": _citation_for_chunk(chunk)}

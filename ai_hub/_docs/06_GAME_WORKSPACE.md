@@ -50,7 +50,10 @@ A workspace contains durable goals. A goal describes what must be achieved; an e
 
 ## Feature flags
 
-The whole GAME subsystem is gated by feature flags so a host project can adopt it incrementally. Each flag defaults to **enabled** in this repo's settings, but the underlying safety default in the reusable layer is **fail-closed**: if a flag is unset and disabled, the matching service raises a clear error instead of running.
+The whole GAME subsystem is gated by feature flags so a host project can adopt
+it incrementally. In this bundled host the flags default to the value of
+`DEBUG`: enabled in development and disabled in production. The underlying
+reusable safety default is **fail-closed**.
 
 | Flag | Gates |
 | --- | --- |
@@ -62,7 +65,10 @@ The whole GAME subsystem is gated by feature flags so a host project can adopt i
 | `AI_HUB_GAME_DELEGATION_ENABLED` | `run_delegated_agent` |
 | `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED` | GAME actions linked to reusable `ToolDefinition` records |
 
-Flags gate the service layer only. Direct Django admin model edits (for example the "Add GAME goal" form, or the goal bulk actions) write through the model and bypass the flags. To hard-stop creation in an environment, also remove the relevant admin add/change permissions. See `03_CONFIGURATION.md` for the settings and `12_TROUBLESHOOTING.md` for the disabled-feature error.
+Flags primarily gate the service layer. Some Admin entry points also hide
+operations, but direct model writes and not every lifecycle helper are uniformly
+gated. Enforce database/Admin permissions as well when an environment requires
+a hard stop. See `03_CONFIGURATION.md` and `12_TROUBLESHOOTING.md`.
 
 ## Workspaces, goals, and dependencies
 
@@ -142,11 +148,21 @@ Common fields:
   "available_actions": [],
   "game_action_dispatch_enabled": true,
   "game_memory_max_chars": 4000,
+  "game_memory_max_entries": 20,
+  "game_observations_max_entries": 8,
+  "game_observation_max_chars": 2000,
+  "game_previous_response_max_chars": 2000,
+  "game_memory_entry_max_chars": 500,
   "policy": {}
 }
 ```
 
 Keep `max_iterations` low while testing a new agent. Increase only after the session timeline looks correct.
+
+The rolling-context limits cap the legacy prompt state. Old entries are dropped
+first; oversized observations and previous responses become bounded previews
+with audit references. `ExecutionStepRun` and `GameActionRun` retain the raw
+payloads.
 
 Tune `max_iterations` to the task. Classification or binary-decision goals usually need only one or two steps — keep the cap low so an indecisive model is stopped early with a clean `partial` rather than looping. Planning or research goals can use a higher cap.
 
@@ -205,13 +221,36 @@ When the explicit dispatcher is enabled, GAME executes only the action selected 
 
 Reusable capabilities should be defined as `ToolDefinition` records and grouped through toolboxes/grants on the agent. A `GameActionDefinition` may then link to one of those reusable tools as a governed GAME wrapper. With `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=true`, GAME validates the workspace action policy, creates a `GameActionRun`, resolves the agent's tool access, executes the linked tool through the generic tool runtime, and records the reusable call in `ToolExecutionRun`.
 
+The normal GAME model-call path now uses the same resolved manifest as
+Orchestrator, filtered to explicitly safe `context_tool` capabilities. The
+model chooses a context tool; action tools never enter this manifest, even if a
+caller passes the old `allow_legacy_game_action_tools` argument. Selected
+side-effect actions continue through the dispatcher above because that path owns
+GAME policy, budgets, approval, resume and `GameActionRun` audit.
+
+`agent_tool_runtime="legacy_preexecute"` remains a temporary per-session
+compatibility mode. Only in that mode does the explicit
+`allow_legacy_game_action_tools=True` host opt-in retain its old meaning.
+
 Keep GAME control actions separate from ordinary tools. Actions such as `finish_goal`, `record_memory`, `update_goal_status`, and `delegate_to_agent` remain GAME control flow and should not be replaced by generic tool records.
 
 If workspace agent or action mappings are configured, they operate as closed allow-lists: entries absent from the configured list are not permitted. With no mappings, legacy sessions retain their previous behavior.
 
 ## Scoped memory and continuation
 
-Goal-bound payloads include bounded `scoped_memory` selected from the active workspace, goal, and session. Scope validation rejects memory belonging to another workspace or goal. The existing `memory` list remains for legacy compatibility.
+Goal-bound payloads include bounded `scoped_memory` selected from the active
+workspace, goal, and session. Scope validation rejects memory belonging to
+another workspace or goal. A successful `record_memory` action refreshes this
+context before the next iteration. Workspace, goal, session and action-result
+actions now pass only the links allowed by their scope.
+
+The existing `memory`, `observations` and `previous_response` state remains for
+legacy compatibility, but each component has entry/character limits so long
+sessions do not carry raw action payloads indefinitely.
+
+`compact_goal_memory()` is currently a manual expiry helper, not automatic
+summarisation. The normal runner does not invoke it. Episodic checkpoints and
+memory retrieval are not implemented.
 
 An approval pause creates one pending action, approval request, and continuation. Approval or rejection is stored as an observation before resume, so the next agent iteration receives the human decision and action result. A pending approval cannot be resumed prematurely.
 

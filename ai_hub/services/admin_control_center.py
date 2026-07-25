@@ -24,6 +24,7 @@ from ai_hub.models import (
     ProviderConfig,
     ToolDefinition,
 )
+from ai_hub.services.tool_resolution import resolve_agent_tools
 
 PROVIDER_HEALTH_CACHE_SECONDS = 45
 
@@ -786,6 +787,12 @@ def build_control_center_context() -> dict:
         .order_by("name")
     )
     agent_by_id = {agent.id: agent for agent in agents}
+    resolved_tools_by_agent_id = {
+        agent.id: tuple(
+            resolved.tool for resolved in resolve_agent_tools(agent).tools
+        )
+        for agent in agents
+    }
     collections = list(
         KnowledgeCollection.objects.annotate(
             active_documents_count=Count("documents", filter=Q(documents__status=KnowledgeDocument.Status.ACTIVE))
@@ -1014,7 +1021,7 @@ def build_control_center_context() -> dict:
         edges.append(_edge(f"model:{agent.model_config_id}", f"agent:{agent.id}", "runs", status))
         for collection in agent.knowledge_collections.all():
             edges.append(_edge(f"knowledge:{collection.id}", f"agent:{agent.id}", "informs"))
-        for tool in agent.tools.all():
+        for tool in resolved_tools_by_agent_id[agent.id]:
             edges.append(_edge(f"tool:{tool.id}", f"agent:{agent.id}", "enables"))
 
     step_metrics = {
@@ -1121,7 +1128,10 @@ def build_control_center_context() -> dict:
             scoped_agent = agent_by_id.get(step.agent_id)
             if scoped_agent:
                 pipeline_scope_nodes.update(f"knowledge:{collection.id}" for collection in scoped_agent.knowledge_collections.all())
-                pipeline_scope_nodes.update(f"tool:{tool.id}" for tool in scoped_agent.tools.all())
+                pipeline_scope_nodes.update(
+                    f"tool:{tool.id}"
+                    for tool in resolved_tools_by_agent_id[scoped_agent.id]
+                )
             step_summaries.append(
                 {
                     "order": step.order,

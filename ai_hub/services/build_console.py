@@ -26,6 +26,7 @@ from ai_hub.models import (
     ProviderConfig,
     Toolbox,
 )
+from ai_hub.services.knowledge_ingestion import ensure_initial_knowledge_chunk
 
 
 def parse_json_field(raw, default):
@@ -138,10 +139,11 @@ def attach_knowledge(agent, data, errors):
         doc_title = (data.get("knowledge_doc_title") or "").strip()
         if coll_name and doc_title:
             coll = KnowledgeCollection.objects.create(name=coll_name, is_active=True)
-            KnowledgeDocument.objects.create(
+            document = KnowledgeDocument.objects.create(
                 collection=coll,
                 title=doc_title,
                 curated_text=(data.get("knowledge_doc_content") or "").strip(),
                 status=KnowledgeDocument.Status.ACTIVE,
             )
+            ensure_initial_knowledge_chunk(document)
             agent.knowledge_collections.add(coll)

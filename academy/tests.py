@@ -88,7 +88,37 @@ class DocumentationSyncCommandTests(TestCase):
         call_command("run_doc_sync", stdout=StringIO())
 
         session = ExecutionSession.objects.get(source_label="run_doc_sync management command")
+        self.assertEqual(
+            session.runtime_config["agent_tool_runtime"],
+            "legacy_preexecute",
+        )
         mocked_run.assert_called_once_with(session.pk, allow_legacy_game_action_tools=True)
+
+    def test_startup_doc_sync_declares_the_same_legacy_action_compatibility(self):
+        provider = ProviderConfig.objects.create(name="startup-docs-provider", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="startup-docs-model")
+        AgentProfile.objects.create(
+            name="Documentation Sync Agent",
+            role="Documentation sync",
+            model_config=model,
+            input_contract={"required": ["goal"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+
+        from academy.apps import _trigger_doc_sync
+
+        with patch("ai_hub.services.execution_runner.run_execution_session") as runner:
+            _trigger_doc_sync()
+
+        session = ExecutionSession.objects.get(source_label="startup auto-sync")
+        self.assertEqual(
+            session.runtime_config["agent_tool_runtime"],
+            "legacy_preexecute",
+        )
+        runner.assert_called_once_with(
+            session.pk,
+            allow_legacy_game_action_tools=True,
+        )
 
 
 class DocumentationImportTest(TestCase):

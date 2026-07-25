@@ -85,10 +85,22 @@ Test:
 - context-tool execution and action-tool blocking in GAME,
 - toolbox resolution, explicit grant allow/deny behavior, and workspace tool policy,
 - deliberate tool-call rounds with final-answer and tool-observation paths,
+- bounded model observations with complete raw tool-run audit,
+- default Orchestrator/GAME integration of toolbox-only tools with session/step-linked audit,
+- strict direct deliberate responses plus runner-only plain-final compatibility,
+- explicit `legacy_preexecute` rollback behavior and invalid runtime rejection,
+- exclusion of unresumable approval tools from ordinary runner manifests,
+- Control Center tool edges derived from the same resolved manifest,
 - unified GAME tool adapter behavior with the kill-switch disabled and enabled,
-- retrieval-only knowledge context with browse/search/read/citation tools,
+- default retrieval-only knowledge context with automatic
+  browse/search/read/citation tools,
+- server-bound Knowledge identity, cross-agent isolation, deny grants and
+  workspace policy,
+- bounded Knowledge prompt indexes, lexical candidates and
+  list/browse/search/read outputs,
+- initial chunk creation for curated Build Console documents,
 - starter toolbox and starter demo seeds, including idempotency,
-- legacy Orchestrator tool behavior,
+- explicit legacy Orchestrator/GAME pre-execution behavior,
 - deterministic GAME priority for a fixed time,
 - scheduler eligibility and dependency blocking,
 - transactional goal claims on a database with row-lock support,
@@ -197,8 +209,10 @@ Test:
 - Tool gating.
 - Tool manifest redaction.
 - Tool execution audit records.
-- Knowledge injection limits.
+- Legacy eager Knowledge injection limits.
+- Retrieval-first prompt-index and tool-result limits.
 - Knowledge retrieval scoping by assigned agent collections.
+- Forged Knowledge `agent_id` arguments and explicit capability denies.
 - Latency recording.
 - Error serialization.
 
@@ -365,6 +379,11 @@ Admin mutation-bypass and payload-redaction regressions are green.
 - Run the concurrent GAME claim test against PostgreSQL; SQLite intentionally skips it because it cannot prove row-lock semantics.
 - Use factories or fixtures for provider/model/agent setup.
 - Keep host-specific fixtures outside AI Hub.
+
+The bundled CI has separate SQLite and PostgreSQL 16 jobs. The PostgreSQL job
+runs the complete suite, including concurrent scheduler claim, approval review
+and delegation-budget reservation. A local PostgreSQL 16.14 run completed all
+377 tests without skips during the stabilization audit.
 
 ## Before Shipping
 

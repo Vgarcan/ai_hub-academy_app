@@ -180,7 +180,17 @@ Recommended host flow:
 
 For GAME, create a `GameActionDefinition` only when the tool should be available as a governed selected action. Link that action to the reusable `ToolDefinition`; GAME will still enforce action policy, approval, budget and audit through `GameActionRun`, while the reusable tool execution is recorded in `ToolExecutionRun` when the unified runtime flag is enabled.
 
-Host adapters that call the deliberate agent runtime should use the resolved manifest and let the agent request one tool at a time. Avoid calling `execute_tool()` directly from product code unless the host has already enforced the same permission, approval and policy checks.
+The built-in Orchestrator and GAME runners use the deliberate resolved manifest
+by default and let the agent request one tool at a time. Session and step audit
+links are supplied automatically. Host code should normally create and run an
+`ExecutionSession` instead of calling `execute_agent_deliberate()` or
+`execute_tool()` directly.
+
+If a host must roll back an existing flow temporarily, set the session
+`runtime_config.agent_tool_runtime` to `legacy_preexecute`. Do not use that mode
+for new integrations. Approval-requiring generic tools need a host-owned
+checkpoint/resume implementation; for GAME, use a governed selected action
+instead. See `15_RUNTIME_STATUS.md`.
 
 ## Knowledge Integration
 
@@ -190,7 +200,17 @@ Use host-specific context in `initial_context`.
 
 Avoid mixing private user data into global knowledge documents unless that is intentional and safe.
 
-For larger reusable knowledge, split documents into `KnowledgeDocumentChunk` records and give agents the retrieval toolbox. Retrieval tools list libraries, browse document/chunk indexes, search chunks, read selected sections and return citation metadata. This keeps large documents out of prompts until the agent asks for relevant evidence.
+Split reusable knowledge into `KnowledgeDocumentChunk` records. Attaching an
+active collection is enough to expose the built-in read-only retrieval tools;
+you do not need to assign the starter Knowledge toolbox merely to make those
+canonical adapters reachable. Explicit deny grants and GAME workspace policy
+remain authoritative.
+
+Retrieval tools list libraries, browse bounded document/chunk indexes, search
+chunks, read selected sections and return citation metadata. The runtime binds
+the executing agent identity, so callers must not expose `agent_id` as a model
+choice. This keeps large documents out of prompts until the agent asks for
+relevant evidence.
 
 ## Migration From A Product-Specific AI App
 

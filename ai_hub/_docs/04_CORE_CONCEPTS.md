@@ -120,10 +120,15 @@ Knowledge is not the same as user input. User input belongs to the execution
 context. Knowledge is stable context that can be reused by many agents and
 sessions.
 
-The legacy eager knowledge context can still inject curated text for small
-libraries. Retrieval-first mode exposes library indexes and retrieval tools so
-large documents stay outside the prompt until an agent requests a specific
-section.
+Retrieval-first is the default. The prompt receives a bounded library index,
+and an agent with an active attached collection automatically receives the
+canonical read-only list/browse/search/read/cite adapters. The runtime binds the
+current agent identity server-side, so model arguments cannot select another
+agent's library. Deny grants and workspace policy can remove those capabilities.
+
+The legacy eager knowledge context can still inject curated text for a
+temporary migration period. Large documents stay outside the default prompt
+until an agent requests a specific section.
 
 ## Toolbox
 
@@ -169,10 +174,23 @@ Tool use depends on several gates:
 - The selected model/provider must be compatible with the tool strategy.
 - The host project must allow the side effect.
 
+The default runners use the resolved toolbox/grant manifest and let the model
+request one tool at a time. A bounded compatibility adapter accepts existing
+non-tool final responses so current prompts do not need to adopt the tool
+protocol all at once. Direct `AgentProfile.tools` attachments remain an input to
+the resolver during migration.
+
+The old tool pre-execution path is available as explicit
+`agent_tool_runtime="legacy_preexecute"` compatibility. It pre-executes allowed
+direct tools and must not be used as the basis for new integrations. See
+`15_RUNTIME_STATUS.md`.
+
 Tools remain associated with agents and policy, not with arbitrary model output.
 A GAME agent and an Orchestrator agent can both use tools when the runtime allows
-it. Higher-risk tools may require approval, and external writes remain closed
-unless workspace policy explicitly permits them.
+it. Approval-requiring side effects in GAME use selected governed actions;
+generic deliberate agent calls do not advertise approval-requiring tools until
+a resumable generic checkpoint exists. External writes remain closed unless
+workspace policy explicitly permits them.
 
 ## Contract
 

@@ -52,13 +52,17 @@ Validation is deliberately simple. It is meant to catch obvious configuration mi
 
 ## Agent Runtime
 
-The agent runtime:
+The Orchestrator and GAME runners select an agent-call runtime from
+`ExecutionSession.runtime_config.agent_tool_runtime`, falling back to
+`AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME`. The default is `resolved`:
 
-1. prepares the input payload,
-2. injects knowledge context,
-3. resolves tools where allowed,
-4. calls the configured model,
-5. returns a structured output payload.
+1. prepare the input payload and knowledge context,
+2. resolve toolbox assignments, grants, compatible direct attachments and
+   workspace policy,
+3. present a redacted manifest to the model,
+4. execute at most one model-selected tool per bounded round,
+5. audit each call through `ToolExecutionRun`,
+6. return the final model output in the existing pipeline/GAME shape.
 
 The output normally contains:
 
@@ -72,11 +76,18 @@ The output normally contains:
 }
 ```
 
-`execute_agent_deliberate()` adds a controlled tool loop for agents whose model
-returns structured JSON. The model may return either a final answer or one
-tool-call request. The runtime resolves the allowed tool manifest, executes at
-most the configured number of tool rounds, records tool observations, and stops
-instead of improvising when the response contract is invalid.
+`execute_agent_deliberate()` is the controlled loop behind that default. Direct
+callers remain strict: the model must return either a `final` response or one
+`tool_call`. At the runner boundary only, a compatibility adapter accepts an
+existing non-tool final response. Structured `final.answer` values are
+unwrapped into `llm.content`, so existing output mappings and the GAME decision
+decoder keep their contracts; the raw tool-protocol response remains in
+`tool_protocol_llm`.
+
+`agent_tool_runtime="legacy_preexecute"` selects the old `execute_agent()` shim.
+It sees only active direct `AgentProfile.tools`, pre-executes the allowed set,
+and injects all results into one model call. This exists for rollback while
+legacy prompts and demos migrate; new integrations should not select it.
 
 ## Tool Resolution And Execution
 
@@ -93,10 +104,21 @@ schemas, but never exposes callable paths or private config. `execute_tool()`
 then enforces the resolved permission, callable allow-list, approval requirement
 and runtime safety checks before dispatching Python tools.
 
-`ToolExecutionRun` records deliberate reusable tool calls. GAME selected actions
-continue to record `GameActionRun`; when a GAME action is linked to a
-`ToolDefinition`, the adapter can additionally route through the unified tool
-runtime behind `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED`.
+`ToolExecutionRun` records deliberate reusable tool calls and links them to the
+owning execution session and step. GAME selected actions continue to record
+`GameActionRun`; when a GAME action is linked to a `ToolDefinition`, the adapter
+can additionally route through the unified tool runtime behind
+`AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED`.
+
+The resolver is the single source of normal runtime capability and is also used
+by the Agent Admin manifest, Control Center graph and unified GAME wrappers.
+Legacy direct attachments are one compatibility input to that resolver.
+Approval-requiring tools are not advertised in ordinary runner calls because
+there is no resumable generic LLM checkpoint yet. In GAME, expose such work as
+a selected action so the dispatcher can persist approval and resume state.
+Each successful tool keeps its complete result in `ToolExecutionRun`, while the
+copy returned to the model is capped by
+`AI_HUB_MAX_TOOL_OBSERVATION_CHARS`.
 
 ## Knowledge Retrieval
 
@@ -109,11 +131,23 @@ runtime behind `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED`.
 - `read_document_section()`
 - `cite_knowledge_source()`
 
-The public wrappers in `ai_hub.tools.knowledge` require an agent identifier and
-only search collections attached to that agent. When
-`AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=false`, the normal agent context
-contains collection and document indexes rather than full document text, and the
-agent is expected to use the retrieval tools for precise sections.
+The default agent context contains a bounded collection/document index rather
+than document text. If an agent has an active collection, the resolver
+automatically exposes the six canonical, system-owned, read-only adapters.
+These adapters are still filtered by explicit deny grants and workspace policy.
+
+The runtime removes any model-supplied `agent_id`/`agent_name` and binds the
+executing agent server-side before validation, audit and execution. This keeps
+collection attachment as the authorization boundary and prevents agent
+impersonation. List, browse, search and read results have hard output bounds;
+read results report when content was truncated. Lexical search evaluates at
+most 1,000 matching chunks per call, materializes at most 20,000 characters per
+candidate for in-process scoring, and reports both truncation cases.
+
+`AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=true` temporarily restores
+bounded eager text injection. It is compatibility behavior, not the normal
+path. Knowledge models, retrieval services and tool adapters remain separate;
+Knowledge records are not converted into `ToolDefinition` rows.
 
 ## Orchestrator Runtime
 
@@ -186,11 +220,21 @@ approval and `GameActionRun` audit.
 
 Approval-required actions create one `GameActionApprovalRequest`, pause the session, move the goal to `waiting_approval`, and create one pending continuation. The iteration loop stops immediately. Approval and rejection are row-locked, persisted as parent observations, and must be resolved before `resume_goal_execution()` can continue at the next unused step order.
 
-Real row-lock concurrency must be verified on PostgreSQL. SQLite tests cover behavior but not locking semantics.
+Real row-lock concurrency is verified by the PostgreSQL CI job. SQLite tests
+cover functional behavior but intentionally skip locking semantics.
 
 ### Scoped memory
 
-`GameMemoryEntry` separates workspace, goal, session, and action-result scopes. Service validation rejects cross-workspace or cross-goal combinations, and database constraints protect the basic required/null field shapes. Goal-bound runner payloads include bounded `scoped_memory` with selection and truncation metadata; legacy `final_context.memory` remains available for compatibility.
+`GameMemoryEntry` separates workspace, goal, session, and action-result scopes.
+Service validation rejects cross-workspace or cross-goal combinations, and
+database constraints protect the basic required/null field shapes. The
+dispatcher maps each scope to only its valid goal/session links.
+
+Goal-bound runner payloads include bounded `scoped_memory` with selection and
+truncation metadata. A successful `record_memory` action refreshes it before the
+next iteration. Legacy rolling memory/observations remain available with
+configurable entry and character caps; raw step/action audit payloads are not
+truncated.
 
 ### Policies and budgets
 
@@ -216,7 +260,9 @@ Only queued goals in an active workspace with no unresolved required dependency 
 
 `get_next_eligible_goal()` is read-only. `claim_next_goal()` locks the workspace and candidate rows, persists candidate scores, and moves exactly one selected goal to `running` through the goal-transition service. It does not create an execution session.
 
-SQLite does not provide realistic `select_for_update()` semantics. Functional scheduler tests run on SQLite, while the concurrent-claim test is conditionally executed only on a locking backend such as PostgreSQL.
+SQLite does not provide realistic `select_for_update()` semantics. Functional
+scheduler tests run on SQLite, while the concurrent-claim test executes in the
+PostgreSQL CI job.
 
 ## Goal-bound GAME sessions
 
@@ -327,6 +373,10 @@ Recommended worker behavior:
 3. Store status and errors in the session.
 4. Never hide model failures.
 5. Never rerun a session that already has step runs.
+
+The repository does not currently ship a general session worker, queue backend,
+retry policy or stalled-session recovery loop. `runtime_mode=async` is metadata
+until a host dispatches `run_execution_session()` from its own worker.
 
 ## Host Adapter Responsibility
 

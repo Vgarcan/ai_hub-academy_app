@@ -67,6 +67,12 @@ Expand the **Tools** subsection. Check any toolboxes to assign. Each checked too
 
 Prefer toolbox assignments over per-agent tool grants. See `07_ADMIN_GUIDE.md` for the recommended setup order.
 
+The assignment feeds the governed resolver used by the default
+Orchestrator/GAME runtime. Toolbox-only capabilities are therefore available to
+the model without a duplicate direct assignment. GAME model-call manifests
+contain context tools only; define a governed GAME action for selected
+side-effect work. See `15_RUNTIME_STATUS.md`.
+
 #### Knowledge
 
 Expand the **Knowledge** subsection. Choose a mode:
@@ -75,9 +81,12 @@ Expand the **Knowledge** subsection. Choose a mode:
 | --- | --- |
 | **No knowledge** (default) | Nothing is created or attached. |
 | **Reuse collection** | An existing `KnowledgeCollection` is linked to the agent via `agent.knowledge_collections.add()`. |
-| **Create collection** | A new `KnowledgeCollection` is created. Add document rows — each row becomes one `KnowledgeDocument`. |
+| **Create collection** | A new `KnowledgeCollection` is created. Add document rows — each row becomes one active `KnowledgeDocument` with one initial retrievable chunk. |
 
-Important: when creating documents, the wizard forces `status=ACTIVE` on every document. Draft documents are invisible to agents at runtime. Do not change this unless you intend the documents to be hidden.
+Important: when creating documents, the wizard forces `status=ACTIVE` and
+creates one initial chunk from the curated text. Draft documents are invisible
+to agents at runtime. The initial chunk makes the text immediately usable by
+retrieval; replace it with deliberate section chunks for larger documents.
 
 ## GAME-specific steps
 
@@ -208,5 +217,8 @@ Errors are collected and displayed at the top of the page. The form is redisplay
 - **Provider credentials**: the wizard stores an env var name, not a key value. Set the actual key in your environment before testing.
 - **GAME workspace policy and actions**: `GameActionDefinition` records, workspace-level budgets, and action allow-lists must be configured in the raw admin after the session is created.
 - **Step mappings**: `input_mapping` and `output_mapping` on `PipelineStep` are not set by the wizard. Edit each step in admin after creation.
-- **Knowledge files**: the wizard creates text-content `KnowledgeDocument` records only. It does not process uploaded files or generate document chunks. Use `KnowledgeDocumentChunk` records and the retrieval service for RAG.
+- **Knowledge files**: the wizard accepts curated text, not uploaded-file
+  ingestion. It creates one initial chunk per new text document, but does not
+  perform semantic sectioning, embeddings or file parsing. Create deliberate
+  `KnowledgeDocumentChunk` records for larger documents.
 - **Editing existing objects**: the wizard only creates new objects (or reuses via get_or_create). To change an existing agent's prompt, provider base URL, or pipeline step order, edit those records directly in admin.

@@ -20,7 +20,8 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 12. [`12_TROUBLESHOOTING.md`](12_TROUBLESHOOTING.md) - common failures and fixes.
 13. [`13_ROADMAP.md`](13_ROADMAP.md) - recommended next product and engineering work.
 14. [`14_CHANGELOG.md`](14_CHANGELOG.md) - notable app and documentation changes.
-15. [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) - Build Console wizard: step-by-step guide for the guided GAME and Orchestrator creation wizard.
+15. [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md) - canonical CURRENT / LEGACY / TARGET / NOT IMPLEMENTED runtime status.
+16. [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) - Build Console wizard: step-by-step guide for the guided GAME and Orchestrator creation wizard.
 
 ## Current Product Shape
 

@@ -48,10 +48,15 @@ def _trigger_doc_sync():
             "Check all .md files, update any that have changed, and report what was done."
         ),
         initial_context={},
-        runtime_config={"max_iterations": 3},
+        # Host-specific compatibility: doc sync is an explicitly trusted action
+        # tool and predates governed GAME action definitions.
+        runtime_config={
+            "max_iterations": 3,
+            "agent_tool_runtime": "legacy_preexecute",
+        },
         source_label="startup auto-sync",
     )
-    run_execution_session(session.pk)
+    run_execution_session(session.pk, allow_legacy_game_action_tools=True)
     session.refresh_from_db()
     logger.info(
         "Doc sync completed (session pk=%s, status=%s).",

@@ -379,6 +379,16 @@ Use `Tools` for the underlying reusable capability and `Toolboxes` for role-leve
 bundles. Assign toolboxes to agents first, then use individual grants only for
 exceptions.
 
+The Admin resolved manifest is the governed capability source used by the
+default Orchestrator/GAME model-call runtime. Toolbox assignments and grants
+therefore take effect without copying a tool into the legacy direct M2M. The
+Control Center graph uses the same resolver.
+
+Legacy direct `AgentProfile.tools` attachments remain visible through the
+resolver for migration compatibility. The separate
+`legacy_preexecute` session mode is a rollback shim, not a second Admin source
+of truth. See `15_RUNTIME_STATUS.md`.
+
 Recommended setup:
 
 1. Create or seed safe tool definitions.

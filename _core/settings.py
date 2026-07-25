@@ -3,6 +3,8 @@ import os
 
 from django.core.exceptions import ImproperlyConfigured
 
+from _core.database_config import build_database_config
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -82,12 +84,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "_core.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
-}
+DATABASES = {"default": build_database_config(os.environ, base_dir=BASE_DIR)}
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -156,6 +153,21 @@ def _env_bool(name, default=False):
     raise ImproperlyConfigured(f"{name} must be a boolean value, got {raw!r}.")
 
 
+def _env_int(name, default, *, minimum, maximum):
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ImproperlyConfigured(
+            f"{name} must be an integer between {minimum} and {maximum}."
+        ) from exc
+    if not minimum <= value <= maximum:
+        raise ImproperlyConfigured(
+            f"{name} must be an integer between {minimum} and {maximum}."
+        )
+    return value
+
+
 # GAME is enabled by default only for DEBUG/development. Production rollout is
 # fail-closed unless each subsystem is explicitly enabled through the environment.
 AI_HUB_GAME_GOALS_ENABLED = _env_bool("AI_HUB_GAME_GOALS_ENABLED", DEBUG)
@@ -165,8 +177,27 @@ AI_HUB_GAME_MEMORY_ENABLED = _env_bool("AI_HUB_GAME_MEMORY_ENABLED", DEBUG)
 AI_HUB_GAME_RESUME_ENABLED = _env_bool("AI_HUB_GAME_RESUME_ENABLED", DEBUG)
 AI_HUB_GAME_DELEGATION_ENABLED = _env_bool("AI_HUB_GAME_DELEGATION_ENABLED", DEBUG)
 AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED = _env_bool("AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED", False)
-AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED = _env_bool("AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", True)
-AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL = int(os.environ.get("AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL", "3"))
+AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME = os.environ.get(
+    "AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME",
+    "resolved",
+).strip().lower()
+if AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME not in {"resolved", "legacy_preexecute"}:
+    raise ImproperlyConfigured(
+        "AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME must be 'resolved' or 'legacy_preexecute'."
+    )
+AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED = _env_bool("AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", False)
+AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL = _env_int(
+    "AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL",
+    3,
+    minimum=0,
+    maximum=10,
+)
+AI_HUB_MAX_TOOL_OBSERVATION_CHARS = _env_int(
+    "AI_HUB_MAX_TOOL_OBSERVATION_CHARS",
+    12000,
+    minimum=256,
+    maximum=100000,
+)
 
 # Trusted-endpoint allow-list for the live provider-health check (Ollama /api/tags).
 # The provider base_url is admin-controlled, so the live probe is a small SSRF

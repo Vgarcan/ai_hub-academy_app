@@ -148,7 +148,11 @@ A GAME service can raise:
 GAME feature 'AI_HUB_GAME_..._ENABLED' is disabled. Set ... =True in Django settings to enable it.
 ```
 
-This means the matching feature flag is off (the reusable default is fail-closed). Enable the flag in settings or the environment — see `03_CONFIGURATION.md`. Remember flags gate the service layer only; the admin add/change forms write directly to the model.
+This means the matching feature flag is off (the reusable default is
+fail-closed). Enable the flag in settings or the environment — see
+`03_CONFIGURATION.md`. Flags primarily protect service entry points. Some Admin
+operations are hidden too, but direct model writes and not every lifecycle
+helper are uniformly gated; use Admin/database permissions for a hard stop.
 
 ## Goal Is Stuck In Running
 

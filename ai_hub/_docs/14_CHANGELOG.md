@@ -9,9 +9,63 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Retrieval-first Knowledge stabilization
+
+- Made retrieval-first the default and retained eager document injection behind
+  `AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=true`.
+- Added migration `0019_retrieval_first_foundation`, which establishes six
+  canonical system retrieval adapters, normalizes the starter Knowledge
+  toolbox and backfills one initial chunk for curated documents without chunks.
+- Agents with an active attached collection automatically resolve the
+  canonical read-only adapters; explicit deny grants and workspace policy still
+  filter them.
+- Bound the executing agent identity server-side so forged `agent_id` or
+  `agent_name` model arguments cannot cross collection boundaries.
+- Bounded collection/document indexes and list/browse/search/read outputs,
+  including the lexical candidate window.
+- Completed model-facing schemas for filtered search and section reads.
+- Build Console curated documents now receive an immediately retrievable
+  initial chunk.
+- Delegated goal-less GAME sessions now recover their parent workspace before
+  resolving tool policy.
+
+#### Tool runtime stabilization
+
+- Migrated the default Orchestrator and GAME agent-call path to the governed
+  `resolve_agent_tools()` + `execute_agent_deliberate()` runtime.
+- Added `AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME=resolved` and the per-session
+  `runtime_config.agent_tool_runtime` override. The only compatibility value is
+  `legacy_preexecute`; invalid values fail before a step starts.
+- Preserved existing prompt/output contracts with a runner-only plain-final
+  adapter and deliberate-final unwrapping. Direct deliberate callers remain
+  strict, and the raw structured response is retained in `tool_protocol_llm`.
+- Linked deliberate `ToolExecutionRun` records to their execution session and
+  step.
+- Kept complete tool output in `ToolExecutionRun` while bounding the copy sent
+  back into the model prompt.
+- Restricted resolved GAME model-call manifests to context tools. The legacy
+  action-tool opt-in cannot bypass that rule in resolved mode.
+- Excluded approval-requiring tools from ordinary runner manifests until a
+  resumable generic LLM checkpoint exists; governed GAME actions remain the
+  supported approval/reject/resume path.
+- Switched the Control Center graph to resolved tool access so Admin display and
+  runtime share one capability source.
+- Kept direct `AgentProfile.tools` assignments as a resolver input and retained
+  tested legacy pre-execution only as a temporary migration shim.
+
 #### Continuous integration
 
-- Added `.github/workflows/ci.yml`: on push/PR to `main`, runs `manage.py check`, a missing-migration check (`makemigrations --check --dry-run`) and the full test suite on Python 3.12. Intended to be a required status check for `main` (branch protection enabled separately in repo settings).
+- Split `.github/workflows/ci.yml` into SQLite and PostgreSQL 16 jobs. Both run
+  checks, missing-migration detection and the full Python 3.12 suite; the
+  PostgreSQL job executes scheduler, approval and delegation locking tests
+  without skips.
+- Added Psycopg 3 plus validated `DATABASE_URL` / `POSTGRES_*` configuration
+  while retaining SQLite as the zero-config default.
+- Removed connection closing from synchronous execution/resume services:
+  request handlers and workers own their connections. PostgreSQL exposed that
+  the previous behavior broke caller-owned atomic transactions.
+- Made Goal action-history ordering total and deterministic across database
+  backends.
 
 #### Operations Inbox authorization (explicit policy + tests)
 
@@ -321,6 +375,20 @@ Host-project features should be documented in the host project, not here.
   to test, monitor and recover from when possible.
 
 ### Fixed
+
+#### Stabilization foundations P2
+
+- Fixed GAME `record_memory` dispatch so workspace, goal, session and
+  action-result scopes receive only their valid goal/session links.
+- Refreshes bounded `scoped_memory` after a successful memory-write action so
+  the next iteration can use the new entry immediately.
+- Added configurable rolling limits for legacy memory, observations and previous
+  responses. Oversized prompt values become previews while raw audit records
+  remain intact.
+- Moved the GAME Goals feature gate from generic `ExecutionSessionAdmin` add/run
+  controls to `GameGoalAdmin`, so disabling durable Goals no longer blocks
+  Orchestrator administration and direct Goal creation/lifecycle controls are
+  consistently hidden.
 
 #### Static asset modularization (P2)
 

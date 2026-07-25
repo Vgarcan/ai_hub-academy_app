@@ -2,18 +2,35 @@ import copy
 import json
 import time
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import close_old_connections, transaction
+from django.db import transaction
 from django.utils import timezone
 
 from ai_hub.models import ExecutionSession, ExecutionStepRun, GameActionRun
-from ai_hub.services.agent_runtime import apply_mapping, execute_agent, prepare_agent_payload
+from ai_hub.services.agent_runtime import (
+    apply_mapping,
+    execute_agent,
+    execute_agent_deliberate,
+    prepare_agent_payload,
+)
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.tools_runtime import TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY
 
 
+AGENT_TOOL_RUNTIME_RESOLVED = "resolved"
+AGENT_TOOL_RUNTIME_LEGACY = "legacy_preexecute"
+AGENT_TOOL_RUNTIME_CHOICES = {
+    AGENT_TOOL_RUNTIME_RESOLVED,
+    AGENT_TOOL_RUNTIME_LEGACY,
+}
 DEFAULT_GAME_FINISH_ACTIONS = ["finish", "final", "complete", "stop"]
 DEFAULT_GAME_STOP_STATUSES = ["success", "complete", "completed", "done", "final"]
+DEFAULT_GAME_MEMORY_MAX_ENTRIES = 20
+DEFAULT_GAME_OBSERVATIONS_MAX_ENTRIES = 8
+DEFAULT_GAME_OBSERVATION_MAX_CHARS = 2000
+DEFAULT_GAME_PREVIOUS_RESPONSE_MAX_CHARS = 2000
+DEFAULT_GAME_MEMORY_ENTRY_MAX_CHARS = 500
 GAME_RESERVED_PAYLOAD_KEYS = (
     "goal",
     "goal_text",
@@ -27,6 +44,74 @@ GAME_RESERVED_PAYLOAD_KEYS = (
     "game_policy",
     "game_response_contract",
 )
+
+
+def _session_runtime_config(session: ExecutionSession) -> dict:
+    runtime_config = session.runtime_config or {}
+    if not isinstance(runtime_config, dict):
+        raise ValidationError("Execution session runtime_config must be a JSON object.")
+    return dict(runtime_config)
+
+
+def _resolve_agent_tool_runtime(session: ExecutionSession, runtime_config: dict | None = None) -> str:
+    config = runtime_config if runtime_config is not None else _session_runtime_config(session)
+    runtime = str(
+        config.get(
+            "agent_tool_runtime",
+            getattr(settings, "AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME", AGENT_TOOL_RUNTIME_RESOLVED),
+        )
+        or ""
+    ).strip().lower()
+    if runtime not in AGENT_TOOL_RUNTIME_CHOICES:
+        raise ValidationError(
+            f"Unknown agent tool runtime '{runtime}'. "
+            f"Use '{AGENT_TOOL_RUNTIME_RESOLVED}' or '{AGENT_TOOL_RUNTIME_LEGACY}'."
+        )
+    return runtime
+
+
+def _session_workspace(session: ExecutionSession):
+    if session.runtime_kind != ExecutionSession.RuntimeKind.GAME:
+        return None
+    from ai_hub.services.game_policy import get_session_workspace
+
+    return get_session_workspace(session)
+
+
+def _execute_session_agent(
+    *,
+    session: ExecutionSession,
+    step_run: ExecutionStepRun,
+    agent,
+    payload: dict,
+    agent_tool_runtime: str,
+    tool_policy: str,
+) -> dict:
+    if agent_tool_runtime == AGENT_TOOL_RUNTIME_LEGACY:
+        output_payload = execute_agent(agent, payload, tool_policy=tool_policy)
+    else:
+        workspace = _session_workspace(session)
+        output_payload = execute_agent_deliberate(
+            agent,
+            payload,
+            workspace=workspace,
+            execution_context={"session": session, "step_run": step_run},
+            tool_policy=tool_policy,
+            allow_plain_final=True,
+            unwrap_final_answer=True,
+            # Generic deliberate calls do not yet persist a resumable model
+            # checkpoint. Approval-requiring work must use a governed GAME
+            # action, whose dispatcher owns approval and resume.
+            allow_approval_requests=False,
+        )
+        if output_payload.get("status") != "final":
+            detail = output_payload.get("error") or output_payload.get("requested_tool") or "unknown error"
+            raise ValidationError(
+                "Resolved agent tool runtime stopped with status "
+                f"'{output_payload.get('status', 'unknown')}': {detail}"
+            )
+    output_payload["agent_tool_runtime"] = agent_tool_runtime
+    return output_payload
 
 
 def _create_step_run(session: ExecutionSession, step) -> ExecutionStepRun:
@@ -101,6 +186,96 @@ def _bounded_iteration_count(runtime_config: dict) -> int:
     except (TypeError, ValueError):
         max_iterations = 3
     return min(max(max_iterations, 1), 25)
+
+
+def _bounded_runtime_int(
+    runtime_config: dict,
+    key: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(runtime_config.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, minimum), maximum)
+
+
+def _keep_latest(items: list, limit: int) -> list:
+    if len(items) <= limit:
+        return items
+    return items[-limit:]
+
+
+def _bounded_prompt_value(
+    value,
+    *,
+    max_chars: int,
+    kind: str,
+    reference: dict | None = None,
+):
+    copied = copy.deepcopy(value)
+    serialized = json.dumps(copied, default=str, sort_keys=True)
+    if len(serialized) <= max_chars:
+        return copied
+
+    marker = {
+        "truncated": True,
+        "kind": kind,
+        "original_chars": len(serialized),
+    }
+    for key, item in (reference or {}).items():
+        if item is not None and isinstance(item, (str, int, float, bool)):
+            marker[key] = item if not isinstance(item, str) else item[:120]
+
+    preview_size = max_chars
+    while preview_size > 0:
+        marker["preview"] = serialized[:preview_size]
+        marker_size = len(json.dumps(marker, default=str, sort_keys=True))
+        if marker_size <= max_chars:
+            return marker
+        preview_size -= max(marker_size - max_chars, 1)
+
+    marker.pop("preview", None)
+    if len(json.dumps(marker, default=str, sort_keys=True)) <= max_chars:
+        return marker
+    return {"truncated": True}
+
+
+def _bounded_game_observation(observation, max_chars: int) -> dict:
+    if not isinstance(observation, dict):
+        return _bounded_prompt_value(
+            observation,
+            max_chars=max_chars,
+            kind="game_observation",
+        )
+    reference_keys = (
+        "action",
+        "status",
+        "complete",
+        "action_run_id",
+        "action_status",
+        "waiting_reason",
+        "resolution_status",
+    )
+    return _bounded_prompt_value(
+        observation,
+        max_chars=max_chars,
+        kind="game_observation",
+        reference={key: observation.get(key) for key in reference_keys},
+    )
+
+
+def _trim_memory_entry_text(entry, max_chars: int) -> dict:
+    if not isinstance(entry, dict):
+        return {"summary": str(entry)[:max_chars]}
+    trimmed = dict(entry)
+    for key in ("summary", "action_output_summary"):
+        if key in trimmed:
+            trimmed[key] = str(trimmed.get(key) or "")[:max_chars]
+    return trimmed
 
 
 def _available_action_names(runtime_config: dict) -> list[str]:
@@ -353,7 +528,8 @@ def _run_game_session(
     use_action_dispatcher: bool = False,
     start_order: int = 1,
 ) -> None:
-    runtime_config = dict(session.runtime_config or {})
+    runtime_config = _session_runtime_config(session)
+    agent_tool_runtime = _resolve_agent_tool_runtime(session, runtime_config)
     use_dispatcher = (
         use_action_dispatcher
         or bool(runtime_config.get("use_action_dispatcher"))
@@ -392,6 +568,52 @@ def _run_game_session(
     else:
         memory = list(context.get("memory") or runtime_config.get("memory") or [])
         observations = []
+    memory_max_entries = _bounded_runtime_int(
+        runtime_config,
+        "game_memory_max_entries",
+        DEFAULT_GAME_MEMORY_MAX_ENTRIES,
+        minimum=1,
+        maximum=100,
+    )
+    observations_max_entries = _bounded_runtime_int(
+        runtime_config,
+        "game_observations_max_entries",
+        DEFAULT_GAME_OBSERVATIONS_MAX_ENTRIES,
+        minimum=1,
+        maximum=50,
+    )
+    observation_max_chars = _bounded_runtime_int(
+        runtime_config,
+        "game_observation_max_chars",
+        DEFAULT_GAME_OBSERVATION_MAX_CHARS,
+        minimum=128,
+        maximum=20000,
+    )
+    previous_response_max_chars = _bounded_runtime_int(
+        runtime_config,
+        "game_previous_response_max_chars",
+        DEFAULT_GAME_PREVIOUS_RESPONSE_MAX_CHARS,
+        minimum=128,
+        maximum=20000,
+    )
+    memory_entry_max_chars = _bounded_runtime_int(
+        runtime_config,
+        "game_memory_entry_max_chars",
+        DEFAULT_GAME_MEMORY_ENTRY_MAX_CHARS,
+        minimum=32,
+        maximum=4000,
+    )
+    memory = _keep_latest(
+        [_trim_memory_entry_text(entry, memory_entry_max_chars) for entry in memory],
+        memory_max_entries,
+    )
+    observations = _keep_latest(
+        [
+            _bounded_game_observation(observation, observation_max_chars)
+            for observation in observations
+        ],
+        observations_max_entries,
+    )
     scoped_memory = dict(context.get("scoped_memory") or {})
     if session.goal_id:
         from ai_hub.services.game_feature_flags import is_game_feature_enabled
@@ -447,23 +669,51 @@ def _run_game_session(
         }
 
         try:
-            prepared_payload = prepare_agent_payload(entry_agent, payload, runtime_config.get("input_mapping") or {})
+            prepared_payload = prepare_agent_payload(
+                entry_agent,
+                payload,
+                runtime_config.get("input_mapping") or {},
+                workspace=_session_workspace(session),
+            )
             prepared_payload = _restore_game_reserved_payload(prepared_payload, payload)
             request_payload = copy.deepcopy(prepared_payload)
-            tool_policy = TOOL_POLICY_ALL if allow_legacy_game_action_tools else TOOL_POLICY_GAME_CONTEXT_ONLY
-            output_payload = execute_agent(entry_agent, prepared_payload, tool_policy=tool_policy)
+            tool_policy = (
+                TOOL_POLICY_ALL
+                if (
+                    agent_tool_runtime == AGENT_TOOL_RUNTIME_LEGACY
+                    and allow_legacy_game_action_tools
+                )
+                else TOOL_POLICY_GAME_CONTEXT_ONLY
+            )
+            output_payload = _execute_session_agent(
+                session=session,
+                step_run=step_run,
+                agent=entry_agent,
+                payload=prepared_payload,
+                agent_tool_runtime=agent_tool_runtime,
+                tool_policy=tool_policy,
+            )
             observation = _game_observation(output_payload, runtime_config)
             action_run = None
             if use_dispatcher and not observation["complete"]:
                 action_run = _dispatch_observation_action(
                     session, observation, entry_agent, iteration, step_run
                 )
-            observations.append(observation)
+            observations.append(
+                _bounded_game_observation(observation, observation_max_chars)
+            )
+            observations = _keep_latest(
+                observations,
+                observations_max_entries,
+            )
             memory_entry = {
                 "iteration": iteration,
                 "action": observation.get("action"),
                 "status": observation.get("status"),
-                "summary": observation.get("final_answer") or observation.get("decision", {}).get("message", ""),
+                "summary": str(
+                    observation.get("final_answer")
+                    or observation.get("decision", {}).get("message", "")
+                )[:memory_entry_max_chars],
             }
             if "action_output" in observation:
                 action_out = observation["action_output"]
@@ -472,9 +722,27 @@ def _run_game_session(
                     or action_out.get("content")
                     or action_out.get("final_answer")
                     or ""
-                )[:500]
+                )[:memory_entry_max_chars]
             memory.append(memory_entry)
-            previous_response = output_payload
+            memory = _keep_latest(memory, memory_max_entries)
+            previous_response = _bounded_prompt_value(
+                output_payload,
+                max_chars=previous_response_max_chars,
+                kind="previous_response",
+                reference={"agent": output_payload.get("agent")},
+            )
+            if (
+                session.goal_id
+                and action_run is not None
+                and action_run.status == GameActionRun.Status.SUCCESS
+                and action_run.action_name == "record_memory"
+            ):
+                scoped_memory = build_goal_memory_context(
+                    workspace=session.goal.workspace,
+                    goal=session.goal,
+                    session=session,
+                    max_chars=runtime_config.get("game_memory_max_chars", 4000),
+                )
             _update_game_context(
                 context,
                 goal_text=goal_text,
@@ -572,45 +840,43 @@ def run_game_session_resume(
     use_action_dispatcher: bool = False,
 ) -> int:
     """Re-enter a GAME session that was paused. Session must already be in RUNNING state."""
-    close_old_connections()
-    try:
-        session = (
-            ExecutionSession.objects.select_related("pipeline", "entry_agent", "goal", "goal__workspace")
-            .prefetch_related(
-                "pipeline__steps__agent__tools",
-                "pipeline__steps__agent__knowledge_collections__documents",
-            )
-            .get(pk=session_id)
+    session = (
+        ExecutionSession.objects.select_related("pipeline", "entry_agent", "goal", "goal__workspace")
+        .prefetch_related(
+            "pipeline__steps__agent__tools",
+            "pipeline__steps__agent__knowledge_collections__documents",
         )
-        if session.status != ExecutionSession.Status.RUNNING:
-            raise ValidationError(
-                f"Session #{session_id} must be RUNNING before resume "
-                f"(current: '{session.status}')."
+        .get(pk=session_id)
+    )
+    if session.status != ExecutionSession.Status.RUNNING:
+        raise ValidationError(
+            f"Session #{session_id} must be RUNNING before resume "
+            f"(current: '{session.status}')."
+        )
+    context = dict(session.final_context or {})
+    try:
+        if session.runtime_kind == ExecutionSession.RuntimeKind.GAME:
+            _run_game_session(
+                session,
+                context,
+                start_order=next_order,
+                use_action_dispatcher=use_action_dispatcher,
             )
-        context = dict(session.final_context or {})
-        try:
-            if session.runtime_kind == ExecutionSession.RuntimeKind.GAME:
-                _run_game_session(
-                    session,
-                    context,
-                    start_order=next_order,
-                    use_action_dispatcher=use_action_dispatcher,
-                )
-            else:
-                raise ValidationError("Only GAME sessions can be resumed.")
-        except Exception as exc:
-            _mark_session_failed(session, context, exc)
+        else:
+            raise ValidationError("Only GAME sessions can be resumed.")
+    except Exception as exc:
+        _mark_session_failed(session, context, exc)
 
-        if session.goal_id:
-            from ai_hub.services.game_goal_outcomes import apply_session_outcome_to_goal
-            apply_session_outcome_to_goal(session)
+    if session.goal_id:
+        from ai_hub.services.game_goal_outcomes import apply_session_outcome_to_goal
+        apply_session_outcome_to_goal(session)
 
-        return session.id
-    finally:
-        close_old_connections()
+    return session.id
 
 
 def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
+    runtime_config = _session_runtime_config(session)
+    agent_tool_runtime = _resolve_agent_tool_runtime(session, runtime_config)
     if not session.pipeline_id:
         raise ValidationError("Execution sessions require a pipeline before they can run.")
     if not session.pipeline.is_active:
@@ -633,7 +899,14 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
         started = time.perf_counter()
         try:
             payload = prepare_agent_payload(step.agent, context, step.input_mapping or {})
-            output_payload = execute_agent(step.agent, payload)
+            output_payload = _execute_session_agent(
+                session=session,
+                step_run=step_run,
+                agent=step.agent,
+                payload=payload,
+                agent_tool_runtime=agent_tool_runtime,
+                tool_policy=TOOL_POLICY_ALL,
+            )
             context.update(apply_mapping(output_payload, step.output_mapping or {}))
             step_run.status = ExecutionStepRun.Status.SUCCESS
             step_run.request_payload = payload
@@ -651,7 +924,14 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
                     context,
                     {},
                 )["knowledge_context"]
-                output_payload = execute_agent(step.fallback_agent, fallback_payload)
+                output_payload = _execute_session_agent(
+                    session=session,
+                    step_run=step_run,
+                    agent=step.fallback_agent,
+                    payload=fallback_payload,
+                    agent_tool_runtime=agent_tool_runtime,
+                    tool_policy=TOOL_POLICY_ALL,
+                )
                 context.update(apply_mapping(output_payload, step.output_mapping or {}))
                 step_run.status = ExecutionStepRun.Status.SUCCESS
                 step_run.response_payload = {
@@ -696,37 +976,35 @@ def run_execution_session(
     allow_legacy_game_action_tools: bool = False,
     use_action_dispatcher: bool = False,
 ) -> int:
-    close_old_connections()
-    try:
-        _claim_session_for_run(session_id)
-        session = (
-            ExecutionSession.objects.select_related("pipeline", "entry_agent", "goal", "goal__workspace")
-            .prefetch_related(
-                "pipeline__steps__agent__tools",
-                "pipeline__steps__agent__knowledge_collections__documents",
-            )
-            .get(pk=session_id)
+    # The request handler or background worker owns its connection lifecycle.
+    # Closing here breaks caller-owned atomic blocks and PostgreSQL transactions.
+    _claim_session_for_run(session_id)
+    session = (
+        ExecutionSession.objects.select_related("pipeline", "entry_agent", "goal", "goal__workspace")
+        .prefetch_related(
+            "pipeline__steps__agent__tools",
+            "pipeline__steps__agent__knowledge_collections__documents",
         )
-        context = dict(session.initial_context or {})
+        .get(pk=session_id)
+    )
+    context = dict(session.initial_context or {})
 
-        try:
-            if session.runtime_kind == ExecutionSession.RuntimeKind.GAME:
-                _run_game_session(
-                    session,
-                    context,
-                    allow_legacy_game_action_tools=allow_legacy_game_action_tools,
-                    use_action_dispatcher=use_action_dispatcher,
-                )
-            else:
-                _run_orchestrator_session(session, context)
-        except Exception as exc:
-            _mark_session_failed(session, context, exc)
+    try:
+        if session.runtime_kind == ExecutionSession.RuntimeKind.GAME:
+            _run_game_session(
+                session,
+                context,
+                allow_legacy_game_action_tools=allow_legacy_game_action_tools,
+                use_action_dispatcher=use_action_dispatcher,
+            )
+        else:
+            _run_orchestrator_session(session, context)
+    except Exception as exc:
+        _mark_session_failed(session, context, exc)
 
-        if session.goal_id:
-            from ai_hub.services.game_goal_outcomes import apply_session_outcome_to_goal
+    if session.goal_id:
+        from ai_hub.services.game_goal_outcomes import apply_session_outcome_to_goal
 
-            apply_session_outcome_to_goal(session)
+        apply_session_outcome_to_goal(session)
 
-        return session.id
-    finally:
-        close_old_connections()
+    return session.id

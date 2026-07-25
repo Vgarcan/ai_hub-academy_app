@@ -58,7 +58,6 @@ Which model should this agent use?
 Useful model configuration includes:
 
 - Exact provider model name.
-- Friendly display name.
 - Default temperature.
 - Default max tokens.
 - Tool support.
@@ -85,7 +84,7 @@ An agent combines:
 - Optional knowledge collections.
 - Optional toolboxes, grants, and legacy direct tools.
 - Optional input and output contracts.
-- Runtime settings.
+- An execution-mode preference (`sync`, `async` or `inherit`).
 
 Good agents are specific. Avoid creating a generic "do everything" agent when a
 short chain of focused agents would be easier to debug.
@@ -112,8 +111,9 @@ What should the agent know before it answers?
 ```
 
 AI Hub stores knowledge as collections, documents, and document chunks. A
-collection groups related documents. A document stores curated text, optional
-source files, tags, language and notes. Chunks are retrieval units used when the
+collection groups related documents and has a name, description and active
+state. A document stores curated text, an optional source file, tags, language
+and notes. Chunks are retrieval units used when the
 runtime should browse or search knowledge instead of injecting whole documents.
 
 Knowledge is not the same as user input. User input belongs to the execution
@@ -140,10 +140,11 @@ Toolboxes answer the question:
 Which capabilities should this type of agent normally have?
 ```
 
-Toolboxes are assigned to agents with an optional priority and active flag.
-Agent-level grants can explicitly allow or deny individual tools on top of those
-assignments. This keeps broad role setup simple while still allowing precise
-exceptions.
+Toolboxes are assigned to agents with an enabled flag. Ordering belongs to tools
+inside a toolbox (`ToolboxTool.display_order`), not to the agent assignment.
+Agent-level grants can explicitly allow or deny individual tools on top of
+those assignments. This keeps broad role setup simple while still allowing
+precise exceptions.
 
 ## Tool
 

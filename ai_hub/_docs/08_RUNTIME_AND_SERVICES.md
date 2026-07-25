@@ -12,9 +12,13 @@ Important modules:
 - `ai_hub.services.agent_runtime`
 - `ai_hub.services.execution_runner`
 - `ai_hub.services.execution_sessions`
+- `ai_hub.services.build_console`
+- `ai_hub.services.health`
 - `ai_hub.services.tools_runtime`
 - `ai_hub.services.tool_resolution`
+- `ai_hub.services.knowledge_ingestion`
 - `ai_hub.services.knowledge_retrieval`
+- `ai_hub.services.knowledge_tooling`
 - `ai_hub.services.admin_control_center`
 - `ai_hub.services.game_workspaces`
 - `ai_hub.services.game_goals`

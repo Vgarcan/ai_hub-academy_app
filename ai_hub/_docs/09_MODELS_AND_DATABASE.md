@@ -35,7 +35,6 @@ Important fields:
 - `base_url`: endpoint for local or compatible providers.
 - `api_key_env_var`: environment variable name for the secret.
 - `default_timeout`: request timeout in seconds.
-- `config`: provider-specific JSON configuration.
 - `is_active`: whether the provider can be used.
 
 Use this model for operational configuration only. Do not store raw API keys in
@@ -48,11 +47,14 @@ Defines a concrete model available through a provider.
 Important fields:
 
 - `provider`: parent provider.
-- `model_name`: exact provider model identifier. For a `training` (stub) provider it must be `training` or start with `training/`, enforced on save.
+- `model_name`: exact provider model identifier. For a `training` (stub)
+  provider it must be `training` or start with `training/`; model/Admin
+  validation and the Build Console enforce this convention.
 - `temperature_default`: default generation temperature (defaults to `0.70`).
 - `max_tokens_default`: default output budget.
 - `supports_tools`: whether this model/runtime can work with tools.
-- `is_active`: whether the model can be used (a model cannot be active under an inactive provider).
+- `is_active`: whether the model can be used. Validation rejects an active
+  model under an inactive provider.
 
 Operational note:
 
@@ -109,7 +111,6 @@ Important fields:
 
 - `name`: collection name.
 - `description`: what the collection teaches agents.
-- `tags`: optional classification.
 - `is_active`: whether the collection can be used.
 
 Use collections to attach a coherent body of context to one or more agents.
@@ -122,9 +123,9 @@ Important fields:
 
 - `collection`: parent collection.
 - `title`: document name.
-- `curated_text`: clean text injected into agent context.
+- `curated_text`: clean source text used to create retrievable chunks; only the
+  legacy eager-knowledge mode injects it directly into agent context.
 - `source_file`: optional uploaded source.
-- `source_url`: optional source reference.
 - `tags`: optional classification.
 - `language`: content language.
 - `status`: draft, active or archived state.
@@ -143,7 +144,8 @@ Stores one retrievable section of a knowledge document.
 Important fields:
 
 - `document`: parent knowledge document.
-- `chunk_index`: stable one-based position in the document.
+- `chunk_index`: stable position in the document; platform ingestion uses
+  one-based numbering.
 - `section_title`: optional human-readable heading.
 - `content`: chunk text returned by retrieval tools.
 - `token_estimate`: approximate size for prompt budgeting.
@@ -169,7 +171,6 @@ Important fields:
 - `input_contract`: expected input shape.
 - `output_contract`: expected output shape.
 - `execution_mode`: intended mode or behavior marker.
-- `config`: agent-specific runtime settings.
 - `is_active`: whether the agent can run.
 
 Agents are shared across workspaces. The admin should make their usage clear:
@@ -191,7 +192,6 @@ Important fields:
 - `entry_agent`: optional main agent reference.
 - `global_input_contract`: expected session input.
 - `global_output_contract`: expected final output.
-- `config`: pipeline-specific runtime settings.
 
 Pipelines should describe stable processes. If the next action depends on agent
 decisions, consider GAME instead.
@@ -205,12 +205,10 @@ Important fields:
 - `pipeline`: parent pipeline.
 - `agent`: agent that runs this step.
 - `order`: execution order.
-- `name`: optional step label.
 - `input_mapping`: context-to-agent mapping.
 - `output_mapping`: agent-to-context mapping.
 - `on_error`: stop, continue or fallback behavior.
 - `fallback_agent`: optional fallback agent.
-- `config`: step-specific settings.
 
 Rules:
 
@@ -227,7 +225,8 @@ Important fields:
 - `name`: unique workspace name.
 - `description`: human-readable purpose.
 - `is_active`: whether the workspace may later participate in scheduling.
-- `default_policy`: reserved workspace policy configuration.
+- `default_policy`: workspace safety, allow-list and budget configuration used
+  by GAME policy services.
 - `default_runtime_config`: defaults for future goal-bound sessions.
 
 A workspace owns goals but does not schedule or execute them by itself.
@@ -288,7 +287,8 @@ Defines one runtime execution.
 Important fields:
 
 - `runtime_kind`: orchestrator or GAME.
-- `runtime_mode`: sync, async or host-specific mode.
+- `runtime_mode`: sync, async or hybrid (hybrid is supported only by
+  Orchestrator; GAME rejects it).
 - `status`: pending, running, waiting_async, success, failed or cancelled.
 - `pipeline`: pipeline used by Orchestrator sessions.
 - `entry_agent`: entry agent used by GAME sessions.

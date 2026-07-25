@@ -285,7 +285,10 @@ The workspace shows:
 - recent GAME sessions,
 - recommended GAME agents.
 
-The AI Hub admin index also exposes `GAME workspaces`, `GAME goals`, and `GAME goal dependencies`. Use those model pages to define durable work and dependency relationships. They do not schedule or launch sessions automatically.
+The AI Hub admin index exposes `GAME workspaces` and `GAME goals`. Goal
+dependencies are a supporting table: manage them from Goal detail or open their
+changelist through **Show supporting tables**. These model pages define durable
+work and relationships; they do not schedule or launch sessions automatically.
 
 Goal lists can be filtered by workspace, status, due date, and calculated-priority range. Dependency records must connect goals inside the same workspace and are validated against duplicates and cycles.
 
@@ -300,7 +303,8 @@ Each workspace has a **Dashboard** link in its changelist row. The dashboard sho
 - recent execution sessions,
 - workspace policy — enabled agents, enabled actions, and budget.
 
-The dashboard requires staff access and the `view_executionsession` permission.
+The dashboard requires staff access, view/change permission for
+`GameWorkspace`, and `ai_hub.view_executionsession`.
 
 ### Goal detail enrichments
 
@@ -445,7 +449,12 @@ Use filters to separate:
 
 Goal-bound GAME sessions show their durable goal and can also be filtered by goal workspace. Legacy GAME sessions continue to show their standalone `goal_text` without requiring a goal record.
 
-Execution payload dashboards require both staff access and the `view_executionsession` permission. Running a session through the internal endpoint requires `change_executionsession`. Runtime-generated statuses, final contexts, outcome fingerprints, and step telemetry are read-only in Admin.
+Execution payload dashboards require both staff access and the
+`view_executionsession` permission. The bundled Academy dashboard applies the
+same recursive key-based redaction before rendering runtime JSON. Running a
+session through the internal endpoint requires `change_executionsession`.
+Runtime-generated statuses, final contexts, outcome fingerprints, and step
+telemetry are read-only in Admin.
 
 The session change page includes a timeline of step runs with:
 

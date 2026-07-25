@@ -13,7 +13,7 @@ python manage.py seed_academy_training_data
 python manage.py import_academy_docs
 
 # 4. (Optional) Seed Ollama GAME agents
-python manage.py seed_ollama_agents      # requires Ollama at 192.168.2.132:11434
+python manage.py seed_ollama_agents      # OLLAMA_BASE_URL or localhost:11434
 python manage.py run_doc_sync            # run the doc sync agent once
 
 # 5. Create admin user
@@ -44,9 +44,11 @@ Point to:
 
 Open http://localhost:8000/docs/
 
-**Say:** "All AI Hub documentation is stored in the database, imported from Markdown files. The team can update docs without redeploying."
+**Say:** "AI Hub publishes its versioned Markdown documentation into the
+database. After a documentation change is deployed, the importer updates only
+changed pages and keeps unchanged embeddings."
 
-- Show the page list (14 pages, 172 chunks)
+- Show the current page/chunk totals reported by `import_academy_docs`
 - Open "Core Concepts"
 - Show the sidebar navigation and section headings
 - Search for "GAME" — show results with source links
@@ -57,7 +59,7 @@ Open http://localhost:8000/docs/
 
 Open http://localhost:8000/assistant/
 
-**Say:** "The documentation assistant answers questions using the imported docs. Every answer goes through an AI Hub ExecutionSession — so every question is audited."
+**Say:** "The documentation assistant answers questions using the imported docs. In the seeded demo, each model-generated answer goes through an AI Hub ExecutionSession, so the run is auditable. If the agent is unavailable, the UI falls back to retrieved documentation text."
 
 Ask: "What is the difference between Orchestrator and GAME?"
 
@@ -66,7 +68,9 @@ Show:
 - The sources panel at the bottom
 - If logged in as staff, the Session link
 
-**Say:** "Notice that the assistant cites its sources and never invents features. This is by design — the system prompt enforces factual grounding."
+**Say:** "Notice that the UI shows the retrieved source sections. The assistant
+is instructed to stay grounded in those sources and falls back to extracted
+documentation when AI execution is unavailable."
 
 ---
 
@@ -74,7 +78,9 @@ Show:
 
 Open http://localhost:8000/admin/ai_hub/
 
-**Say:** "This is where AI Hub lives. Every component is configured here — no code changes needed."
+**Say:** "This is where the reusable AI Hub components are configured. Product
+integration still belongs in a host adapter, but providers, models, agents and
+workflows can be operated here."
 
 Show:
 - Provider configs: Academy Training Provider (training mode, no API key)
@@ -105,9 +111,10 @@ Open http://localhost:8000/admin/support_demo/supportticket/
 Show the ExecutionSession:
 - Status: success
 - Execution step runs: step 1 (Input Normalizer) and step 2 (Ticket Classifier)
-- Expand step 2 — show request_payload, response_payload, latency_ms
+- Expand step 2 — show the redacted request/response payloads and `latency_ms`
 
-**Say:** "This is full auditability. We know exactly what was sent to the model, what it returned, and how long it took. This is governance-grade tracing."
+**Say:** "This is inspectable tracing. The database retains the runtime audit,
+while operator views mask known-sensitive keys before displaying payloads."
 
 ---
 
@@ -138,7 +145,9 @@ Open a mission (e.g., "Build Your First Conveyor Belt"):
 
 > "What you've seen is a complete adoption platform built on top of AI Hub in Django:
 >
-> - **Auditability**: Every AI call is logged with full request/response telemetry. You know who ran what, when, with what data, and what the model returned.
+> - **Auditability**: Calls made through the AI Hub runners retain
+> request/response telemetry, timing and actor links. Operator surfaces redact
+> known-sensitive keys.
 >
 > - **Governance**: Input/output contracts prevent bad data from flowing between agents. Training mode lets teams onboard without API costs.
 >
@@ -175,5 +184,5 @@ Open a mission (e.g., "Build Your First Conveyor Belt"):
 ## Running tests
 
 ```bash
-python manage.py test --verbosity=2   # runs all 74 tests
+python manage.py test --verbosity=2
 ```

@@ -23,18 +23,22 @@ These features live in the `academy` Django app and use `ai_hub` for all AI exec
 
 ## Documentation Browser
 
-Imports Markdown files from `docs_source/` and stores them as `DocumentationPage` and `DocumentationChunk` records.
+Imports the reusable Markdown files from `ai_hub/_docs/` plus the
+Academy-specific files from `docs_source/`, and stores them as
+`DocumentationPage` and `DocumentationChunk` records.
 
 **Key models:**
 
 - `DocumentationSource` — groups pages by source directory or topic.
 - `DocumentationPage` — one imported Markdown file. Has a `slug` used for the URL.
-- `DocumentationChunk` — a section of a page (heading + body). Stores a `bge-m3` embedding vector for semantic search.
+- `DocumentationChunk` — a section of a page (heading + body). It can store an
+  optional embedding vector for semantic search; the command default is
+  `bge-m3:latest`.
 
 **Management commands:**
 
 ```bash
-# Import or re-import all Markdown files from docs_source/
+# Synchronize both configured Markdown roots
 python manage.py import_academy_docs
 
 # Generate semantic embeddings (requires Ollama with bge-m3:latest)
@@ -59,8 +63,12 @@ Submitting AI questions requires authentication by default, and questions are li
 1. User submits a question via `/assistant/ask/`.
 2. The service embeds the question using Ollama `bge-m3:latest` and runs a semantic search over `DocumentationChunk` records.
 3. If embeddings are missing or Ollama is unreachable, it falls back to keyword filtering on `search_text` and `heading`.
-4. Retrieved chunks are passed to an `ExecutionSession` that runs the `AI Hub Documentation Assistant` GAME agent.
-5. The agent generates an answer and the response is stored in `DocumentationChatMessage` alongside the retrieved chunks.
+4. When the configured `AI Hub Documentation Assistant` is available, retrieved
+   chunks are passed to a GAME `ExecutionSession`.
+5. The generated answer is stored in `DocumentationChatMessage` alongside the
+   retrieved chunks. If the agent is absent or execution fails, the message uses
+   a bounded extracted-text fallback and is not presented as a model-generated
+   run.
 
 **Key models:**
 
@@ -73,7 +81,12 @@ Submitting AI questions requires authentication by default, and questions are li
 - `academy.services.documentation_search.search_documentation()` — semantic or keyword search over chunks.
 - `academy.services.embeddings.get_embedding()` — calls Ollama `/api/embed` to generate a vector.
 
-**Agent:** `AI Hub Documentation Assistant` — seeded by `seed_ollama_agents`. Uses GAME runtime with up to 3 iterations and the `search_documentation` tool.
+**Agent:** `seed_academy_training_data` creates a deterministic Training version
+of `AI Hub Documentation Assistant`. Running `seed_ollama_agents` upgrades that
+seed-owned Training agent to Ollama and attaches the `search_documentation`
+context tool; existing custom non-Training agents are preserved unless
+`--force-update` is used. The assistant uses GAME with the default cap of three
+iterations.
 
 ---
 
@@ -105,7 +118,8 @@ Coding and concept exercises attached to tutorial modules. Users submit free-tex
 **Key models:**
 
 - `LabExercise` — one exercise with a prompt, rubric, and expected answer outline.
-- `LabAttempt` — one user submission. Stores the raw answer, AI score (0–100), and AI feedback.
+- `LabAttempt` — one user submission. Stores the raw answer, categorical score
+  (`pass`, `partial`, `fail` or `pending`) and AI feedback.
 
 **AI evaluation:** `academy.services.lab_evaluator.evaluate_lab_answer()` creates an `ExecutionSession` with the `Lab Exercise Evaluator` agent. The agent returns JSON with `score`, `feedback`, and `follow_up_question`. If no agent is configured, the attempt is saved with a `pending` score.
 
@@ -123,25 +137,27 @@ python manage.py seed_lab_exercises
 | Command | What it does | Requires Ollama |
 | --- | --- | --- |
 | `seed_academy_training_data` | Create training provider, models, agents, tutorial modules and missions | No |
-| `import_academy_docs` | Import or re-import Markdown files from `docs_source/` into the database | No |
+| `import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database | No |
 | `embed_docs` | Generate semantic embeddings for all active documentation chunks | Yes (`bge-m3:latest`) |
 | `embed_docs --force` | Re-generate embeddings even for chunks that already have one | Yes (`bge-m3:latest`) |
-| `seed_lab_exercises` | Seed lab exercises for tutorial modules | No |
+| `seed_lab_exercises` | Seed lab exercises; add `--create-evaluator` after configuring a non-Training model to enable AI scoring | No |
 | `seed_ollama_agents` | Set up Ollama provider, LLM model, embedding model, and GAME agents | Yes (`qwen3:8b`, `bge-m3:latest`) |
-| `run_doc_sync` | Run the Documentation Sync GAME agent once (smoke test) | Yes (`qwen3:8b`) |
+| `run_doc_sync` | Synchronize both documentation roots through the Documentation Sync GAME agent (smoke test) | Yes (`qwen3:8b`) |
 
 ### Full Setup Order
 
 ```bash
 python manage.py seed_academy_training_data   # tutorials, training provider
 python manage.py import_academy_docs          # docs into database
-python manage.py embed_docs --model bge-m3:latest  # semantic search
-python manage.py seed_lab_exercises           # lab exercises
 python manage.py seed_ollama_agents           # Ollama provider + agents
+python manage.py embed_docs --model bge-m3:latest  # semantic search
+python manage.py seed_lab_exercises --create-evaluator  # labs + AI evaluator
 python manage.py run_doc_sync                 # smoke test
 ```
 
-`setup_dev.py` runs the first two automatically. The rest require Ollama.
+`setup_dev.py` runs the first two automatically. Ollama is required only for
+the Ollama-backed agent and embedding commands. Labs can be seeded without it;
+`--create-evaluator` needs any configured non-Training model.
 
 ---
 
@@ -179,8 +195,13 @@ If the assistant gives answers that miss the point, semantic search is probably 
 ```bash
 python manage.py shell -c "
 from academy.models import DocumentationChunk
-total = DocumentationChunk.objects.count()
-embedded = DocumentationChunk.objects.exclude(embedding__isnull=True).count()
+chunks = DocumentationChunk.objects.filter(
+    is_active=True,
+    page__is_active=True,
+    page__source__is_active=True,
+)
+total = chunks.count()
+embedded = chunks.exclude(embedding__isnull=True).count()
 print(f'{embedded}/{total} chunks have embeddings')
 "
 ```
@@ -193,7 +214,10 @@ ollama pull bge-m3     # pull if missing
 python manage.py embed_docs --model bge-m3:latest
 ```
 
-Run `embed_docs` once after `import_academy_docs` and again after any bulk update to the documentation source files. Use `embed_docs --force` to refresh existing embeddings.
+Unchanged imports preserve existing embeddings. Run `embed_docs` after importing
+new or changed pages; only chunks without embeddings are processed. Use
+`embed_docs --force` only when the embedding model or already-embedded content
+must be refreshed.
 
 ### Documentation Chat Falls Back To Keyword Search At Runtime
 

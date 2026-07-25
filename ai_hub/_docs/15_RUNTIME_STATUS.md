@@ -186,9 +186,9 @@ path changes.
   required PostgreSQL locking semantics.
 - The host accepts `DATABASE_URL` or discrete `POSTGRES_*` settings and ships
   Psycopg 3.
-- CI has distinct SQLite and PostgreSQL 16 jobs. The PostgreSQL job runs the
-  complete suite, including all three concurrency tests.
-- A local PostgreSQL 16.14 validation completed 377/377 tests without skips.
+- CI runs SQLite against Django 5.2 LTS and the current supported Django line,
+  plus a PostgreSQL 16 job. The PostgreSQL job runs the complete suite,
+  including all three concurrency tests.
 
 ### TARGET
 

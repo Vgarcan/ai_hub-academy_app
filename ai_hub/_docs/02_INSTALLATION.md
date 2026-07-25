@@ -154,11 +154,14 @@ Confirm that these files are served:
 ```text
 ai_hub/admin_control_center.css
 ai_hub/admin_control_center.js
+ai_hub/CSS/json-editor.css
+ai_hub/JS/json-editor.js
 ```
 
-(Both live in `ai_hub/static/ai_hub/` and are the single CSS/JS bundles that
-power the AI Hub home, Control Center, workspaces, Build Console and the composed
-change pages.)
+The control-center files live in `ai_hub/static/ai_hub/` and are the single
+CSS/JS bundles that power the AI Hub home, Control Center, workspaces, Build
+Console and composed change pages. The JSON editor assets are loaded by the JSON
+form widget on pages that need them.
 
 If the page renders without the guided UI styling, the most likely cause is a
 static files deployment issue.
@@ -201,7 +204,6 @@ Open:
 Recommended fields:
 
 - `Provider`: the active provider.
-- `Display name`: a friendly name for users.
 - `Model name`: the exact provider model identifier.
 - `Temperature default`: low for structured outputs, higher for creative text.
 - `Max tokens default`: large enough for the expected output contract.
@@ -211,7 +213,6 @@ Recommended fields:
 Example:
 
 ```text
-Display name: Qwen 3 8B
 Model name: qwen3:8b
 Temperature default: 0.2
 Max tokens default: 12000
@@ -284,7 +285,9 @@ The separation is a UX and operating-model separation, not a separate database.
 5. Create a GAME session with a small goal.
 6. Run the session.
 7. Confirm that iterations appear as step runs.
-8. Confirm that the session ends as success, failed, waiting or stopped.
+8. Confirm that the session ends as `success`, `failed`, `waiting_async` or
+   `cancelled`; reaching the iteration budget normally produces a successful
+   execution with an incomplete goal outcome.
 
 ## Checks
 

@@ -123,6 +123,29 @@ Examples appear in fields such as:
 
 These examples are intentionally small. They should teach shape, not become huge templates.
 
+### Safe JSON editing
+
+Editable JSON fields in `ai_hub` use a reusable, progressively enhanced
+textarea:
+
+- Django remains the authoritative parser and rejects invalid JSON on submit.
+- The expected top-level shape is inferred from the model default: fields with
+  `default=dict` require an object and fields with `default=list` require an
+  array.
+- Leaving an optional field empty saves the matching empty container (`{}` or
+  `[]`) instead of a database `null`.
+- The browser reports syntax/root-shape errors while typing and provides
+  **Format JSON** and **Compact** controls.
+- The original text remains available when server validation fails, so an
+  operator can correct it.
+- The editor uses local AI Hub assets and saving still works without JavaScript.
+
+The editor is for configuration, contracts and mappings. Runtime-generated goal
+results, plan revision history, session contexts, execution payloads and
+approval records remain read-only and are rendered through the shared recursive
+redaction layer. Do not paste credentials into configuration JSON; reference
+environment-managed secrets instead.
+
 ## Composed change pages
 
 The most important entities open as **composed change pages**: a header, a tab bar, and an at-a-glance **Overview** tab in front of the editable **Configuration** form. Tabs progressively enhance — without JavaScript the panels stack; with it they group, and on a validation error the page lands on the Configuration tab so the errors are visible.

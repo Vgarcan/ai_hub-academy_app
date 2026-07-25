@@ -1,0 +1,59 @@
+.ai-json-editor-shell {
+  box-sizing: border-box;
+  max-width: 100%;
+  width: min(100%, 72rem);
+}
+
+.ai-json-editor-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.ai-json-editor-button {
+  cursor: pointer;
+  padding: 0.35rem 0.7rem;
+}
+
+.ai-json-editor-status {
+  color: var(--body-quiet-color, #666);
+  font-size: 0.8rem;
+  min-height: 1.2rem;
+}
+
+.ai-json-editor-status[data-status="valid"] {
+  color: var(--message-success-fg, #087c39);
+}
+
+.ai-json-editor-status[data-status="invalid"] {
+  color: var(--error-fg, #ba2121);
+  font-weight: 600;
+}
+
+textarea.ai-hub-json-editor {
+  box-sizing: border-box;
+  font-family: var(--font-family-monospace, ui-monospace, SFMono-Regular, Consolas, monospace);
+  line-height: 1.45;
+  max-width: 100%;
+  min-height: 11rem;
+  resize: vertical;
+  tab-size: 2;
+  width: 100%;
+}
+
+textarea.ai-hub-json-editor.ai-json-editor-invalid {
+  border-color: var(--error-fg, #ba2121);
+  box-shadow: 0 0 0 1px var(--error-fg, #ba2121);
+}
+
+@media (max-width: 767px) {
+  .ai-json-editor-shell {
+    width: 100%;
+  }
+
+  textarea.ai-hub-json-editor {
+    min-height: 9rem;
+  }
+}

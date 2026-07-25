@@ -64,14 +64,17 @@ If a feature only helps one host project, it probably belongs in that host app.
 
 The admin is the main product surface.
 
-Delivered: workspace-specific GAME dashboards, goal-detail enrichment panels, readable scheduler/outcome summaries, the five-area information architecture and cockpit home, the Build Console guided setup wizard, the Operations Inbox, and composed tabbed change pages with at-a-glance overviews.
+Delivered: workspace-specific GAME dashboards, goal-detail enrichment panels,
+readable scheduler/outcome summaries, the five-area information architecture
+and cockpit home, the Build Console guided setup wizard, the Operations Inbox,
+composed tabbed change pages with at-a-glance overviews, and safe progressive
+JSON editing with server-side root-shape validation.
 
 Still recommended:
 
 - More guided setup flows beyond the Build Console (e.g. an editing/clone wizard for existing objects).
 - Better empty states.
 - Inline examples for prompts and contracts (expand coverage).
-- Safer JSON editing.
 - Responsive improvements for all model pages.
 
 Target outcome:

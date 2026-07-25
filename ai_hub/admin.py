@@ -5,7 +5,7 @@ from django import forms
 from django.contrib import admin
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Count, Q
 from django.http import HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
 from django.template.response import TemplateResponse
@@ -13,6 +13,11 @@ from django.urls import path, reverse
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 
+from .admin_json import (
+    SafeAdminJSONField,
+    SafeAdminJSONWidget,
+    expected_json_container,
+)
 from .models import (
     AgentProfile,
     AgentToolGrant,
@@ -116,6 +121,15 @@ class AIHubFormHelpMixin:
     ai_hub_field_guidance = {}
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if isinstance(db_field, models.JSONField):
+            expected_type = expected_json_container(db_field)
+            kwargs.setdefault("form_class", SafeAdminJSONField)
+            kwargs.setdefault("expected_type", expected_type)
+            kwargs.setdefault(
+                "widget",
+                SafeAdminJSONWidget(expected_type=expected_type),
+            )
+
         formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
         guidance = self.ai_hub_field_guidance.get(db_field.name, {})
         if not guidance:
@@ -1907,17 +1921,26 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
         "status",
         "calculated_priority",
         "queued_at",
-        "result",
-        "transition_metadata",
+        "result_redacted",
+        "transition_metadata_redacted",
         "created_at",
         "updated_at",
     )
+    exclude = ("result", "transition_metadata")
     actions = (
         "queue_selected_goals",
         "cancel_selected_goals",
         "reopen_selected_goals",
         "resume_selected_goals",
     )
+
+    @admin.display(description=_("Result (redacted)"))
+    def result_redacted(self, obj):
+        return _render_redacted_json(obj.result)
+
+    @admin.display(description=_("Transition metadata (redacted)"))
+    def transition_metadata_redacted(self, obj):
+        return _render_redacted_json(obj.transition_metadata)
 
     def has_add_permission(self, request):
         from .services.game_feature_flags import is_game_feature_enabled
@@ -2831,7 +2854,7 @@ class GameMemoryEntryAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.Mo
     list_filter = ("scope_type", "workspace", "goal__workspace")
     search_fields = ("content", "workspace__name", "goal__title")
     autocomplete_fields = ("workspace", "goal", "session")
-    readonly_fields = ("created_at",)
+    readonly_fields = ("created_at", "is_active_display")
     fieldsets = (
         ("4.10 Memory entry", {
             "fields": ("workspace", "goal", "session", "scope_type", "is_active_display"),
@@ -2855,8 +2878,16 @@ class GameMemoryEntryAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.Mo
     def is_active_display(self, obj):
         from django.utils import timezone
         if obj.expires_at and obj.expires_at <= timezone.now():
-            return format_html('<span style="color:red">Expired</span>')
-        return format_html('<span style="color:green">Active</span>')
+            return format_html(
+                '<span style="color:{}">{}</span>',
+                "red",
+                _("Expired"),
+            )
+        return format_html(
+            '<span style="color:{}">{}</span>',
+            "green",
+            _("Active"),
+        )
 
 
 @admin.register(GameContinuationRequest)
@@ -3133,8 +3164,18 @@ class GameGoalPlanAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.Model
     list_display = ("id", "goal", "status", "version", "created_at", "updated_at")
     list_filter = ("status",)
     search_fields = ("goal__title",)
-    readonly_fields = ("version", "revision_history", "created_at", "updated_at")
+    readonly_fields = (
+        "version",
+        "revision_history_redacted",
+        "created_at",
+        "updated_at",
+    )
+    exclude = ("revision_history",)
     inlines = [GameGoalPlanStepInline]
+
+    @admin.display(description=_("Revision history (redacted)"))
+    def revision_history_redacted(self, obj):
+        return _render_redacted_json(obj.revision_history)
 
     def get_readonly_fields(self, request, obj=None):
         fields = list(super().get_readonly_fields(request, obj))

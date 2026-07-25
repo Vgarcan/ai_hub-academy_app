@@ -9,6 +9,17 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Safe Admin JSON editing
+
+- Added a dependency-free, progressively enhanced JSON editor to every editable
+  `ai_hub` Admin JSON field, including pipeline/document inlines.
+- Kept Django validation authoritative while adding live syntax/root-shape
+  feedback, formatting, compacting and accessible status output.
+- Inferred object/array contracts from `JSONField` defaults and normalized
+  optional blanks to `{}` or `[]`.
+- Added exhaustive Admin coverage so future editable AI Hub JSON fields must use
+  the safe field/widget pair.
+
 #### Retrieval-first Knowledge stabilization
 
 - Made retrieval-first the default and retained eager document injection behind
@@ -375,6 +386,14 @@ Host-project features should be documented in the host project, not here.
   to test, monitor and recover from when possible.
 
 ### Fixed
+
+#### Admin JSON safety audit
+
+- Fixed the `GameMemoryEntry` change page: its computed active-state field was
+  not declared read-only, and its zero-argument `format_html()` calls failed on
+  Django 6.
+- Replaced raw goal result/transition JSON and plan revision history with
+  read-only, recursively redacted renderers.
 
 #### Stabilization foundations P2
 

@@ -2,7 +2,11 @@
 
 This folder (`docs_source/`) holds the **academy host project's own** documentation.
 
-The reusable platform docs (`01`–`14`) are **not duplicated here** — they live in the single source of truth at [`ai_hub/_docs/`](../ai_hub/_docs/README.md). The documentation importer (`import_academy_docs`) publishes the platform docs from `ai_hub/_docs/` and the academy docs from this folder, so the academy site shows the full set without two copies drifting apart.
+The reusable platform docs are **not duplicated here** — they live in the single
+source of truth at [`ai_hub/_docs/`](../ai_hub/_docs/README.md). The
+`import_academy_docs` command and Documentation Sync agent publish the platform
+docs from `ai_hub/_docs/` plus the Academy docs from this folder, so the site
+shows the full set without two copies drifting apart.
 
 ## What lives here
 
@@ -25,6 +29,8 @@ The reusable platform docs (`01`–`14`) are **not duplicated here** — they li
 12. `12_TROUBLESHOOTING` — common failures and fixes
 13. `13_ROADMAP` — recommended next work
 14. `14_CHANGELOG` — notable changes
+15. `15_RUNTIME_STATUS` — current, legacy, target and not-implemented paths
+16. `16_BUILD_CONSOLE` — guided GAME/Orchestrator creation wizard
 
 ## Documentation Rules
 

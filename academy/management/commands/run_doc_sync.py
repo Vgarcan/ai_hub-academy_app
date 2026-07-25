@@ -16,7 +16,7 @@ from ai_hub.services.execution_runner import run_execution_session
 
 
 class Command(BaseCommand):
-    help = "Run the Documentation Sync GAME agent to sync docs_source/ → database."
+    help = "Run the Documentation Sync GAME agent for all configured documentation roots."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -47,8 +47,9 @@ class Command(BaseCommand):
             runtime_kind=ExecutionSession.RuntimeKind.GAME,
             entry_agent=agent,
             goal_text=(
-                "Synchronize the documentation database with the Markdown source files. "
-                "Check all .md files, update any that have changed, and report what was done."
+                "Synchronize the documentation database with the configured reusable "
+                "AI Hub and Academy Markdown roots. Update changed files and report "
+                "what was done."
             ),
             initial_context={},
             # Host-specific compatibility: doc sync is an explicitly trusted

@@ -19,6 +19,8 @@ from ai_hub.models import (
     ProviderConfig,
     ToolDefinition,
 )
+from ai_hub.services.admin_control_center import validate_provider_health_endpoint
+from ai_hub.services.game_operational_ux import redact_payload, redact_text
 
 
 @staff_member_required
@@ -154,8 +156,8 @@ def session_detail(request, pk):
 
     step_data = []
     for step in step_runs:
-        obs = step.observation_payload or {}
-        resp = step.response_payload or {}
+        obs = redact_payload(step.observation_payload or {})
+        resp = redact_payload(step.response_payload or {})
         decision = obs.get("decision", {})
         tools_output = resp.get("tools") or {}
         llm = resp.get("llm") or {}
@@ -165,23 +167,29 @@ def session_detail(request, pk):
                 "action": obs.get("action", ""),
                 "complete": obs.get("complete", False),
                 "final_answer": obs.get("final_answer", ""),
-                "message": decision.get("message", ""),
+                "message": redact_text(decision.get("message", "")),
                 "tools_output": tools_output,
-                "llm_content": llm.get("content", ""),
+                "llm_content": _redact_runtime_value(llm.get("content", "")),
                 "llm_model": llm.get("model", ""),
                 "contract_valid": obs.get("contract_valid", True),
                 "contract_errors": obs.get("contract_errors", []),
                 "request_json": (
-                    json.dumps(step.request_payload, indent=2, default=str)
+                    json.dumps(
+                        redact_payload(step.request_payload),
+                        indent=2,
+                        default=str,
+                    )
                     if step.request_payload
                     else ""
                 ),
             }
         )
 
-    final_answer = (session.final_context or {}).get("final_answer", "")
+    final_answer = redact_text(
+        (session.final_context or {}).get("final_answer", "")
+    )
     if not final_answer and step_data:
-        final_answer = step_data[-1].get("final_answer", "")
+        final_answer = redact_text(step_data[-1].get("final_answer", ""))
 
     return render(
         request,
@@ -190,6 +198,9 @@ def session_detail(request, pk):
             "session": session,
             "step_data": step_data,
             "final_answer": final_answer,
+            "goal_text_redacted": redact_text(session.goal_text),
+            "error_detail_redacted": redact_text(session.error_detail),
+            "initial_context_redacted": redact_payload(session.initial_context),
         },
     )
 
@@ -219,37 +230,55 @@ def api_status(request):
             entry["status"] = "ready"
 
         elif provider.provider_type == ProviderConfig.ProviderType.OLLAMA and provider.base_url:
-            url = f"{provider.base_url.rstrip('/')}/api/tags"
-            try:
-                t0 = time.monotonic()
-                req = urllib.request.Request(url, headers={"Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=4) as resp:
-                    entry["latency_ms"] = round((time.monotonic() - t0) * 1000)
-                    data = json.loads(resp.read())
-                entry["status"] = "connected"
-                for m in data.get("models", []):
-                    details = m.get("details", {})
-                    caps = m.get("capabilities") or _infer_capabilities(
-                        m.get("name", ""),
-                        details.get("families") or [details.get("family", "")],
+            endpoint_ok, endpoint_reason = validate_provider_health_endpoint(
+                provider.base_url
+            )
+            if not endpoint_ok:
+                entry["status"] = "error"
+                entry["error"] = endpoint_reason
+            else:
+                url = f"{provider.base_url.rstrip('/')}/api/tags"
+                try:
+                    t0 = time.monotonic()
+                    req = urllib.request.Request(
+                        url,
+                        headers={"Accept": "application/json"},
                     )
-                    size_bytes = m.get("size", 0)
-                    entry["live_models"].append({
-                        "name": m.get("name", ""),
-                        "size": _fmt_size(size_bytes),
-                        "params": details.get("parameter_size", ""),
-                        "quant": details.get("quantization_level", ""),
-                        "families": ", ".join(
-                            f for f in (details.get("families") or [details.get("family", "")]) if f
-                        ),
-                        "capabilities": caps,
-                    })
-            except urllib.error.URLError as exc:
-                entry["status"] = "error"
-                entry["error"] = str(exc.reason)
-            except Exception as exc:
-                entry["status"] = "error"
-                entry["error"] = str(exc)
+                    with urllib.request.urlopen(req, timeout=4) as resp:
+                        entry["latency_ms"] = round(
+                            (time.monotonic() - t0) * 1000
+                        )
+                        data = json.loads(resp.read())
+                    entry["status"] = "connected"
+                    for m in data.get("models", []):
+                        details = m.get("details", {})
+                        caps = m.get("capabilities") or _infer_capabilities(
+                            m.get("name", ""),
+                            details.get("families")
+                            or [details.get("family", "")],
+                        )
+                        size_bytes = m.get("size", 0)
+                        entry["live_models"].append({
+                            "name": m.get("name", ""),
+                            "size": _fmt_size(size_bytes),
+                            "params": details.get("parameter_size", ""),
+                            "quant": details.get("quantization_level", ""),
+                            "families": ", ".join(
+                                family
+                                for family in (
+                                    details.get("families")
+                                    or [details.get("family", "")]
+                                )
+                                if family
+                            ),
+                            "capabilities": caps,
+                        })
+                except urllib.error.URLError as exc:
+                    entry["status"] = "error"
+                    entry["error"] = redact_text(exc.reason)
+                except Exception as exc:
+                    entry["status"] = "error"
+                    entry["error"] = redact_text(exc)
 
         else:
             key_var = provider.api_key_env_var or ""
@@ -267,6 +296,19 @@ def api_status(request):
 
 
 # ── helpers (not views) ────────────────────────────────────
+
+
+def _redact_runtime_value(value):
+    """Redact structured JSON strings as well as ordinary runtime text."""
+    if isinstance(value, (dict, list)):
+        return redact_payload(value)
+    if isinstance(value, str):
+        try:
+            return redact_payload(json.loads(value))
+        except (json.JSONDecodeError, TypeError):
+            return redact_text(value)
+    return value
+
 
 def _fmt_size(size_bytes):
     if not size_bytes:

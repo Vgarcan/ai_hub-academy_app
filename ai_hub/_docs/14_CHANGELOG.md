@@ -197,10 +197,12 @@ Host-project features should be documented in the host project, not here.
 #### Feature flags and release gates (Phase 12)
 
 - `game_feature_flags` service — `require_game_feature(flag_name)` raises
-  `ValidationError` when the named Django setting is explicitly `False`; defaults
-  to `True` when the setting is absent.
-- Six GAME kill-switch flags in `_core/settings.py`, each overrideable via env var
-  and defaulting to `True` (all phases tested):
+  `ValidationError` when the named Django setting is disabled. The initial
+  rollout was later hardened to fail closed when a setting is absent (see
+  **Post-Phase-12 stabilization** below).
+- Six GAME kill-switch flags in `_core/settings.py`, each overrideable via an
+  environment variable. The bundled host follows `DEBUG`: enabled in
+  development and disabled in production unless explicitly opted in:
   - `AI_HUB_GAME_GOALS_ENABLED` — gates `create_goal`.
   - `AI_HUB_GAME_SCHEDULER_ENABLED` — gates `claim_next_goal`.
   - `AI_HUB_GAME_ACTION_DISPATCH_ENABLED` — gates `execute_game_action`.
@@ -387,6 +389,30 @@ Host-project features should be documented in the host project, not here.
 
 ### Fixed
 
+#### Documentation truth audit
+
+- Audited the complete tracked documentation set against settings, model
+  metadata, routes, management commands, runtime services, Admin behavior and
+  CI; removed stale fields, counts, paths and contradictory status notes.
+- Unified Academy documentation synchronization across `ai_hub/_docs/` and
+  `docs_source/`, deactivates removed pages on complete syncs, and preserves
+  chunks/embeddings when content is unchanged.
+- Made `seed_ollama_agents` upgrade the seed-owned Training documentation
+  assistant to Ollama while preserving custom non-Training agents.
+- Build Console now rejects invalid contract/mapping JSON and malformed runtime
+  budgets instead of silently replacing values or raising a server error. It
+  also rejects tampered provider types, invalid Training model names,
+  out-of-range temperatures and inactive reused engines/agents.
+- Documentation search, embedding and browser views now exclude pages whose
+  page or parent source is inactive, so a complete sync cannot leave retired
+  content visible through search.
+- The setup summary no longer prints a newly generated but unused password when
+  the `admin` user already exists.
+- The Academy dashboard now redacts known-sensitive runtime fields and shares
+  the provider-health endpoint allow-list used by Control Center.
+- CI now exercises the full SQLite suite on Django 5.2 LTS and the current
+  supported Django line, in addition to PostgreSQL 16.
+
 #### Admin JSON safety audit
 
 - Fixed the `GameMemoryEntry` change page: its computed active-state field was
@@ -507,7 +533,7 @@ Host-project features should be documented in the host project, not here.
 Two workspaces, one shared AI foundation.
 ```
 
-- Supported runtime baseline after Phases 00–05 audit:
+- Supported runtime baseline:
 
 ```text
 Python  >= 3.12
@@ -516,10 +542,10 @@ SQLite  — local development and single-worker behaviour only
 PostgreSQL — required before running multiple scheduler workers concurrently
 ```
 
-- GAME domain models (`GameWorkspace`, `GameGoal`, `GameGoalDependency`) and the
-  scheduler are available once migrations `0001`–`0005` are applied.  No Phase 06
-  features (action dispatcher, `GameActionDefinition`, `GameActionRun`) are
-  present in this release.
+- The current migration line is `0001`–`0019`. It includes durable GAME goals,
+  action dispatch, memory, continuation/approval, policy, plans/delegation,
+  toolboxes/tool audit, knowledge chunks, the Admin information architecture and
+  retrieval-first foundations.
 - `reconcile_goal_outcomes()` exists as a service but is not yet a scheduled job.
   Operators should call it manually or via a management command before running
   concurrent background workers.

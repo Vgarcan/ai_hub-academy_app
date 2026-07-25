@@ -6,13 +6,17 @@ All views are read-only, so we test:
 - Correct templates
 - Status filter validation
 """
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.core.cache import cache
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from ai_hub.models import (
     AgentProfile,
     ExecutionSession,
+    ExecutionStepRun,
     ModelConfig,
     PipelineDefinition,
     PipelineStep,
@@ -140,6 +144,45 @@ class DashboardViewTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, "Test goal")
 
+    def test_session_detail_redacts_sensitive_runtime_payloads(self):
+        self.session.initial_context = {
+            "api_key": "initial-secret",
+            "safe": "visible",
+        }
+        self.session.error_detail = "password=error-secret"
+        self.session.save(update_fields=["initial_context", "error_detail"])
+        ExecutionStepRun.objects.create(
+            session=self.session,
+            order=1,
+            agent=self.agent,
+            status=ExecutionStepRun.Status.SUCCESS,
+            request_payload={"access_token": "request-secret"},
+            response_payload={
+                "tools": {"lookup": {"private_key": "tool-secret"}},
+                "llm": {
+                    "content": (
+                        '{"answer": "ok", "authorization": "Bearer llm-secret"}'
+                    )
+                },
+            },
+        )
+
+        response = self.client.get(
+            reverse("dashboard_session_detail", args=[self.session.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "***REDACTED***")
+        self.assertContains(response, "visible")
+        for secret in (
+            "initial-secret",
+            "error-secret",
+            "request-secret",
+            "tool-secret",
+            "llm-secret",
+        ):
+            self.assertNotContains(response, secret)
+
     def test_pipeline_detail_200(self):
         pipeline = PipelineDefinition.objects.create(name="Test Pipeline")
         r = self.client.get(reverse("dashboard_pipeline_detail", args=[pipeline.pk]))
@@ -176,6 +219,25 @@ class DashboardViewTests(TestCase):
         self.assertEqual(r.status_code, 200)
         # Invalid status is ignored, session still visible
         self.assertContains(r, f'href="/dashboard/sessions/{self.session.pk}/"')
+
+    @override_settings(AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS=("localhost",))
+    @patch("dashboard.views.urllib.request.urlopen")
+    def test_api_status_refuses_disallowed_ollama_host(self, mocked_urlopen):
+        ProviderConfig.objects.create(
+            name="Untrusted Ollama",
+            provider_type=ProviderConfig.ProviderType.OLLAMA,
+            base_url="http://metadata.internal:11434",
+        )
+        cache.clear()
+
+        response = self.client.get(reverse("dashboard_api_status"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            "is not in AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS",
+        )
+        mocked_urlopen.assert_not_called()
 
 
 class GetItemFilterTest(TestCase):

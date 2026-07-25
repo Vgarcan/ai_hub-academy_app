@@ -120,7 +120,8 @@ Test:
 - Invalid primitive types.
 - Invalid nested objects.
 - Empty payloads.
-- Extra keys when strict mode is expected.
+- Extra keys where a host-defined contract or adapter explicitly rejects them
+  (the reusable contract validator itself allows extra keys).
 - Large payloads that exceed model output assumptions.
 
 Example failing payload:
@@ -386,10 +387,11 @@ Admin mutation-bypass and payload-redaction regressions are green.
 - Use factories or fixtures for provider/model/agent setup.
 - Keep host-specific fixtures outside AI Hub.
 
-The bundled CI has separate SQLite and PostgreSQL 16 jobs. The PostgreSQL job
+The bundled CI runs the full SQLite suite against both the minimum Django 5.2
+LTS line and the current supported Django line. A separate PostgreSQL 16 job
 runs the complete suite, including concurrent scheduler claim, approval review
-and delegation-budget reservation. A local PostgreSQL 16.14 run completed all
-377 tests without skips during the stabilization audit.
+and delegation-budget reservation. Test totals are intentionally not frozen in
+this guide; use the summary printed by the current suite.
 
 ## Before Shipping
 

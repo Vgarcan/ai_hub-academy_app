@@ -358,7 +358,8 @@ Each workspace row in the GAME workspaces changelist includes a **Dashboard** li
 - recent action runs,
 - workspace policy panel — enabled agents, enabled actions, and budget.
 
-Dashboard access requires staff status and the `view_executionsession` permission.
+Dashboard access requires staff status, view/change permission for the
+`GameWorkspace` Admin and `ai_hub.view_executionsession`.
 
 ### Goal detail enrichments
 

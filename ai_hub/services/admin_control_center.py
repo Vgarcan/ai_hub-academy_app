@@ -242,7 +242,7 @@ def _provider_health_cache_key(provider: ProviderConfig) -> str:
     return f"ai_hub:provider_health:{provider.pk}:{updated_at}"
 
 
-def _validate_health_endpoint(base_url: str) -> tuple[bool, str]:
+def validate_provider_health_endpoint(base_url: str) -> tuple[bool, str]:
     """Trusted-endpoint policy for the live provider-health check.
 
     The base_url is admin-controlled, so the live check is a small SSRF surface.
@@ -275,7 +275,7 @@ def _fetch_provider_health(provider: ProviderConfig) -> ProviderHealth:
     if not provider.base_url:
         return ProviderHealth("warning", "Ollama provider has no base_url.", set())
 
-    endpoint_ok, endpoint_reason = _validate_health_endpoint(provider.base_url)
+    endpoint_ok, endpoint_reason = validate_provider_health_endpoint(provider.base_url)
     if not endpoint_ok:
         return ProviderHealth("warning", endpoint_reason, set())
 

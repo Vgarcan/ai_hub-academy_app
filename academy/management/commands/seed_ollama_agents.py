@@ -21,8 +21,9 @@ You are the Documentation Sync Agent for AI Hub Academy.
 
 Your goal: ensure the documentation database is synchronized with the Markdown source files.
 
-You have one tool called `sync_all_docs`.  It scans every .md file in docs_source/,
-compares content with the database, and syncs anything that changed or is missing.
+You have one tool called `sync_all_docs`. It scans the configured reusable AI
+Hub and Academy Markdown roots, compares them with the database, and syncs
+anything that changed or is missing.
 
 The result of the tool is available in:
   tool_results.sync_all_docs.checked     — total files found
@@ -270,7 +271,12 @@ class Command(BaseCommand):
                 "is_active": True,
             },
         )
-        if not created and force:
+        existing_uses_training = (
+            not created
+            and assistant_agent.model_config.provider.provider_type
+            == ProviderConfig.ProviderType.TRAINING
+        )
+        if not created and (force or existing_uses_training):
             assistant_agent.system_prompt = DOC_ASSISTANT_SYSTEM_PROMPT
             assistant_agent.model_config = chat_model
             assistant_agent.input_contract = {"required": ["goal_text"]}
@@ -287,5 +293,5 @@ class Command(BaseCommand):
             "\nOllama POC agents ready.\n"
             "Next steps:\n"
             "  python manage.py run_doc_sync          # run the doc-sync GAME agent once\n"
-            "  python manage.py runserver             # then open /chat/ to test the assistant\n"
+            "  python manage.py runserver             # then open /assistant/ to test the assistant\n"
         ))

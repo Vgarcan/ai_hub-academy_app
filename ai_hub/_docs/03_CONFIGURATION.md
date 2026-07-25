@@ -96,14 +96,7 @@ Common fields:
 - `supports_tools`
 - `is_active`
 
-Examples:
-
-```text
-model_name = gpt-4.1-mini
-temperature_default = 0.20
-max_tokens_default = 1200
-supports_tools = true
-```
+Example for the bundled Ollama adapter:
 
 ```text
 model_name = ollama/qwen3:8b
@@ -112,11 +105,15 @@ max_tokens_default = 4000
 supports_tools = false
 ```
 
-Use lower temperatures for structured extraction and contract-heavy JSON. Use higher temperatures for style, rewriting, and reflective text. If you leave `temperature_default` unset it defaults to `0.70`.
+Use the exact identifier expected by the selected provider adapter; hosted
+provider model catalogs change independently of AI Hub. Use lower temperatures
+for structured extraction and contract-heavy JSON. Use higher temperatures for
+style, rewriting, and reflective text. If you leave `temperature_default` unset
+it defaults to `0.70`.
 
 ### Training (stub) provider
 
-The built-in `training` provider is a deterministic stub that returns canned responses without calling any external API — useful for local development and tests with no API key. Its router only recognises a model whose `model_name` is exactly `training` or starts with `training/` (for example `training/assistant`). Any other name on a training provider is rejected at save time with a clear validation error, because it would otherwise fall through to the real client and fail at runtime.
+The built-in `training` provider is a deterministic stub that returns canned responses without calling any external API — useful for local development and tests with no API key. Its router only recognises a model whose `model_name` is exactly `training` or starts with `training/` (for example `training/assistant`). Model/Admin validation and the Build Console reject other names on a training provider, because they would otherwise fall through to the real client and fail at runtime. Direct ORM code must call `full_clean()` before saving configuration records.
 
 ## Agent Configuration
 
@@ -306,9 +303,10 @@ still depends on injected document bodies.
 
 ## Provider Health Check Policy
 
-The Control Center can run a live health probe against Ollama providers
-(`GET <base_url>/api/tags`). Because the provider `base_url` is admin-controlled,
-this probe is a small SSRF surface and is governed by a trusted-endpoint policy:
+The Control Center and the Academy dashboard status page can run a live health
+probe against Ollama providers (`GET <base_url>/api/tags`). Because the provider
+`base_url` is admin-controlled, this probe is a small SSRF surface and is
+governed by a shared trusted-endpoint policy:
 
 | Setting | Default | Use |
 | --- | --- | --- |
@@ -333,8 +331,9 @@ Execution sessions support:
 | --- | --- |
 | `sync` | Local quick tests |
 | `async` | Marks work intended for asynchronous operation; the bundled runner still executes inline when called |
-| `hybrid` | First step now, continuation later |
+| `hybrid` | Orchestrator only: run the first step and wait for continuation |
 
 `runtime_mode=async` does not enqueue work. A host must provide a worker/queue
 and call `run_execution_session()` from it. The bundled project does not yet
-ship that general worker contract.
+ship that general worker contract. GAME rejects `hybrid`; its approval and
+information pauses use the explicit continuation services instead.

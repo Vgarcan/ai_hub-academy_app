@@ -14,7 +14,7 @@ What this script does (all automatic):
   4. Creates .env from .one-env.example (generates a real SECRET_KEY)
   5. Runs database migrations
   6. Seeds tutorial and training data
-  7. Imports documentation from docs_source/
+  7. Imports platform and Academy documentation
   8. Creates an admin superuser with a generated password
 
 After it finishes, activate the venv and run the server:
@@ -157,12 +157,12 @@ def seed_data(python: Path) -> None:
 
 
 def import_docs(python: Path) -> None:
-    _step("Importing documentation from docs_source/")
+    _step("Importing platform and Academy documentation")
     _manage(python, "import_academy_docs")
     _ok("Documentation imported into database")
 
 
-def create_admin(python: Path) -> None:
+def create_admin(python: Path) -> str | None:
     _step(f"Creating admin superuser ({ADMIN_USERNAME})")
     result = _manage(
         python,
@@ -176,18 +176,30 @@ def create_admin(python: Path) -> None:
     output = (result.stdout + result.stderr).lower()
     if result.returncode == 0:
         _ok(f"Admin user created:  {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
+        return ADMIN_PASSWORD
     elif "already exists" in output:
         _ok(f"Admin user '{ADMIN_USERNAME}' already exists — skipping")
     else:
         _warn(f"Could not create superuser automatically. Run: python manage.py createsuperuser")
+    return None
 
 
-def print_summary() -> None:
+def print_summary(admin_password: str | None) -> None:
     _banner("Setup complete!")
     if platform.system() == "Windows":
         activate_cmd = r"venv\Scripts\activate"
     else:
         activate_cmd = "source venv/bin/activate"
+
+    if admin_password:
+        admin_line = f"Admin login:   {ADMIN_USERNAME} / {admin_password}"
+        password_note = "Change the password after your first login."
+    else:
+        admin_line = f"Admin user:    {ADMIN_USERNAME} (existing password was not changed)"
+        password_note = (
+            "If needed, reset it with: python manage.py changepassword "
+            f"{ADMIN_USERNAME}"
+        )
 
     print(f"""
   To start the development server:
@@ -201,8 +213,8 @@ def print_summary() -> None:
     http://localhost:8000/dashboard/  Visual dashboard
     http://localhost:8000/admin/      Django admin
 
-  Admin login:   {ADMIN_USERNAME} / {ADMIN_PASSWORD}
-  Change the password after your first login.
+  {admin_line}
+  {password_note}
 """)
 
 
@@ -229,8 +241,8 @@ def main() -> None:
     run_migrations(python)
     seed_data(python)
     import_docs(python)
-    create_admin(python)
-    print_summary()
+    admin_password = create_admin(python)
+    print_summary(admin_password)
 
 
 if __name__ == "__main__":

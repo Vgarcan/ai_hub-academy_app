@@ -10,8 +10,9 @@ python manage.py collectstatic
 
 Also confirm your web server serves Django admin static files.
 
-If the browser still shows old styles, hard refresh the page. Admin assets often
-use cache-busting query strings such as `guided-v8` or `missiondeck-v10`.
+If the browser still shows old styles, hard refresh the page. Admin assets use
+versioned cache-busting query strings; compare the rendered URL with the current
+template rather than relying on an old version label.
 
 If a development server keeps serving older Admin behavior after the files change,
 restart `runserver`. Django usually reloads templates and Python modules, but a
@@ -89,10 +90,10 @@ Examples:
 ```text
 ollama/qwen3:8b
 qwen3:8b
-gpt-4.1-mini
 ```
 
-The exact accepted form depends on the provider adapter.
+Hosted-provider identifiers change over time. Use the exact accepted form from
+the provider adapter and its current model catalog.
 
 ## Training Provider Model Is Rejected On Save
 
@@ -217,7 +218,8 @@ Use a worker or continuation process if your runtime mode expects asynchronous c
 Check:
 
 - tool is active,
-- tool is attached to the agent,
+- tool reaches the agent through an enabled toolbox assignment, explicit grant
+  or compatible legacy direct attachment,
 - runtime supports the tool kind,
 - model supports tool usage if the tool requires model-native tool calls,
 - tool config is allowlisted and valid.
@@ -247,7 +249,7 @@ plain warning list. Expected behavior:
 
 If filters or archive buttons do nothing:
 
-1. Confirm the page loaded the latest `missiondeck-v...` cache-busting value.
+1. Confirm the page loaded the cache-busting value used by the current template.
 2. Hard refresh the browser.
 3. Restart `runserver` if local development still shows stale counts.
 4. Inspect the rendered row markup. Current rows include `data-mc-attn-item`.

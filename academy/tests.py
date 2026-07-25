@@ -1,11 +1,15 @@
 from pathlib import Path
 from io import StringIO
+import re
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import unquote
 
 from django.contrib.auth import get_user_model
+from django.contrib.staticfiles import finders
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from academy.models import (
@@ -25,12 +29,101 @@ from ai_hub.models import AgentProfile, ExecutionSession, ModelConfig, ProviderC
 User = get_user_model()
 
 
+class ProjectDocumentationIntegrityTests(SimpleTestCase):
+    def test_relative_markdown_links_resolve(self):
+        project_root = Path(__file__).resolve().parent.parent
+        doc_paths = [
+            project_root / "README.md",
+            project_root / "DEMO_SCRIPT.md",
+            project_root / "ai_hub" / "README.md",
+            project_root / "ai_hub" / "OPERATING_MODEL.md",
+            *sorted((project_root / "ai_hub" / "_docs").glob("*.md")),
+            *sorted((project_root / "docs_source").glob("*.md")),
+        ]
+        missing = []
+        link_pattern = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+
+        for doc_path in doc_paths:
+            body = doc_path.read_text(encoding="utf-8")
+            for raw_target in link_pattern.findall(body):
+                target = raw_target.strip().strip("<>")
+                if (
+                    not target
+                    or target.startswith(("#", "/", "http://", "https://", "mailto:"))
+                ):
+                    continue
+                target = unquote(target.split("#", 1)[0])
+                resolved = (doc_path.parent / target).resolve()
+                if not resolved.exists():
+                    missing.append(f"{doc_path.relative_to(project_root)} -> {target}")
+
+        self.assertEqual(missing, [], "Broken local Markdown links:\n" + "\n".join(missing))
+
+    def test_tutorial_static_assets_resolve(self):
+        project_root = Path(__file__).resolve().parent.parent
+        seed_path = (
+            project_root
+            / "academy"
+            / "management"
+            / "commands"
+            / "seed_academy_training_data.py"
+        )
+        body = seed_path.read_text(encoding="utf-8")
+        static_paths = sorted(
+            set(re.findall(r"/static/([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)", body))
+        )
+
+        self.assertTrue(static_paths, "No tutorial static references were found.")
+        missing = [path for path in static_paths if finders.find(path) is None]
+        self.assertEqual(
+            missing,
+            [],
+            "Missing tutorial static assets:\n" + "\n".join(missing),
+        )
+
+
+class SetupScriptTests(SimpleTestCase):
+    @patch("setup_dev._manage")
+    @patch("setup_dev._ok")
+    def test_existing_admin_password_is_not_reported_as_new(
+        self,
+        _mocked_ok,
+        mocked_manage,
+    ):
+        import setup_dev
+
+        mocked_manage.return_value = SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="That username is already taken. A user with that username already exists.",
+        )
+
+        self.assertIsNone(setup_dev.create_admin(Path("python")))
+
+    @patch("builtins.print")
+    def test_summary_says_existing_password_was_not_changed(self, mocked_print):
+        import setup_dev
+
+        setup_dev.print_summary(None)
+
+        output = "\n".join(
+            str(arg)
+            for call in mocked_print.call_args_list
+            for arg in call.args
+        )
+        self.assertIn("existing password was not changed", output)
+        self.assertNotIn(setup_dev.ADMIN_PASSWORD, output)
+
+
 class DocumentationSyncBoundaryTests(TestCase):
     def _sync_from(self, source_root: Path):
-        with override_settings(ACADEMY_DOCS_SOURCE=source_root):
+        with override_settings(
+            AIHUB_DOCS_SOURCE=None,
+            ACADEMY_DOCS_SOURCE=source_root,
+        ):
             return sync_all_docs({}, {"source_name": "Boundary Test Docs"})
 
-    def test_document_sync_uses_docs_source_as_its_allowed_root(self):
+    def test_document_sync_uses_configured_docs_root(self):
         with TemporaryDirectory() as temp_dir:
             docs_source = Path(temp_dir) / "docs_source"
             docs_source.mkdir()
@@ -40,6 +133,74 @@ class DocumentationSyncBoundaryTests(TestCase):
 
         self.assertEqual(result["checked"], 1)
         self.assertTrue(DocumentationPage.objects.filter(slug="official").exists())
+
+    def test_document_sync_reads_platform_and_academy_roots(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            platform_source = root / "ai_hub_docs"
+            academy_source = root / "academy_docs"
+            platform_source.mkdir()
+            academy_source.mkdir()
+            (platform_source / "01_PLATFORM.md").write_text(
+                "# Platform\n",
+                encoding="utf-8",
+            )
+            (platform_source / "README.md").write_text(
+                "# Developer index\n",
+                encoding="utf-8",
+            )
+            (academy_source / "15_ACADEMY.md").write_text(
+                "# Academy\n",
+                encoding="utf-8",
+            )
+
+            with override_settings(
+                AIHUB_DOCS_SOURCE=platform_source,
+                ACADEMY_DOCS_SOURCE=academy_source,
+            ):
+                result = sync_all_docs({}, {"source_name": "Combined Docs"})
+
+        self.assertEqual(result["checked"], 2)
+        self.assertTrue(DocumentationPage.objects.filter(slug="01_platform").exists())
+        self.assertTrue(DocumentationPage.objects.filter(slug="15_academy").exists())
+        self.assertFalse(DocumentationPage.objects.filter(slug="readme").exists())
+
+    def test_unchanged_sync_preserves_embeddings(self):
+        with TemporaryDirectory() as temp_dir:
+            docs_source = Path(temp_dir) / "docs_source"
+            docs_source.mkdir()
+            (docs_source / "official.md").write_text(
+                "# Official\n\nStable text.\n",
+                encoding="utf-8",
+            )
+
+            first = self._sync_from(docs_source)
+            chunk = DocumentationChunk.objects.get()
+            chunk.embedding = [0.1, 0.2]
+            chunk.save(update_fields=["embedding"])
+            second = self._sync_from(docs_source)
+
+        chunk.refresh_from_db()
+        self.assertEqual(first["synced"], 1)
+        self.assertEqual(second["synced"], 0)
+        self.assertEqual(second["unchanged"], 1)
+        self.assertEqual(chunk.embedding, [0.1, 0.2])
+
+    def test_complete_sync_deactivates_removed_pages(self):
+        with TemporaryDirectory() as temp_dir:
+            docs_source = Path(temp_dir) / "docs_source"
+            docs_source.mkdir()
+            stale_file = docs_source / "stale.md"
+            stale_file.write_text("# Stale\n", encoding="utf-8")
+            self._sync_from(docs_source)
+            stale_file.unlink()
+            (docs_source / "current.md").write_text("# Current\n", encoding="utf-8")
+
+            result = self._sync_from(docs_source)
+
+        self.assertEqual(result["deactivated"], 1)
+        self.assertFalse(DocumentationPage.objects.get(slug="stale").is_active)
+        self.assertTrue(DocumentationPage.objects.get(slug="current").is_active)
 
     def test_document_sync_does_not_read_myideas(self):
         with TemporaryDirectory() as temp_dir:
@@ -121,6 +282,50 @@ class DocumentationSyncCommandTests(TestCase):
         )
 
 
+class OllamaSeedCommandTests(TestCase):
+    def test_seed_output_points_to_the_real_assistant_route(self):
+        stdout = StringIO()
+
+        call_command(
+            "seed_ollama_agents",
+            "--base-url",
+            "http://localhost:11434",
+            stdout=stdout,
+        )
+
+        self.assertIn("/assistant/", stdout.getvalue())
+        self.assertNotIn("/chat/", stdout.getvalue())
+
+    def test_seed_upgrades_the_seeded_training_assistant_to_ollama(self):
+        training_provider = ProviderConfig.objects.create(
+            name="Training",
+            provider_type=ProviderConfig.ProviderType.TRAINING,
+        )
+        training_model = ModelConfig.objects.create(
+            provider=training_provider,
+            model_name="training/assistant",
+        )
+        assistant = AgentProfile.objects.create(
+            name="AI Hub Documentation Assistant",
+            role="Documentation assistant",
+            model_config=training_model,
+        )
+
+        call_command(
+            "seed_ollama_agents",
+            "--base-url",
+            "http://localhost:11434",
+            stdout=StringIO(),
+        )
+
+        assistant.refresh_from_db()
+        self.assertEqual(
+            assistant.model_config.provider.provider_type,
+            ProviderConfig.ProviderType.OLLAMA,
+        )
+        self.assertEqual(assistant.model_config.model_name, "ollama/qwen3:8b")
+
+
 class DocumentationImportTest(TestCase):
     def setUp(self):
         source = DocumentationSource.objects.create(name="Test Docs", slug="test-docs")
@@ -160,6 +365,42 @@ class DocumentationImportTest(TestCase):
         results = search_documentation("")
         self.assertEqual(results, [])
 
+    def test_embed_command_reports_when_active_chunks_are_complete(self):
+        DocumentationChunk.objects.filter(page=self.page).update(
+            embedding=[1.0, 0.0]
+        )
+        stdout = StringIO()
+
+        call_command("embed_docs", stdout=stdout)
+
+        self.assertIn(
+            "All active documentation chunks already embedded.",
+            stdout.getvalue(),
+        )
+
+    def test_search_excludes_inactive_pages_and_sources(self):
+        provider_chunk = self.page.chunks.get(heading="Provider")
+        provider_chunk.embedding = [1.0, 0.0]
+        provider_chunk.save(update_fields=["embedding"])
+
+        self.page.is_active = False
+        self.page.save(update_fields=["is_active"])
+        with patch(
+            "academy.services.embeddings.get_embedding",
+            return_value=[1.0, 0.0],
+        ):
+            self.assertEqual(search_documentation("provider"), [])
+
+        self.page.is_active = True
+        self.page.save(update_fields=["is_active"])
+        self.page.source.is_active = False
+        self.page.source.save(update_fields=["is_active"])
+        with patch(
+            "academy.services.embeddings.get_embedding",
+            return_value=[1.0, 0.0],
+        ):
+            self.assertEqual(search_documentation("provider"), [])
+
     def test_docs_list_view(self):
         response = self.client.get(reverse("academy:docs_list"))
         self.assertEqual(response.status_code, 200)
@@ -174,6 +415,18 @@ class DocumentationImportTest(TestCase):
         response = self.client.get(reverse("academy:docs_search") + "?q=provider")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Provider")
+
+    def test_inactive_source_hides_pages_from_browser(self):
+        self.page.source.is_active = False
+        self.page.source.save(update_fields=["is_active"])
+
+        list_response = self.client.get(reverse("academy:docs_list"))
+        detail_response = self.client.get(
+            reverse("academy:docs_detail", args=["core-concepts"])
+        )
+
+        self.assertNotContains(list_response, "Core Concepts")
+        self.assertEqual(detail_response.status_code, 404)
 
 
 class TutorialTest(TestCase):

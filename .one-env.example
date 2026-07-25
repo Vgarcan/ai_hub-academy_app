@@ -90,12 +90,14 @@ ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=False
 # AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=False
 # AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL=3
 # AI_HUB_MAX_TOOL_OBSERVATION_CHARS=12000
+# Restrict live Ollama health probes in production (comma-separated hosts).
+# AI_HUB_PROVIDER_HEALTH_ALLOWED_HOSTS=localhost,127.0.0.1
 
 # ── Ollama (local LLM — no API key required) ─────────────────
-# Install Ollama from https://ollama.ai and run a model:
+# Install Ollama from https://ollama.com/download and run a model:
 #   ollama pull qwen3:8b
 # Then set the URL to your Ollama instance:
-# OLLAMA_BASE_URL=http://192.168.2.132:11434
+# OLLAMA_BASE_URL=http://localhost:11434
 #
 # To seed the Ollama GAME agents after setting this variable:
 #   python manage.py seed_ollama_agents

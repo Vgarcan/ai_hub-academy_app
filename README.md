@@ -16,7 +16,9 @@ Use it to learn how AI pipelines work, explore live execution telemetry, and und
 | Git | any | to clone the repo |
 | Database | SQLite or PostgreSQL 14+ | SQLite is the local zero-config default |
 
-> **No API keys needed.** The project ships with a Training provider that returns deterministic responses — everything works out of the box.
+> **No API keys are needed for the core demo and test suite.** The bundled
+> Training provider returns deterministic responses. Semantic embeddings and
+> genuinely model-generated assistant/lab answers require a configured provider.
 
 ---
 
@@ -42,7 +44,8 @@ the packages is the slow part). It will:
 - create `.env` with a generated secret key
 - run database migrations
 - seed tutorial and training data
-- import documentation from `docs_source/`
+- import the reusable docs from `ai_hub/_docs/` and the Academy docs from
+  `docs_source/`
 - create an admin superuser (`admin` with a generated password)
 
 The setup script uses SQLite. For PostgreSQL, configure `DATABASE_URL` or
@@ -83,7 +86,8 @@ Now open **http://localhost:8000/** in your browser.
 > **To stop the server:** press `Ctrl + C` in that terminal.
 > **To start it again later:** open a terminal, `cd` into the project, activate the
 > venv (step above), and run `python manage.py runserver` again. You only run
-> `setup_dev.py` once, ever.
+> `setup_dev.py` normally runs once after cloning. After pulling updates, run
+> the specific migration, seed, or import commands required by that update.
 
 ---
 
@@ -95,7 +99,7 @@ Now open **http://localhost:8000/** in your browser.
 | `http://localhost:8000/docs/` | Documentation browser |
 | `http://localhost:8000/tutorials/` | Interactive tutorial missions |
 | `http://localhost:8000/assistant/` | AI documentation chatbot |
-| `http://localhost:8000/dashboard/` | Visual dashboard — all AI Hub entities |
+| `http://localhost:8000/dashboard/` | Visual dashboard — main configuration and execution records |
 | `http://localhost:8000/admin/` | Django admin (`admin`; setup prints the generated password) |
 | `http://localhost:8000/admin/ai_hub/` | AI Hub control panel |
 
@@ -108,7 +112,7 @@ manage.py              Entry point
 setup_dev.py           One-command dev setup (run once after cloning)
 requirements.txt       Python dependencies
 .one-env.example       Environment variable template
-docs_source/           Markdown documentation source files
+docs_source/           Academy-specific Markdown documentation
 
 _core/                 Django project settings, URLs, WSGI
 ai_hub/                Reusable AI orchestration app  ← the core
@@ -116,7 +120,6 @@ academy/               Documentation, tutorials, chatbot
 support_demo/          Demo scenario: support ticket triage
 dashboard/             Visual Bootstrap dashboard
 templates/             Shared HTML templates
-static/                Static files
 ```
 
 ---
@@ -125,7 +128,9 @@ static/                Static files
 
 ### `ai_hub` — the reusable core
 
-Plug-and-play Django app. Copy the folder, add it to `INSTALLED_APPS`, run `migrate`.
+Reusable Django app. Install or copy the complete package (including its
+templates, static assets and migrations), add it to `INSTALLED_APPS`, then run
+`migrate`.
 
 ![HUB-dahs](assets/readme-pics/hub_dash.png)
 
@@ -158,13 +163,15 @@ CURRENT / LEGACY / TARGET / NOT IMPLEMENTED matrix.
 
 - `SupportTicket` model linked to `ExecutionSession`
 - Two-step triage pipeline: Input Normalizer → Ticket Classifier
-- Shows governance: every AI decision is logged with full request/response telemetry
+- Shows governance: runtime requests, responses and latency are audited; operator
+  surfaces recursively redact known-sensitive keys
 
 ![HUB-tut2](assets/readme-pics/tutorials-2.png)
 
 ### `dashboard` — visual exploration
 
-Bootstrap 5 read-only dashboard showing every AI Hub entity with educational annotations.
+Bootstrap 5 read-only dashboard for the main providers, models, agents, pipelines
+and execution sessions, with educational annotations.
 - Providers, Models, Agents, Pipelines, Sessions
 - GAME audit trail: per-iteration tool results + LLM decisions
 
@@ -211,11 +218,13 @@ python manage.py runserver
 |---|---|
 | `python manage.py migrate` | Apply all database migrations |
 | `python manage.py seed_academy_training_data` | Create training provider, agents, tutorial modules and missions |
-| `python manage.py import_academy_docs` | Import Markdown files from `docs_source/` into the database |
+| `python manage.py import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database |
+| `python manage.py seed_lab_exercises` | Create or update the Academy lab exercises |
 | `python manage.py seed_ollama_agents` | Set up Ollama provider and GAME agents (requires local Ollama) |
 | `python manage.py run_doc_sync` | Run the Documentation Sync GAME agent once |
-| `python manage.py embed_docs` | Generate semantic embeddings for all documentation chunks (requires Ollama with `bge-m3:latest`) |
-| `python manage.py embed_docs --force` | Re-generate embeddings even for chunks that already have one |
+| `python manage.py embed_docs` | Generate semantic embeddings for active documentation chunks (requires Ollama with `bge-m3:latest`) |
+| `python manage.py embed_docs --force` | Re-generate active chunks even when they already have an embedding |
+| `python manage.py seed_demo_data` | Seed the support-demo tickets and training configuration |
 | `python manage.py test` | Run the full test suite |
 | `python manage.py createsuperuser` | Create an admin user interactively |
 
@@ -282,7 +291,8 @@ You do not need to delete the Training provider — it is safe to leave it activ
 
 ### Ollama — local LLM, no API key, no cost
 
-The fastest path to a real model. Requires [Ollama](https://ollama.ai) installed and running locally.
+The fastest path to a real model. Requires [Ollama](https://ollama.com/download)
+installed and running locally.
 
 ```bash
 # Pull the LLM and the embedding model (one-time downloads)
@@ -328,7 +338,10 @@ ProviderConfig
                                             └── ExecutionStepRun
 ```
 
-Every AI call creates an `ExecutionSession` with one `ExecutionStepRun` per step (or per GAME iteration). You can inspect the full request payload, response payload, and latency for every call in the admin or the dashboard.
+Calls made through the bundled Orchestrator/GAME runners are recorded in an
+`ExecutionSession`, with one `ExecutionStepRun` per pipeline step or GAME
+iteration. Admin and dashboard views expose redacted payloads and latency; the
+database retains the audit payloads for controlled access and retention.
 
 ---
 
@@ -370,10 +383,11 @@ and type a new password (the characters stay hidden as you type — that's norma
 ```bash
 python manage.py embed_docs --model bge-m3:latest
 ```
-Confirm `bge-m3:latest` is installed in Ollama (`ollama list`). Pull it first if missing: `ollama pull bge-m3`. After the command completes, all documentation chunks will have vector embeddings and the assistant will use semantic search automatically.
+Confirm `bge-m3:latest` is installed in Ollama (`ollama list`). Pull it first if missing: `ollama pull bge-m3`. A successful command summary reports every processed chunk as embedded; skipped chunks remain on keyword search until a later successful run.
 
-**`embed_docs` skips all chunks and says "All chunks already embedded"**
-→ Embeddings already exist. To force a full refresh (e.g. after updating the documentation source), run:
+**`embed_docs` says "All active documentation chunks already embedded"**
+→ Embeddings already exist. To refresh every active chunk (for example after
+changing the embedding model), run:
 ```bash
 python manage.py embed_docs --force
 ```

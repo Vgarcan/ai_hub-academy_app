@@ -23,6 +23,7 @@ class ToolSeed:
     operation_mode: str = ToolDefinition.OperationMode.READ
     risk_level: str = ToolDefinition.RiskLevel.LOW
     requires_approval: bool = False
+    is_system_tool: bool = False
     input_schema: dict | None = None
     output_schema: dict | None = None
     config: dict | None = None
@@ -34,15 +35,6 @@ CORE_TOOLS = [
         label="List available tools",
         description="Explain the tool manifest currently available to the agent.",
         config={"template": "Use the provided tool manifest to summarize available capabilities."},
-    ),
-    ToolSeed(
-        name="list_available_knowledge_libraries",
-        label="List knowledge libraries",
-        description="List knowledge libraries assigned to the current agent.",
-        tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
-        input_schema={"required": ["agent_id"], "properties": {"agent_id": {"type": "integer"}}},
-        output_schema={"required": ["libraries", "total"]},
-        config={"callable": "ai_hub.tools.knowledge.list_knowledge_libraries", "read_only": True},
     ),
     ToolSeed(
         name="get_agent_permissions",
@@ -68,61 +60,128 @@ CORE_TOOLS = [
 
 KNOWLEDGE_TOOLS = [
     ToolSeed(
+        name="list_knowledge_libraries",
+        label="List knowledge libraries",
+        description="List knowledge libraries assigned to the current agent.",
+        tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+        is_system_tool=True,
+        input_schema={"properties": {"limit": {"type": "integer"}}},
+        output_schema={"required": ["libraries", "total"]},
+        config={
+            "callable": "ai_hub.tools.knowledge.list_knowledge_libraries",
+            "read_only": True,
+            "game_tool_category": "context_tool",
+            "bind_agent_context": True,
+            "limit": 50,
+        },
+    ),
+    ToolSeed(
         name="browse_knowledge_index",
         label="Browse knowledge index",
         description="Browse assigned collections, documents and chunk metadata.",
         tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
-        input_schema={"required": ["agent_id"], "properties": {"agent_id": {"type": "integer"}}},
+        is_system_tool=True,
+        input_schema={
+            "properties": {
+                "collection_id": {"type": "integer"},
+                "limit": {"type": "integer"},
+                "chunk_limit": {"type": "integer"},
+            }
+        },
         output_schema={"required": ["collections", "total"]},
-        config={"callable": "ai_hub.tools.knowledge.browse_knowledge_index", "read_only": True},
+        config={
+            "callable": "ai_hub.tools.knowledge.browse_knowledge_index",
+            "read_only": True,
+            "game_tool_category": "context_tool",
+            "bind_agent_context": True,
+            "limit": 50,
+            "chunk_limit": 25,
+        },
     ),
     ToolSeed(
         name="search_knowledge",
         label="Search knowledge",
         description="Search assigned active knowledge chunks by lexical relevance.",
         tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+        is_system_tool=True,
         input_schema={
-            "required": ["agent_id", "query"],
-            "properties": {"agent_id": {"type": "integer"}, "query": {"type": "string"}},
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string"},
+                "collection_id": {"type": "integer"},
+                "limit": {"type": "integer"},
+            },
         },
         output_schema={"required": ["query", "results", "total"]},
-        config={"callable": "ai_hub.tools.knowledge.search_knowledge", "read_only": True, "limit": 5},
+        config={
+            "callable": "ai_hub.tools.knowledge.search_knowledge",
+            "read_only": True,
+            "game_tool_category": "context_tool",
+            "bind_agent_context": True,
+            "limit": 5,
+        },
     ),
     ToolSeed(
         name="read_knowledge_chunk",
         label="Read knowledge chunk",
         description="Read one authorized knowledge chunk.",
         tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+        is_system_tool=True,
         input_schema={
-            "required": ["agent_id", "chunk_id"],
-            "properties": {"agent_id": {"type": "integer"}, "chunk_id": {"type": "integer"}},
+            "required": ["chunk_id"],
+            "properties": {"chunk_id": {"type": "integer"}},
         },
         output_schema={"required": ["chunk_id", "content", "citation"]},
-        config={"callable": "ai_hub.tools.knowledge.read_knowledge_chunk", "read_only": True},
+        config={
+            "callable": "ai_hub.tools.knowledge.read_knowledge_chunk",
+            "read_only": True,
+            "game_tool_category": "context_tool",
+            "bind_agent_context": True,
+            "max_content_chars": 8000,
+            "max_metadata_chars": 2000,
+        },
     ),
     ToolSeed(
         name="read_document_section",
         label="Read document section",
         description="Read one authorized document section by title or chunk index.",
         tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+        is_system_tool=True,
         input_schema={
-            "required": ["agent_id", "document_id"],
-            "properties": {"agent_id": {"type": "integer"}, "document_id": {"type": "integer"}},
+            "required": ["document_id"],
+            "properties": {
+                "document_id": {"type": "integer"},
+                "section_title": {"type": "string"},
+                "chunk_index": {"type": "integer"},
+            },
         },
         output_schema={"required": ["chunk_id", "content", "citation"]},
-        config={"callable": "ai_hub.tools.knowledge.read_document_section", "read_only": True},
+        config={
+            "callable": "ai_hub.tools.knowledge.read_document_section",
+            "read_only": True,
+            "game_tool_category": "context_tool",
+            "bind_agent_context": True,
+            "max_content_chars": 8000,
+            "max_metadata_chars": 2000,
+        },
     ),
     ToolSeed(
         name="cite_knowledge_source",
         label="Cite knowledge source",
         description="Return citation metadata for one authorized knowledge chunk.",
         tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+        is_system_tool=True,
         input_schema={
-            "required": ["agent_id", "chunk_id"],
-            "properties": {"agent_id": {"type": "integer"}, "chunk_id": {"type": "integer"}},
+            "required": ["chunk_id"],
+            "properties": {"chunk_id": {"type": "integer"}},
         },
         output_schema={"required": ["citation"]},
-        config={"callable": "ai_hub.tools.knowledge.cite_knowledge_source", "read_only": True},
+        config={
+            "callable": "ai_hub.tools.knowledge.cite_knowledge_source",
+            "read_only": True,
+            "game_tool_category": "context_tool",
+            "bind_agent_context": True,
+        },
     ),
 ]
 
@@ -315,6 +374,7 @@ def _upsert_tool(seed: ToolSeed, *, force_update: bool) -> tuple[ToolDefinition,
         "operation_mode": seed.operation_mode,
         "risk_level": seed.risk_level,
         "requires_approval": seed.requires_approval,
+        "is_system_tool": seed.is_system_tool,
         "input_schema": seed.input_schema or {},
         "output_schema": seed.output_schema or {},
         "config": seed.config or {},

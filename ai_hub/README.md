@@ -15,6 +15,11 @@ Both reuse the same providers, models, agents, knowledge, and tools.
 
 The GAME subsystem includes durable goals, a deterministic scheduler, an audited action dispatcher with allow-lists, scoped memory, pause/approval/resume, policies and budgets, goal plans, and one-level sub-agent delegation. Each GAME capability is gated by an `AI_HUB_GAME_*_ENABLED` feature flag (fail-closed in the reusable layer).
 
+Runtime migrations are intentionally explicit. See
+[`_docs/15_RUNTIME_STATUS.md`](_docs/15_RUNTIME_STATUS.md) before changing Tools,
+Knowledge, memory or worker behavior; it separates CURRENT, LEGACY, TARGET and
+NOT IMPLEMENTED paths.
+
 ## Quick start
 
 ```bash
@@ -49,6 +54,8 @@ Read in order from [`_docs/`](_docs/README.md):
 12. `12_TROUBLESHOOTING` — common failures and fixes
 13. `13_ROADMAP` — recommended next work
 14. `14_CHANGELOG` — notable changes
+15. `15_RUNTIME_STATUS` — current, legacy, target, and not-implemented runtime paths
+16. `16_BUILD_CONSOLE` — guided GAME/Orchestrator creation wizard
 
 ## Integration in one line
 

@@ -51,7 +51,12 @@ class Command(BaseCommand):
                 "Check all .md files, update any that have changed, and report what was done."
             ),
             initial_context={},
-            runtime_config={"max_iterations": max_iter},
+            # Host-specific compatibility: doc sync is an explicitly trusted
+            # action tool and predates governed GAME action definitions.
+            runtime_config={
+                "max_iterations": max_iter,
+                "agent_tool_runtime": "legacy_preexecute",
+            },
             source_label="run_doc_sync management command",
         )
 

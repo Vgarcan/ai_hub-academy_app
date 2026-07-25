@@ -238,7 +238,7 @@ def check_budget_before_action(session, action, *, action_run=None) -> None:
             )
 
 
-def _get_workspace(session):
+def get_session_workspace(session):
     try:
         if session.goal_id:
             return session.goal.workspace
@@ -246,6 +246,9 @@ def _get_workspace(session):
         return delegation.parent_goal.workspace
     except Exception:
         return None
+
+
+_get_workspace = get_session_workspace
 
 
 def validate_agent_for_workspace(workspace, agent) -> None:

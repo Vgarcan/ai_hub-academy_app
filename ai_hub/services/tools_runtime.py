@@ -8,6 +8,10 @@ from django.core.exceptions import ValidationError
 
 from ai_hub.models import ToolDefinition
 from ai_hub.services.contracts import validate_payload
+from ai_hub.services.knowledge_tooling import (
+    BIND_AGENT_CONTEXT_CONFIG_KEY,
+    is_bound_knowledge_tool,
+)
 
 
 ALLOWED_TOOL_KINDS = {
@@ -89,9 +93,30 @@ def _ensure_json_serializable(result: dict, tool_name: str) -> dict:
     return result
 
 
-def execute_tool(tool: ToolDefinition, payload: dict) -> dict:
+def bind_tool_runtime_context(tool: ToolDefinition, payload: dict, *, agent=None) -> dict:
+    effective_payload = dict(payload or {})
+    config = tool.config or {}
+    if config.get(BIND_AGENT_CONTEXT_CONFIG_KEY) is not True:
+        return effective_payload
+    if not is_bound_knowledge_tool(tool):
+        raise ValidationError(
+            f"Tool '{tool.name}' requests agent binding but is not a registered system knowledge tool."
+        )
+    if agent is None or not getattr(agent, "pk", None):
+        raise ValidationError(
+            f"Tool '{tool.name}' requires an authenticated agent runtime context."
+        )
+    # Never trust a model-supplied identity. The current runtime agent is the
+    # authorization principal and always wins.
+    effective_payload.pop("agent_name", None)
+    effective_payload["agent_id"] = agent.pk
+    return effective_payload
+
+
+def execute_tool(tool: ToolDefinition, payload: dict, *, agent=None) -> dict:
     if tool.tool_kind not in ALLOWED_TOOL_KINDS:
         raise ValidationError(f"Tool kind '{tool.tool_kind}' is not allowed.")
+    payload = bind_tool_runtime_context(tool, payload, agent=agent)
     validate_payload(payload, tool.input_schema or {}, f"Tool '{tool.name}' input")
 
     if tool.tool_kind == ToolDefinition.ToolKind.PYTHON_CALLABLE:
@@ -108,7 +133,7 @@ def execute_tool(tool: ToolDefinition, payload: dict) -> dict:
     return _ensure_json_serializable(tool_result, tool.name)
 
 
-def execute_tools(tools, payload: dict, *, policy: str = TOOL_POLICY_ALL) -> dict:
+def execute_tools(tools, payload: dict, *, policy: str = TOOL_POLICY_ALL, agent=None) -> dict:
     if policy not in {TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY}:
         raise ValidationError(f"Unknown tool execution policy '{policy}'.")
 
@@ -116,5 +141,5 @@ def execute_tools(tools, payload: dict, *, policy: str = TOOL_POLICY_ALL) -> dic
     for tool in tools:
         if policy == TOOL_POLICY_GAME_CONTEXT_ONLY and get_game_tool_category(tool) != GAME_CONTEXT_TOOL:
             continue
-        output[tool.name] = execute_tool(tool, payload)
+        output[tool.name] = execute_tool(tool, payload, agent=agent)
     return output

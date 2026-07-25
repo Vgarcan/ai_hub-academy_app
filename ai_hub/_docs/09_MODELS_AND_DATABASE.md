@@ -164,7 +164,8 @@ Important fields:
 - `model_config`: model used by the agent.
 - `tools`: allowed tool definitions.
 - `knowledge_collections`: attached context.
-- `knowledge_max_chars`: context budget.
+- `knowledge_max_chars`: legacy eager-text context budget; retrieval-first does
+  not inject document bodies.
 - `input_contract`: expected input shape.
 - `output_contract`: expected output shape.
 - `execution_mode`: intended mode or behavior marker.

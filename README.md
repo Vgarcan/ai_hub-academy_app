@@ -14,6 +14,7 @@ Use it to learn how AI pipelines work, explore live execution telemetry, and und
 |---|---|---|
 | Python | 3.12+ | [python.org/downloads](https://www.python.org/downloads/) |
 | Git | any | to clone the repo |
+| Database | SQLite or PostgreSQL 14+ | SQLite is the local zero-config default |
 
 > **No API keys needed.** The project ships with a Training provider that returns deterministic responses — everything works out of the box.
 
@@ -43,6 +44,11 @@ the packages is the slow part). It will:
 - seed tutorial and training data
 - import documentation from `docs_source/`
 - create an admin superuser (`admin` with a generated password)
+
+The setup script uses SQLite. For PostgreSQL, configure `DATABASE_URL` or
+`DATABASE_ENGINE=postgresql` plus the `POSTGRES_*` variables from
+`.one-env.example` before running migrations. CI runs the complete suite on
+both SQLite and PostgreSQL 16.
 
 > ⚠️ **Copy the admin password now.** When the script finishes it prints a line like
 > `Admin login:  admin / <random-password>`. This is the only time it is shown. Paste
@@ -130,6 +136,12 @@ Provides:
 - **PipelineDefinition** — fixed sequence of agent calls (Orchestrator mode)
 - **ExecutionSession** — one full pipeline run, fully audited
 - **GAME runtime** — autonomous agent loop that runs until `complete: true`
+
+The Core now defaults to the resolved, model-selected tool runtime and
+retrieval-first Knowledge. Legacy direct-tool pre-execution and eager document
+injection remain available only through explicit compatibility settings. See
+[`ai_hub/_docs/15_RUNTIME_STATUS.md`](ai_hub/_docs/15_RUNTIME_STATUS.md) for the
+CURRENT / LEGACY / TARGET / NOT IMPLEMENTED matrix.
 
 ![HUB-Graph](assets/readme-pics/hub-graph.png)
 
@@ -306,11 +318,14 @@ python manage.py test
 ```
 ProviderConfig
     └── ModelConfig
-            └── AgentProfile  ──(tools)──  ToolDefinition
+            └── AgentProfile
+                    ├── resolved toolbox assignments / grants ── ToolDefinition
+                    ├── compatible legacy direct assignments ── ToolDefinition
+                    ├── knowledge collections
                     └── PipelineDefinition
-                                └── PipelineStep
-                                        └── ExecutionSession
-                                                └── ExecutionStepRun
+                            └── PipelineStep
+                                    └── ExecutionSession
+                                            └── ExecutionStepRun
 ```
 
 Every AI call creates an `ExecutionSession` with one `ExecutionStepRun` per step (or per GAME iteration). You can inspect the full request payload, response payload, and latency for every call in the admin or the dashboard.

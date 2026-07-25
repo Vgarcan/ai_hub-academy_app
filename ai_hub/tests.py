@@ -1,15 +1,17 @@
 import json
+import importlib
 from unittest.mock import patch
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from pathlib import Path
 
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.cache import cache
 from django.core.management import call_command
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
@@ -44,7 +46,11 @@ from ai_hub.models import (
 from ai_hub.services.litellm_client import completion_call
 from ai_hub.services.admin_control_center import build_control_center_context
 from ai_hub.services.execution_sessions import create_execution_session
-from ai_hub.services.agent_runtime import build_agent_knowledge_context, execute_agent_deliberate
+from ai_hub.services.agent_runtime import (
+    build_agent_knowledge_context,
+    execute_agent,
+    execute_agent_deliberate,
+)
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.execution_runner import run_execution_session
 from ai_hub.services.tool_resolution import resolve_agent_tools
@@ -76,7 +82,87 @@ from ai_hub.services.tools_runtime import (
     execute_tools,
     get_game_tool_category,
 )
+from _core.database_config import build_database_config
 # DreamPost was the original host-app model; replaced with User for portability
+
+
+class DatabaseConfigurationTests(TestCase):
+    def test_sqlite_is_the_zero_configuration_default(self):
+        base_dir = (Path.cwd() / "database-config-tests").resolve()
+        config = build_database_config({}, base_dir=base_dir)
+        relative = build_database_config(
+            {"SQLITE_NAME": "var/test.sqlite3"},
+            base_dir=base_dir,
+        )
+
+        self.assertEqual(config["ENGINE"], "django.db.backends.sqlite3")
+        self.assertEqual(config["NAME"], base_dir / "db.sqlite3")
+        self.assertEqual(relative["NAME"], base_dir / "var/test.sqlite3")
+
+    def test_discrete_postgresql_environment_is_supported(self):
+        config = build_database_config(
+            {
+                "DATABASE_ENGINE": "postgresql",
+                "POSTGRES_DB": "ai_hub_test",
+                "POSTGRES_USER": "ai_hub",
+                "POSTGRES_PASSWORD": "secret",
+                "POSTGRES_HOST": "db",
+                "POSTGRES_PORT": "5433",
+                "DB_CONN_MAX_AGE": "60",
+                "DB_CONN_HEALTH_CHECKS": "false",
+            },
+            base_dir=Path("C:/workspace"),
+        )
+
+        self.assertEqual(config["ENGINE"], "django.db.backends.postgresql")
+        self.assertEqual(config["NAME"], "ai_hub_test")
+        self.assertEqual(config["HOST"], "db")
+        self.assertEqual(config["PORT"], "5433")
+        self.assertEqual(config["CONN_MAX_AGE"], 60)
+        self.assertFalse(config["CONN_HEALTH_CHECKS"])
+
+    def test_database_url_takes_precedence_and_decodes_credentials(self):
+        config = build_database_config(
+            {
+                "DATABASE_ENGINE": "sqlite",
+                "DATABASE_URL": (
+                    "postgresql://user%40hub:p%40ss@localhost:5432/ai_hub"
+                    "?sslmode=require&connect_timeout=99"
+                ),
+            },
+            base_dir=Path("C:/workspace"),
+        )
+
+        self.assertEqual(config["USER"], "user@hub")
+        self.assertEqual(config["PASSWORD"], "p" + chr(64) + "ss")
+        self.assertEqual(config["NAME"], "ai_hub")
+        self.assertEqual(config["OPTIONS"], {"sslmode": "require"})
+
+    def test_invalid_database_configuration_fails_early(self):
+        with self.assertRaisesMessage(ImproperlyConfigured, "DATABASE_ENGINE"):
+            build_database_config(
+                {"DATABASE_ENGINE": "mysql"},
+                base_dir=Path("C:/workspace"),
+            )
+        with self.assertRaisesMessage(ImproperlyConfigured, "POSTGRES_DB"):
+            build_database_config(
+                {"DATABASE_ENGINE": "postgresql"},
+                base_dir=Path("C:/workspace"),
+            )
+        with self.assertRaisesMessage(ImproperlyConfigured, "invalid PostgreSQL port"):
+            build_database_config(
+                {"DATABASE_URL": "postgresql://postgres@localhost:not-a-port/db"},
+                base_dir=Path("C:/workspace"),
+            )
+        with self.assertRaisesMessage(ImproperlyConfigured, "POSTGRES_PORT"):
+            build_database_config(
+                {
+                    "DATABASE_ENGINE": "postgresql",
+                    "POSTGRES_DB": "ai_hub_test",
+                    "POSTGRES_PORT": "70000",
+                },
+                base_dir=Path("C:/workspace"),
+            )
 
 
 class HubModelValidationTests(TestCase):
@@ -137,7 +223,8 @@ class HubModelValidationTests(TestCase):
         with self.assertRaises(ValidationError):
             validate_payload({"dream_id": "1"}, schema, "Test")
 
-    def test_agent_knowledge_context_uses_only_active_documents(self):
+    @override_settings(AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=True)
+    def test_legacy_agent_knowledge_context_uses_only_active_documents(self):
         provider = ProviderConfig.objects.create(name="p3", provider_type="openai")
         model = ModelConfig.objects.create(provider=provider, model_name="gpt-z")
         agent = AgentProfile.objects.create(
@@ -203,9 +290,9 @@ class HubModelValidationTests(TestCase):
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         agent = AgentProfile.objects.create(name="toolbox-agent", role="Toolbox tester", model_config=model)
         tool = ToolDefinition.objects.create(
-            name="search_knowledge",
-            label="Search knowledge",
-            description="Search authorized knowledge libraries.",
+            name="grouped_read_tool",
+            label="Grouped read tool",
+            description="A neutral read tool used to verify toolbox grouping.",
             tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
             operation_mode=ToolDefinition.OperationMode.READ,
             risk_level=ToolDefinition.RiskLevel.LOW,
@@ -598,6 +685,63 @@ class ToolResolutionTests(TestCase):
         self.assertNotIn("Authorization", str(manifest[0]))
 
 
+class RetrievalFoundationMigrationTests(TestCase):
+    def test_migration_renames_and_secures_the_legacy_list_tool(self):
+        ToolDefinition.objects.filter(name="list_knowledge_libraries").delete()
+        old_tool = ToolDefinition.objects.create(
+            name="list_available_knowledge_libraries",
+            tool_kind=ToolDefinition.ToolKind.PYTHON_CALLABLE,
+            input_schema={"required": ["agent_id"]},
+            config={
+                "callable": "ai_hub.tools.knowledge.list_knowledge_libraries",
+                "read_only": True,
+            },
+        )
+        core_toolbox = Toolbox.objects.create(
+            name="Legacy Core",
+            slug="core-foundation",
+        )
+        ToolboxTool.objects.create(toolbox=core_toolbox, tool=old_tool)
+        migration = importlib.import_module(
+            "ai_hub.migrations.0019_retrieval_first_foundation"
+        )
+
+        from django.apps import apps as django_apps
+
+        migration.establish_retrieval_foundation(django_apps, None)
+        old_tool.refresh_from_db()
+
+        self.assertEqual(old_tool.name, "list_knowledge_libraries")
+        self.assertTrue(old_tool.is_system_tool)
+        self.assertTrue(old_tool.config["bind_agent_context"])
+        self.assertNotIn("agent_id", str(old_tool.input_schema))
+        self.assertFalse(
+            ToolboxTool.objects.filter(
+                toolbox__slug="core-foundation",
+                tool=old_tool,
+            ).exists()
+        )
+        self.assertTrue(
+            ToolboxTool.objects.filter(
+                toolbox__slug="knowledge-discovery-retrieval",
+                tool=old_tool,
+            ).exists()
+        )
+
+    def test_migration_refuses_to_overwrite_a_custom_canonical_tool(self):
+        tool = ToolDefinition.objects.get(name="list_knowledge_libraries")
+        tool.config = {"callable": "custom.tools.list_knowledge"}
+        tool.save(update_fields=["config"])
+        migration = importlib.import_module(
+            "ai_hub.migrations.0019_retrieval_first_foundation"
+        )
+
+        from django.apps import apps as django_apps
+
+        with self.assertRaisesMessage(RuntimeError, "already used"):
+            migration.establish_retrieval_foundation(django_apps, None)
+
+
 class StarterToolboxSeedTests(TestCase):
     def test_seed_creates_starter_toolboxes_roles_and_assignments(self):
         stats = seed_starter_toolboxes()
@@ -644,6 +788,7 @@ class StarterToolboxSeedTests(TestCase):
         self.assertEqual(
             tool_names,
             {
+                "list_knowledge_libraries",
                 "browse_knowledge_index",
                 "search_knowledge",
                 "read_knowledge_chunk",
@@ -652,9 +797,75 @@ class StarterToolboxSeedTests(TestCase):
             },
         )
         search_tool = ToolDefinition.objects.get(name="search_knowledge")
+        section_tool = ToolDefinition.objects.get(name="read_document_section")
         self.assertEqual(search_tool.tool_kind, ToolDefinition.ToolKind.PYTHON_CALLABLE)
         self.assertTrue(search_tool.config["read_only"])
         self.assertEqual(search_tool.operation_mode, ToolDefinition.OperationMode.READ)
+        self.assertEqual(
+            set(search_tool.input_schema["properties"]),
+            {"query", "collection_id", "limit"},
+        )
+        self.assertEqual(
+            set(section_tool.input_schema["properties"]),
+            {"document_id", "section_title", "chunk_index"},
+        )
+
+    def test_knowledge_access_resolves_system_retrieval_tools_without_manual_toolbox(self):
+        seed_starter_toolboxes()
+        provider = ProviderConfig.objects.create(
+            name="automatic-knowledge-provider",
+            provider_type="training",
+        )
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(
+            name="automatic-knowledge-agent",
+            role="Knowledge reader",
+            model_config=model,
+        )
+        collection = KnowledgeCollection.objects.create(name="Automatic knowledge")
+        agent.knowledge_collections.add(collection)
+
+        resolution = resolve_agent_tools(agent)
+
+        self.assertEqual(
+            set(resolution.tool_names()),
+            {
+                "list_knowledge_libraries",
+                "browse_knowledge_index",
+                "search_knowledge",
+                "read_knowledge_chunk",
+                "read_document_section",
+                "cite_knowledge_source",
+            },
+        )
+        self.assertTrue(all(item.source == "knowledge_retrieval" for item in resolution.tools))
+
+    def test_automatic_knowledge_tools_obey_grants_and_workspace_policy(self):
+        seed_starter_toolboxes()
+        provider = ProviderConfig.objects.create(
+            name="governed-knowledge-provider",
+            provider_type="training",
+        )
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        agent = AgentProfile.objects.create(
+            name="governed-knowledge-agent",
+            role="Governed knowledge reader",
+            model_config=model,
+        )
+        collection = KnowledgeCollection.objects.create(name="Governed knowledge")
+        agent.knowledge_collections.add(collection)
+        search_tool = ToolDefinition.objects.get(name="search_knowledge")
+        AgentToolGrant.objects.create(agent=agent, tool=search_tool, is_enabled=False)
+        workspace = GameWorkspace.objects.create(
+            name="governed-knowledge-workspace",
+            default_policy={"blocked_tools": ["read_knowledge_chunk"]},
+        )
+
+        resolution = resolve_agent_tools(agent, workspace=workspace)
+
+        self.assertNotIn("search_knowledge", resolution.tool_names())
+        self.assertNotIn("read_knowledge_chunk", resolution.tool_names())
+        self.assertIn("browse_knowledge_index", resolution.tool_names())
 
     def test_seed_command_runs(self):
         call_command("seed_ai_hub_starter_toolboxes", verbosity=0)
@@ -798,6 +1009,49 @@ class KnowledgeRetrievalTests(TestCase):
         with self.assertRaisesMessage(ValidationError, "not accessible"):
             search_knowledge(self.agent, query="refund", collection_id=self.other_collection.pk)
 
+    @patch("ai_hub.services.knowledge_retrieval.MAX_SEARCH_CANDIDATES", 2)
+    def test_search_bounds_the_candidate_window(self):
+        KnowledgeDocumentChunk.objects.bulk_create(
+            [
+                KnowledgeDocumentChunk(
+                    document=self.document,
+                    chunk_index=index,
+                    section_title=f"Candidate {index}",
+                    content="candidate-window-needle",
+                )
+                for index in range(3, 6)
+            ]
+        )
+
+        result = search_knowledge(
+            self.agent,
+            query="candidate-window-needle",
+            limit=20,
+        )
+
+        self.assertEqual(result["candidates_scanned"], 2)
+        self.assertEqual(result["candidate_limit"], 2)
+        self.assertTrue(result["candidates_truncated"])
+        self.assertEqual(result["total"], 2)
+
+    @patch(
+        "ai_hub.services.knowledge_retrieval.MAX_SEARCH_CANDIDATE_CONTENT_CHARS",
+        20,
+    )
+    def test_search_does_not_materialise_unbounded_chunk_bodies(self):
+        self.chunk.content = ("x" * 100) + " distant-needle"
+        self.chunk.save(update_fields=["content"])
+
+        result = search_knowledge(
+            self.agent,
+            query="distant-needle",
+            limit=1,
+        )
+
+        self.assertEqual(result["total"], 1)
+        self.assertTrue(result["results"][0]["content_window_truncated"])
+        self.assertLessEqual(len(result["results"][0]["snippet"]), 20)
+
     def test_read_returns_only_selected_chunk_content(self):
         result = read_knowledge_chunk(self.agent, chunk_id=self.chunk.pk)
 
@@ -832,8 +1086,7 @@ class KnowledgeRetrievalTests(TestCase):
         self.assertEqual(result["citation"]["section_title"], "Eligibility")
         self.assertEqual(result["citation"]["tags"], ["refunds", "support"])
 
-    @override_settings(AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=False)
-    def test_retrieval_only_context_does_not_inject_large_documents(self):
+    def test_retrieval_first_context_is_the_default_and_does_not_inject_documents(self):
         context = build_agent_knowledge_context(self.agent)
 
         self.assertTrue(context["retrieval_required"])
@@ -843,6 +1096,39 @@ class KnowledgeRetrievalTests(TestCase):
         self.assertEqual(context["collection_indexes"][0]["documents"][0]["chunk_count"], 2)
         self.assertIn("search_knowledge", context["available_retrieval_tools"])
         self.assertNotIn("Full refund policy text", str(context))
+
+    def test_retrieval_is_not_required_without_attached_collections(self):
+        agent = AgentProfile.objects.create(
+            name="knowledge-free-agent",
+            role="No knowledge",
+            model_config=self.model,
+        )
+
+        context = build_agent_knowledge_context(agent)
+
+        self.assertFalse(context["retrieval_required"])
+        self.assertFalse(context["retrieval_available"])
+        self.assertEqual(context["collection_indexes"], [])
+
+    def test_retrieval_prompt_index_is_bounded(self):
+        KnowledgeDocument.objects.bulk_create(
+            [
+                KnowledgeDocument(
+                    collection=self.collection,
+                    title=f"Reference {index:02d}",
+                    status=KnowledgeDocument.Status.ACTIVE,
+                )
+                for index in range(55)
+            ]
+        )
+
+        context = build_agent_knowledge_context(self.agent)
+        collection_index = context["collection_indexes"][0]
+
+        self.assertEqual(collection_index["total_documents"], 56)
+        self.assertEqual(collection_index["returned_documents"], 50)
+        self.assertTrue(collection_index["has_more_documents"])
+        self.assertTrue(context["index_truncated"])
 
     @override_settings(AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=True)
     def test_legacy_eager_context_remains_available(self):
@@ -864,6 +1150,229 @@ class KnowledgeRetrievalTests(TestCase):
 
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["results"][0]["chunk_id"], self.chunk.pk)
+
+    def test_bound_knowledge_tools_limit_read_search_and_browse_outputs(self):
+        seed_starter_toolboxes()
+        self.chunk.content = "x" * 9000
+        self.chunk.metadata = {"oversized": "m" * 3000}
+        self.chunk.save(update_fields=["content", "metadata"])
+        self.document.tags = [f"{index}-" + ("t" * 120) for index in range(30)]
+        self.document.save(update_fields=["tags"])
+        KnowledgeDocumentChunk.objects.bulk_create(
+            [
+                KnowledgeDocumentChunk(
+                    document=self.document,
+                    chunk_index=index,
+                    section_title=f"Bounded {index}",
+                    content="bounded needle result",
+                )
+                for index in range(3, 33)
+            ]
+        )
+        read_tool = ToolDefinition.objects.get(name="read_knowledge_chunk")
+        search_tool = ToolDefinition.objects.get(name="search_knowledge")
+        browse_tool = ToolDefinition.objects.get(name="browse_knowledge_index")
+
+        read_result = execute_tool(
+            read_tool,
+            {"agent_id": -1, "chunk_id": self.chunk.pk},
+            agent=self.agent,
+        )
+        search_result = execute_tool(
+            search_tool,
+            {"query": "bounded needle", "limit": 1000},
+            agent=self.agent,
+        )
+        browse_result = execute_tool(
+            browse_tool,
+            {"collection_id": self.collection.pk},
+            agent=self.agent,
+        )
+
+        self.assertEqual(len(read_result["content"]), 8000)
+        self.assertEqual(read_result["content_chars"], 9000)
+        self.assertTrue(read_result["content_truncated"])
+        self.assertTrue(read_result["metadata_truncated"])
+        self.assertTrue(read_result["metadata"]["truncated"])
+        self.assertEqual(search_result["total"], 20)
+        self.assertEqual(len(search_result["results"][0]["citation"]["tags"]), 20)
+        indexed_document = browse_result["collections"][0]["documents"][0]
+        self.assertEqual(indexed_document["returned_chunks"], 25)
+        self.assertTrue(indexed_document["chunks_have_more"])
+
+        bounded_query = search_knowledge(
+            self.agent,
+            query="unused " * 300,
+            limit=1,
+        )
+        self.assertLessEqual(len(bounded_query["query"]), 1000)
+
+    @override_settings(
+        AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME="resolved",
+        AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=False,
+        AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL=6,
+    )
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_resolved_runner_retrieves_all_stages_with_server_bound_agent(self, mocked_call):
+        seed_starter_toolboxes()
+        private_agent = AgentProfile.objects.create(
+            name="private-knowledge-agent",
+            role="Must not be impersonated",
+            model_config=self.model,
+        )
+        private_agent.knowledge_collections.add(self.other_collection)
+        self.agent.input_contract = {"required": ["question"]}
+        self.agent.output_contract = {"required": ["agent", "llm", "tools"]}
+        self.agent.save(update_fields=["input_contract", "output_contract", "updated_at"])
+        pipeline = PipelineDefinition.objects.create(
+            name="knowledge-retrieval-pipeline",
+            is_active=False,
+            global_input_contract={"required": ["question"]},
+            global_output_contract={"required": ["answer"]},
+        )
+        PipelineStep.objects.create(
+            pipeline=pipeline,
+            agent=self.agent,
+            order=1,
+            input_mapping={"question": "question"},
+            output_mapping={"answer": "llm.content"},
+        )
+        pipeline.is_active = True
+        pipeline.save(update_fields=["is_active"])
+        session = create_execution_session(
+            pipeline=pipeline,
+            runtime_mode=ExecutionSession.RuntimeMode.SYNC,
+            initial_context={"question": "When are unused orders refundable?"},
+        )
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": json.dumps(
+                    {
+                        "type": "tool_call",
+                        "tool_name": "list_knowledge_libraries",
+                        "arguments": {"agent_id": private_agent.pk},
+                    }
+                ),
+            },
+            {
+                "status": "ok",
+                "content": json.dumps(
+                    {
+                        "type": "tool_call",
+                        "tool_name": "browse_knowledge_index",
+                        "arguments": {},
+                    }
+                ),
+            },
+            {
+                "status": "ok",
+                "content": json.dumps(
+                    {
+                        "type": "tool_call",
+                        "tool_name": "search_knowledge",
+                        "arguments": {"query": "unused order"},
+                    }
+                ),
+            },
+            {
+                "status": "ok",
+                "content": json.dumps(
+                    {
+                        "type": "tool_call",
+                        "tool_name": "read_knowledge_chunk",
+                        "arguments": {"chunk_id": self.chunk.pk},
+                    }
+                ),
+            },
+            {
+                "status": "ok",
+                "content": json.dumps(
+                    {
+                        "type": "tool_call",
+                        "tool_name": "read_document_section",
+                        "arguments": {
+                            "document_id": self.document.pk,
+                            "section_title": "Eligibility",
+                        },
+                    }
+                ),
+            },
+            {
+                "status": "ok",
+                "content": json.dumps(
+                    {
+                        "type": "tool_call",
+                        "tool_name": "cite_knowledge_source",
+                        "arguments": {"chunk_id": self.chunk.pk},
+                    }
+                ),
+            },
+            {
+                "status": "ok",
+                "content": '{"type":"final","answer":"Unused orders are refundable within 30 days."}',
+            },
+        ]
+
+        run_execution_session(session.pk)
+        session.refresh_from_db()
+
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(
+            session.final_context["answer"],
+            "Unused orders are refundable within 30 days.",
+        )
+        step_run = session.step_runs.get()
+        knowledge_context = step_run.request_payload["knowledge_context"]
+        self.assertEqual(knowledge_context["text"], "")
+        self.assertNotIn("Full refund policy text", str(step_run.request_payload))
+        self.assertEqual(
+            set(item["name"] for item in step_run.response_payload["tool_manifest"]),
+            {
+                "list_knowledge_libraries",
+                "browse_knowledge_index",
+                "search_knowledge",
+                "read_knowledge_chunk",
+                "read_document_section",
+                "cite_knowledge_source",
+            },
+        )
+        first_manifest = json.loads(
+            mocked_call.call_args_list[0].kwargs["messages"][1]["content"]
+        )["available_tools"]
+        self.assertNotIn("agent_id", str(first_manifest))
+        first_tool_result = step_run.response_payload["tools"]["list_knowledge_libraries"]
+        self.assertEqual(first_tool_result["total"], 1)
+        self.assertEqual(first_tool_result["libraries"][0]["name"], self.collection.name)
+        self.assertNotIn(self.other_collection.name, str(first_tool_result))
+        self.assertEqual(ToolExecutionRun.objects.filter(session=session).count(), 6)
+        self.assertTrue(
+            all(
+                run.input_payload["agent_id"] == self.agent.pk
+                for run in ToolExecutionRun.objects.filter(session=session)
+            )
+        )
+
+    def test_build_console_created_knowledge_gets_an_initial_retrievable_chunk(self):
+        from ai_hub.services.build_console import attach_knowledge
+
+        errors = {}
+        attach_knowledge(
+            self.agent,
+            {
+                "knowledge_mode": "create",
+                "knowledge_collection_name": "Build knowledge",
+                "knowledge_doc_title": "Build document",
+                "knowledge_doc_content": "A document created through the Build Console.",
+            },
+            errors,
+        )
+
+        self.assertEqual(errors, {})
+        document = KnowledgeDocument.objects.get(title="Build document")
+        chunk = document.chunks.get()
+        self.assertEqual(chunk.chunk_index, 1)
+        self.assertEqual(chunk.content, document.curated_text)
 
 
 class DeliberateToolRuntimeTests(TestCase):
@@ -929,6 +1438,55 @@ class DeliberateToolRuntimeTests(TestCase):
         self.assertEqual(run.status, ToolExecutionRun.Status.SUCCESS)
         self.assertEqual(run.input_payload, {"query": "hello"})
         self.assertEqual(run.output_payload, {"macro": "macro result"})
+
+    @override_settings(AI_HUB_MAX_TOOL_OBSERVATION_CHARS=512)
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_large_tool_results_are_bounded_in_prompt_but_raw_in_audit(self, mocked_call):
+        self.make_prompt_tool(config={"template": "x" * 2000})
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": (
+                    '{"type":"tool_call","tool_name":"deliberate-tool",'
+                    '"arguments":{"query":"hello"}}'
+                ),
+            },
+            {
+                "status": "ok",
+                "content": '{"type":"final","answer":"used bounded tool result"}',
+            },
+        ]
+
+        output = execute_agent_deliberate(self.agent, {"query": "hello"})
+
+        prompt_result = output["tools"]["deliberate-tool"]
+        self.assertTrue(prompt_result["truncated"])
+        self.assertEqual(prompt_result["tool_name"], "deliberate-tool")
+        self.assertLessEqual(len(json.dumps(prompt_result, sort_keys=True)), 512)
+        raw_result = ToolExecutionRun.objects.get().output_payload
+        self.assertEqual(len(raw_result["macro"]), 2000)
+        second_messages = mocked_call.call_args_list[1].kwargs["messages"]
+        tool_observation = json.loads(second_messages[-1]["content"])
+        self.assertEqual(
+            tool_observation["tool_observation"]["result"],
+            prompt_result,
+        )
+
+    @override_settings(AI_HUB_MAX_TOOL_OBSERVATION_CHARS=512)
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_legacy_tool_prompt_is_bounded_without_losing_step_output(self, mocked_call):
+        self.make_prompt_tool(config={"template": "x" * 2000})
+        mocked_call.return_value = {"status": "ok", "content": "done"}
+
+        output = execute_agent(self.agent, {"query": "hello"})
+
+        self.assertEqual(len(output["tools"]["deliberate-tool"]["macro"]), 2000)
+        sent_payload = json.loads(
+            mocked_call.call_args.kwargs["messages"][1]["content"]
+        )
+        prompt_result = sent_payload["tool_results"]["deliberate-tool"]
+        self.assertTrue(prompt_result["truncated"])
+        self.assertLessEqual(len(json.dumps(prompt_result, sort_keys=True)), 512)
 
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_unknown_or_unauthorised_tool_is_blocked(self, mocked_call):
@@ -1743,6 +2301,7 @@ class HubExecutionSessionTests(TestCase):
             source_object=self.source,
             pipeline=self.pipeline,
             triggered_by=self.user,
+            runtime_config={"agent_tool_runtime": "legacy_preexecute"},
             initial_context={"source": "plain reusable input"},
         )
         mocked_call.return_value = {"status": "ok", "content": "done"}
@@ -1759,6 +2318,281 @@ class HubExecutionSessionTests(TestCase):
             set(session.step_runs.get(order=1).response_payload["tools"]),
             {"orchestrator-action"},
         )
+
+    @override_settings(AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME="resolved")
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_resolved_orchestrator_executes_toolbox_tool_with_linked_audit(self, mocked_call):
+        tool = ToolDefinition.objects.create(
+            name="toolbox-only-context",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            input_schema={"required": ["source"]},
+            output_schema={"required": ["macro"]},
+            config={"template": "resolved context"},
+        )
+        toolbox = Toolbox.objects.create(
+            name="Session Resolver Toolbox",
+            slug="session-resolver-toolbox",
+            label="Session Resolver Toolbox",
+        )
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=toolbox)
+        self.pipeline.is_active = True
+        self.pipeline.save(update_fields=["is_active"])
+        session = create_execution_session(
+            source_object=self.source,
+            pipeline=self.pipeline,
+            triggered_by=self.user,
+            initial_context={"source": "resolved input"},
+        )
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": (
+                    '{"type":"tool_call","tool_name":"toolbox-only-context",'
+                    '"arguments":{"source":"resolved input"}}'
+                ),
+            },
+            {"status": "ok", "content": '{"type":"final","answer":"resolved result"}'},
+        ]
+
+        run_execution_session(session.id)
+        session.refresh_from_db()
+
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        step_run = session.step_runs.get()
+        self.assertEqual(step_run.response_payload["agent_tool_runtime"], "resolved")
+        self.assertEqual(step_run.response_payload["llm"]["content"], "resolved result")
+        self.assertEqual(step_run.response_payload["tools"], {tool.name: {"macro": "resolved context"}})
+        tool_run = ToolExecutionRun.objects.get()
+        self.assertEqual(tool_run.session, session)
+        self.assertEqual(tool_run.step_run, step_run)
+        self.assertEqual(tool_run.agent, self.agent)
+        self.assertEqual(tool_run.status, ToolExecutionRun.Status.SUCCESS)
+        first_user_payload = json.loads(mocked_call.call_args_list[0].kwargs["messages"][1]["content"])
+        self.assertEqual(
+            [item["name"] for item in first_user_payload["available_tools"]],
+            ["toolbox-only-context"],
+        )
+
+    @override_settings(AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME="resolved")
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_resolved_game_exposes_only_context_tools_and_unwraps_final_decision(self, mocked_call):
+        context_tool = ToolDefinition.objects.create(
+            name="resolved-game-context",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "safe context", "game_tool_category": "context_tool"},
+        )
+        action_tool = ToolDefinition.objects.create(
+            name="resolved-game-action",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "unsafe action", "game_tool_category": "action_tool"},
+        )
+        toolbox = Toolbox.objects.create(
+            name="Resolved GAME Toolbox",
+            slug="resolved-game-toolbox",
+            label="Resolved GAME Toolbox",
+        )
+        ToolboxTool.objects.create(toolbox=toolbox, tool=context_tool, display_order=1)
+        ToolboxTool.objects.create(toolbox=toolbox, tool=action_tool, display_order=2)
+        game_agent = AgentProfile.objects.create(
+            name="resolved-game-agent",
+            role="Resolved GAME runner",
+            model_config=self.model,
+            input_contract={"required": ["goal"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+        AgentToolboxAssignment.objects.create(agent=game_agent, toolbox=toolbox)
+        session = create_execution_session(
+            entry_agent=game_agent,
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            runtime_mode=ExecutionSession.RuntimeMode.SYNC,
+            goal_text="Use governed context.",
+            runtime_config={"max_iterations": 1, "strict_response_contract": True},
+        )
+        game_decision = json.dumps(
+            {
+                "action": "finish",
+                "message": "Context checked.",
+                "complete": True,
+                "final_answer": "Resolved GAME result.",
+            }
+        )
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": (
+                    '{"type":"tool_call","tool_name":"resolved-game-context",'
+                    '"arguments":{}}'
+                ),
+            },
+            {"status": "ok", "content": json.dumps({"type": "final", "answer": game_decision})},
+        ]
+
+        run_execution_session(session.id, allow_legacy_game_action_tools=True)
+        session.refresh_from_db()
+
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(session.final_context["final_answer"], "Resolved GAME result.")
+        step_run = session.step_runs.get()
+        self.assertEqual(step_run.response_payload["agent_tool_runtime"], "resolved")
+        self.assertEqual(set(step_run.response_payload["tools"]), {"resolved-game-context"})
+        self.assertEqual(ToolExecutionRun.objects.get().tool, context_tool)
+        first_user_payload = json.loads(mocked_call.call_args_list[0].kwargs["messages"][1]["content"])
+        self.assertEqual(
+            [item["name"] for item in first_user_payload["available_tools"]],
+            ["resolved-game-context"],
+        )
+
+    @override_settings(AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME="resolved")
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_resolved_runner_excludes_unresumable_approval_tools(self, mocked_call):
+        tool = ToolDefinition.objects.create(
+            name="generic-approval-tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            requires_approval=True,
+            config={"template": "must not run"},
+        )
+        toolbox = Toolbox.objects.create(
+            name="Approval Toolbox",
+            slug="approval-toolbox",
+            label="Approval Toolbox",
+        )
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=toolbox)
+        self.pipeline.is_active = True
+        self.pipeline.save(update_fields=["is_active"])
+        session = create_execution_session(
+            source_object=self.source,
+            pipeline=self.pipeline,
+            triggered_by=self.user,
+            initial_context={"source": "approval input"},
+        )
+        mocked_call.return_value = {
+            "status": "ok",
+            "content": (
+                '{"type":"tool_call","tool_name":"generic-approval-tool",'
+                '"arguments":{}}'
+            ),
+        }
+
+        run_execution_session(session.id)
+        session.refresh_from_db()
+
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertIn("not available", session.error_detail)
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+        user_payload = json.loads(mocked_call.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual(user_payload["available_tools"], [])
+
+    @override_settings(AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME="resolved")
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_invalid_agent_tool_runtime_fails_before_creating_steps(self, mocked_call):
+        self.pipeline.is_active = True
+        self.pipeline.save(update_fields=["is_active"])
+        session = create_execution_session(
+            source_object=self.source,
+            pipeline=self.pipeline,
+            triggered_by=self.user,
+            runtime_config={"agent_tool_runtime": "surprise"},
+            initial_context={"source": "invalid runtime"},
+        )
+
+        run_execution_session(session.id)
+        session.refresh_from_db()
+
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertIn("Unknown agent tool runtime 'surprise'", session.error_detail)
+        self.assertEqual(session.step_runs.count(), 0)
+        mocked_call.assert_not_called()
+
+    @override_settings(AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME="resolved")
+    def test_training_provider_smoke_keeps_existing_orchestrator_and_game_outputs(self):
+        provider = ProviderConfig.objects.create(
+            name="resolved-training-smoke-provider",
+            provider_type=ProviderConfig.ProviderType.TRAINING,
+        )
+        model = ModelConfig.objects.create(provider=provider, model_name="training")
+        tool = ToolDefinition.objects.create(
+            name="resolved-training-smoke-tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "smoke context", "game_tool_category": "context_tool"},
+        )
+        toolbox = Toolbox.objects.create(
+            name="Resolved Training Smoke Toolbox",
+            slug="resolved-training-smoke-toolbox",
+            label="Resolved Training Smoke Toolbox",
+        )
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+
+        orchestrator_agent = AgentProfile.objects.create(
+            name="resolved-training-orchestrator",
+            role="Resolved training smoke",
+            model_config=model,
+            system_prompt="Return a concise generic result.",
+            input_contract={"required": ["source"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+        AgentToolboxAssignment.objects.create(agent=orchestrator_agent, toolbox=toolbox)
+        pipeline = PipelineDefinition.objects.create(
+            name="resolved-training-smoke-pipeline",
+            is_active=False,
+        )
+        PipelineStep.objects.create(
+            pipeline=pipeline,
+            agent=orchestrator_agent,
+            order=1,
+            input_mapping={"source": "source"},
+            output_mapping={"result": "llm.content"},
+        )
+        pipeline.is_active = True
+        pipeline.save(update_fields=["is_active"])
+        orchestrator_session = create_execution_session(
+            pipeline=pipeline,
+            runtime_mode=ExecutionSession.RuntimeMode.SYNC,
+            initial_context={"source": "smoke"},
+        )
+
+        game_agent = AgentProfile.objects.create(
+            name="resolved-training-game",
+            role="Resolved GAME smoke",
+            model_config=model,
+            system_prompt=(
+                "You are a GAME agent. Return action, message, complete and final_answer."
+            ),
+            input_contract={"required": ["goal"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+        AgentToolboxAssignment.objects.create(agent=game_agent, toolbox=toolbox)
+        game_session = create_execution_session(
+            entry_agent=game_agent,
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            runtime_mode=ExecutionSession.RuntimeMode.SYNC,
+            goal_text="Complete the resolved runtime smoke.",
+            runtime_config={"max_iterations": 1, "strict_response_contract": True},
+        )
+
+        run_execution_session(orchestrator_session.pk)
+        run_execution_session(game_session.pk)
+        orchestrator_session.refresh_from_db()
+        game_session.refresh_from_db()
+
+        self.assertEqual(orchestrator_session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(game_session.status, ExecutionSession.Status.SUCCESS)
+        orchestrator_response = orchestrator_session.step_runs.get().response_payload
+        game_response = game_session.step_runs.get().response_payload
+        self.assertEqual(orchestrator_response["agent_tool_runtime"], "resolved")
+        self.assertEqual(game_response["agent_tool_runtime"], "resolved")
+        self.assertEqual(orchestrator_response["model_response_mode"], "plain_final_compatibility")
+        self.assertEqual(game_response["model_response_mode"], "plain_final_compatibility")
+        self.assertEqual(
+            [item["name"] for item in orchestrator_response["tool_manifest"]],
+            [tool.name],
+        )
+        self.assertEqual(
+            [item["name"] for item in game_response["tool_manifest"]],
+            [tool.name],
+        )
+        self.assertEqual(game_session.final_context["finish_reason"], "agent_finished")
 
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_run_execution_session_merges_json_final_output_before_contract_validation(self, mocked_call):
@@ -2088,7 +2922,10 @@ class HubExecutionSessionTests(TestCase):
             entry_agent=game_agent,
             runtime_kind=ExecutionSession.RuntimeKind.GAME,
             goal_text="Use safe context only.",
-            runtime_config={"max_iterations": 1},
+            runtime_config={
+                "max_iterations": 1,
+                "agent_tool_runtime": "legacy_preexecute",
+            },
         )
         mocked_call.return_value = {
             "status": "ok",
@@ -2120,7 +2957,10 @@ class HubExecutionSessionTests(TestCase):
             entry_agent=game_agent,
             runtime_kind=ExecutionSession.RuntimeKind.GAME,
             goal_text="Run trusted legacy action.",
-            runtime_config={"max_iterations": 1},
+            runtime_config={
+                "max_iterations": 1,
+                "agent_tool_runtime": "legacy_preexecute",
+            },
         )
         mocked_call.return_value = {
             "status": "ok",
@@ -2296,6 +3136,41 @@ class HubAdminControlCenterTests(TestCase):
         self.assertIn(f"pipeline:{self.pipeline.id}", pipeline_scope["node_ids"])
         self.assertIn(f"agent:{self.agent.id}", pipeline_scope["node_ids"])
         self.assertEqual(context["warnings"], [])
+
+    @patch("ai_hub.services.admin_control_center.requests.get")
+    def test_control_center_graph_uses_resolved_tool_access(self, mocked_get):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"models": [{"name": "qwen3:8b"}]}
+
+        mocked_get.return_value = Response()
+        tool = ToolDefinition.objects.create(
+            name="graph-toolbox-only",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+        )
+        toolbox = Toolbox.objects.create(
+            name="Graph Resolver Toolbox",
+            slug="graph-resolver-toolbox",
+            label="Graph Resolver Toolbox",
+        )
+        ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
+        AgentToolboxAssignment.objects.create(agent=self.agent, toolbox=toolbox)
+
+        context = build_control_center_context()
+
+        edges = {
+            (edge["source"], edge["target"], edge["label"])
+            for edge in context["graph"]["edges"]
+        }
+        pipeline_scope = context["graph"]["pipelineScopes"][0]
+        self.assertIn(
+            (f"tool:{tool.id}", f"agent:{self.agent.id}", "enables"),
+            edges,
+        )
+        self.assertIn(f"tool:{tool.id}", pipeline_scope["node_ids"])
 
     @patch("ai_hub.services.admin_control_center.requests.get")
     def test_control_center_warns_about_missing_ollama_model(self, mocked_get):
@@ -3141,6 +4016,22 @@ class HubExecutionSessionEndpointTests(TestCase):
         self.assertContains(response, "Select a valid choice")
         self.assertFalse(ExecutionSession.objects.filter(source_label="Hybrid GAME").exists())
 
+    @override_settings(AI_HUB_GAME_GOALS_ENABLED=False)
+    def test_goal_flag_does_not_block_orchestrator_session_admin_add(self):
+        response = self.client.get(reverse("admin:ai_hub_executionsession_add"))
+
+        self.assertEqual(response.status_code, 200)
+
+    @override_settings(AI_HUB_GAME_GOALS_ENABLED=False)
+    def test_goal_flag_hides_direct_goal_add_and_lifecycle_actions(self):
+        add_response = self.client.get(reverse("admin:ai_hub_gamegoal_add"))
+        list_response = self.client.get(reverse("admin:ai_hub_gamegoal_changelist"))
+
+        self.assertEqual(add_response.status_code, 403)
+        self.assertEqual(list_response.status_code, 200)
+        self.assertNotContains(list_response, "Queue selected goals")
+        self.assertNotContains(list_response, "Cancel selected goals")
+
     def test_admin_execution_session_change_view_renders_timeline(self):
         game_session = create_execution_session(
             source_label="Timeline GAME",
@@ -3296,6 +4187,34 @@ class GameActionDispatcherTests(TestCase):
         self.assertTrue(action_run.output_payload["complete"])
         self.assertIsNotNone(action_run.finished_at)
         self.assertIsNotNone(action_run.latency_ms)
+
+    def test_record_memory_dispatcher_maps_each_scope_to_valid_links(self):
+        GameActionDefinition.objects.create(
+            name="record_memory",
+            label="Record memory",
+            action_type=GameActionDefinition.ActionType.INTERNAL,
+        )
+
+        expected_links = {
+            GameMemoryEntry.ScopeType.WORKSPACE: (None, None),
+            GameMemoryEntry.ScopeType.GOAL: (self.goal.pk, None),
+            GameMemoryEntry.ScopeType.SESSION: (None, self.session.pk),
+            GameMemoryEntry.ScopeType.ACTION_RESULT: (self.goal.pk, self.session.pk),
+        }
+        for scope_type, expected in expected_links.items():
+            with self.subTest(scope_type=scope_type):
+                action_run = self._dispatch(
+                    "record_memory",
+                    {
+                        "scope_type": scope_type,
+                        "content": f"{scope_type} dispatcher fact",
+                    },
+                )
+                self.assertEqual(action_run.status, GameActionRun.Status.SUCCESS)
+                entry = GameMemoryEntry.objects.get(
+                    pk=action_run.output_payload["memory_entry_id"]
+                )
+                self.assertEqual((entry.goal_id, entry.session_id), expected)
 
     def test_action_output_becomes_next_iteration_observation(self):
         """search_knowledge output is stored in action_run.observation_payload."""
@@ -3574,6 +4493,109 @@ class GameActionDispatcherTests(TestCase):
         self.assertIn("action_output", first_step.observation_payload)
         memory = session.final_context["memory"]
         self.assertTrue(any("action_output_summary" in m for m in memory))
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_recorded_memory_is_refreshed_before_next_iteration(self, mocked_call):
+        GameActionDefinition.objects.create(
+            name="record_memory",
+            label="Record memory",
+            action_type=GameActionDefinition.ActionType.INTERNAL,
+        )
+        mocked_call.side_effect = [
+            {
+                "status": "ok",
+                "content": (
+                    '{"action":"record_memory","action_input":{"scope_type":"goal",'
+                    '"content":"New fact from this run."},"message":"remember",'
+                    '"complete":false,"final_answer":""}'
+                ),
+            },
+            {
+                "status": "ok",
+                "content": (
+                    '{"action":"finish","message":"used memory",'
+                    '"complete":true,"final_answer":"done"}'
+                ),
+            },
+        ]
+        goal = create_goal(
+            workspace=self.workspace,
+            title="Refresh scoped memory",
+            description="Use memory recorded during the same run.",
+        )
+        session = create_goal_execution_session(
+            goal=goal,
+            entry_agent=self.agent,
+            runtime_config={"max_iterations": 2},
+        )
+
+        run_execution_session(session.pk, use_action_dispatcher=True)
+
+        second_request = session.step_runs.get(order=2).request_payload
+        self.assertIn(
+            "New fact from this run.",
+            [
+                entry["content"]
+                for entry in second_request["scoped_memory"]["entries"]
+            ],
+        )
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_game_rolling_context_is_bounded_without_truncating_audit(self, mocked_call):
+        large_message = "x" * 2000
+        mocked_call.return_value = {
+            "status": "ok",
+            "content": json.dumps(
+                {
+                    "action": "think",
+                    "message": large_message,
+                    "complete": False,
+                    "final_answer": "",
+                }
+            ),
+        }
+        goal = create_goal(
+            workspace=self.workspace,
+            title="Bound rolling context",
+            description="Keep prompt context bounded.",
+        )
+        session = create_goal_execution_session(
+            goal=goal,
+            entry_agent=self.agent,
+            runtime_config={
+                "max_iterations": 4,
+                "game_memory_max_entries": 2,
+                "game_observations_max_entries": 2,
+                "game_observation_max_chars": 300,
+                "game_previous_response_max_chars": 300,
+                "game_memory_entry_max_chars": 80,
+            },
+        )
+
+        run_execution_session(session.pk)
+        session.refresh_from_db()
+
+        self.assertEqual(len(session.final_context["memory"]), 2)
+        self.assertEqual(len(session.final_context["observations"]), 2)
+        self.assertLessEqual(
+            len(json.dumps(session.final_context["observations"][0])),
+            300,
+        )
+        self.assertLessEqual(
+            len(session.final_context["memory"][0]["summary"]),
+            80,
+        )
+        second_request = session.step_runs.get(order=2).request_payload
+        self.assertTrue(second_request["previous_response"]["truncated"])
+        self.assertLessEqual(
+            len(json.dumps(second_request["previous_response"])),
+            300,
+        )
+        # Raw audit remains complete even when the prompt receives a preview.
+        self.assertEqual(
+            session.step_runs.get(order=1).observation_payload["decision"]["message"],
+            large_message,
+        )
 
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_internal_finish_goal_action_completes_goal_integration(self, mocked_call):
@@ -4852,6 +5874,7 @@ from ai_hub.services.game_delegation import run_delegated_agent  # noqa: E402
 from ai_hub.services.game_plans import add_plan_step, create_plan  # noqa: E402
 from ai_hub.services.game_policy import (  # noqa: E402
     check_delegation_depth,
+    get_session_workspace,
 )
 
 
@@ -4960,6 +5983,29 @@ class GamePlansAndDelegationTests(TestCase):
                 target_agent_name=self.target_agent.name,
                 task="Do something.",
             )
+
+    def test_delegated_session_recovers_parent_workspace_policy_context(self):
+        parent_session = self._make_running_session()
+        parent_action_run = self._make_action_run(
+            parent_session,
+            key_suffix="workspace-context",
+        )
+        delegated_session = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=self.target_agent,
+            goal_text="Delegated task",
+            status=ExecutionSession.Status.PENDING,
+        )
+        GameDelegationRun.objects.create(
+            parent_action_run=parent_action_run,
+            parent_goal=self.goal,
+            delegated_session=delegated_session,
+            target_agent=self.target_agent,
+            status=GameDelegationRun.Status.RUNNING,
+            task="Delegated task",
+        )
+
+        self.assertEqual(get_session_workspace(delegated_session), self.workspace)
 
     def test_delegation_counts_against_budget(self):
         self.workspace.default_policy = {"budget": {"max_sub_agent_runs_per_goal": 1}}
@@ -5205,7 +6251,7 @@ class GameAdminOperationalUXTests(TestCase):
         action_run_ids = [r.pk for r in ctx["action_runs"]]
         self.assertIn(run1.pk, action_run_ids)
         self.assertIn(run2.pk, action_run_ids)
-        self.assertLessEqual(action_run_ids.index(run1.pk), action_run_ids.index(run2.pk))
+        self.assertEqual(action_run_ids, [run1.pk, run2.pk])
 
     def test_scheduler_explanation_is_visible(self):
         explanation = build_scheduler_explanation(self.goal)

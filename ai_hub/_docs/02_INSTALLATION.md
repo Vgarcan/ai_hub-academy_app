@@ -19,6 +19,11 @@ domain-specific workflows through a thin adapter.
 The app can work with local models, hosted providers, or custom provider
 adapters. Provider credentials should never be stored directly in the database.
 
+The bundled `_core/settings.py` defaults to SQLite and can select PostgreSQL
+through `DATABASE_URL` or discrete `POSTGRES_*` variables. The dependency set
+includes Psycopg 3. CI runs the full suite on both SQLite and PostgreSQL 16, so
+the GAME row-locking tests execute without skips on the PostgreSQL job.
+
 ## Add The App
 
 Copy or install the `ai_hub` package into the Django project.
@@ -73,6 +78,27 @@ these URLs is optional.
 
 ## Run Migrations
 
+SQLite needs no database settings. For PostgreSQL, configure either:
+
+```text
+DATABASE_URL=postgresql://ai_hub:password@127.0.0.1:5432/ai_hub
+```
+
+or:
+
+```text
+DATABASE_ENGINE=postgresql
+POSTGRES_DB=ai_hub
+POSTGRES_USER=ai_hub
+POSTGRES_PASSWORD=...
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+```
+
+`DATABASE_URL` takes precedence. Optional `DB_CONN_MAX_AGE` and
+`DB_CONN_HEALTH_CHECKS` control Django connection reuse. Use TLS options such as
+`sslmode=require` in the URL for deployments that require them.
+
 ```bash
 python manage.py migrate ai_hub
 ```
@@ -100,7 +126,10 @@ For `DEBUG=False`, provide a strong `SECRET_KEY`. Secure redirect and cookie set
 
 ## Enable GAME Features
 
-The GAME subsystem is gated by feature flags (`AI_HUB_GAME_*_ENABLED`). They default to enabled in this repo, but the reusable safety default is fail-closed — if you adopt `ai_hub` into a new project and a flag is disabled, GAME services raise a clear error. Enable the capabilities you use. See `03_CONFIGURATION.md` for the full list.
+The GAME subsystem is gated by feature flags (`AI_HUB_GAME_*_ENABLED`). In this
+host they follow `DEBUG` by default: enabled for development and disabled for
+production. The reusable safety default is fail-closed. Enable only the
+capabilities you use; see `03_CONFIGURATION.md`.
 
 Then open:
 

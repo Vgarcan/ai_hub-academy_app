@@ -11,7 +11,7 @@ from ai_hub.models import ExecutionSession, GameActionDefinition, GameActionRun,
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.game_feature_flags import is_game_feature_enabled, require_game_feature
 from ai_hub.services.tool_resolution import resolve_agent_tools
-from ai_hub.services.tools_runtime import execute_tool
+from ai_hub.services.tools_runtime import bind_tool_runtime_context, execute_tool
 
 
 def _resolve_action_definition(action_name: str) -> GameActionDefinition:
@@ -124,12 +124,26 @@ def _handle_record_memory(action_run: GameActionRun, workspace, goal, payload: d
     metadata.setdefault("source_id", action_run.pk)
     metadata.setdefault("model_derived", True)
 
+    scope_links = {
+        GameMemoryEntry.ScopeType.WORKSPACE: {"goal": None, "session": None},
+        GameMemoryEntry.ScopeType.GOAL: {"goal": goal, "session": None},
+        GameMemoryEntry.ScopeType.SESSION: {
+            "goal": None,
+            "session": action_run.session,
+        },
+        GameMemoryEntry.ScopeType.ACTION_RESULT: {
+            "goal": goal,
+            "session": action_run.session,
+        },
+    }
+    if scope_type not in scope_links:
+        raise ValidationError(f"Unknown GAME memory scope '{scope_type}'.")
+
     entry = record_memory(
         scope_type=scope_type,
         workspace=workspace,
         content=content,
-        goal=goal,
-        session=action_run.session,
+        **scope_links[scope_type],
         metadata=metadata,
         importance_score=importance_score,
     )
@@ -305,20 +319,21 @@ def _dispatch_unified_tool_action(
                 f"Tool '{tool.name}' is not available to agent '{agent.name}' in this GAME session."
             )
 
+    effective_payload = bind_tool_runtime_context(tool, payload, agent=agent)
     tool_run = ToolExecutionRun.objects.create(
         session=action_run.session,
         step_run=action_run.step_run,
         agent=agent,
         tool=tool,
         status=ToolExecutionRun.Status.RUNNING,
-        input_payload=payload,
+        input_payload=effective_payload,
         risk_level=tool.risk_level,
         approval_state=ToolExecutionRun.ApprovalState.NOT_REQUIRED,
         started_at=timezone.now(),
     )
     start = time.perf_counter()
     try:
-        result = execute_tool(tool, payload)
+        result = execute_tool(tool, effective_payload, agent=agent)
     except Exception as exc:
         tool_run.status = ToolExecutionRun.Status.FAILED
         tool_run.error_detail = str(exc)

@@ -1919,6 +1919,23 @@ class GameGoalAdmin(AIHubListPageMixin, admin.ModelAdmin):
         "resume_selected_goals",
     )
 
+    def has_add_permission(self, request):
+        from .services.game_feature_flags import is_game_feature_enabled
+
+        return (
+            is_game_feature_enabled("AI_HUB_GAME_GOALS_ENABLED")
+            and super().has_add_permission(request)
+        )
+
+    def get_actions(self, request):
+        from .services.game_feature_flags import is_game_feature_enabled
+
+        actions = super().get_actions(request)
+        if not is_game_feature_enabled("AI_HUB_GAME_GOALS_ENABLED"):
+            for name in self.actions:
+                actions.pop(name, None)
+        return actions
+
     def change_view(self, request, object_id, form_url="", extra_context=None):
         from .services.game_operational_ux import build_goal_detail_context
         extra_context = extra_context or {}
@@ -2057,7 +2074,10 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
             "help_text": _("Orchestrator uses a fixed pipeline. GAME uses one entry agent with a goal loop."),
         },
         "runtime_mode": {
-            "help_text": _("Async is recommended for long AI runs. Sync is mainly for quick local testing."),
+            "help_text": _(
+                "Async marks work intended for a host worker, but calling the bundled runner still executes "
+                "inline. Sync is mainly for quick local testing."
+            ),
         },
         "status": {
             "help_text": _("Current lifecycle state. Pending sessions can be run from the list action."),
@@ -2138,20 +2158,6 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
             "description": _("Use this area to inspect lifecycle, failures and rollback-safe execution state."),
         }),
     )
-
-    def has_add_permission(self, request):
-        from .services.game_feature_flags import is_game_feature_enabled
-
-        return is_game_feature_enabled("AI_HUB_GAME_GOALS_ENABLED") and super().has_add_permission(request)
-
-    def get_actions(self, request):
-        from .services.game_feature_flags import is_game_feature_enabled
-
-        actions = super().get_actions(request)
-        if not is_game_feature_enabled("AI_HUB_GAME_GOALS_ENABLED"):
-            for name in self.actions:
-                actions.pop(name, None)
-        return actions
 
     audit_fieldsets = (
         ("5.0 Generic execution", {

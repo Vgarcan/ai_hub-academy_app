@@ -11,6 +11,12 @@ Host-project features should be documented in the host project, not here.
 
 #### Foundation boundary closure
 
+- Expired GAME approvals now close their ActionRun and continuation atomically,
+  record one `approval_expired` parent observation, and resume through the
+  existing GAME runner without dispatching the expired action. Approve, reject
+  and resume interactions reconcile stale deadlines, including the previously
+  deadlocked historical row shape. PostgreSQL tests cover expiry races against
+  all three operations.
 - Inactive Agents now fail at the shared runtime boundary before Knowledge,
   Tool or Provider access in direct, Orchestrator, GAME and fallback paths.
 - Lexical Knowledge candidate selection now includes document tags while

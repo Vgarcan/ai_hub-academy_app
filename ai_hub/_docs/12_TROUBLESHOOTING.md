@@ -178,6 +178,22 @@ fail-closed). Enable the flag in settings or the environment — see
 operations are hidden too, but direct model writes and not every lifecycle
 helper are uniformly gated; use Admin/database permissions for a hard stop.
 
+## Approval Expired
+
+```text
+APPROVAL_EXPIRED
+```
+
+The deadline passed before a reviewer decision. The expired action did not
+execute. The service atomically marks the Approval `expired`, the ActionRun
+`failed`, and the matching continuation `expired`, records an
+`approval_expired` observation, and returns control to the parent GAME. Approve
+or Reject may report this error after that recovery has been committed.
+
+If the parent later selects the same action, it creates a fresh ActionRun,
+Approval, fingerprint and continuation. Never edit the old expiry, fingerprint
+or ActionRun to reuse the historical authorization.
+
 ## Approval Requires A Fresh Request
 
 ```text

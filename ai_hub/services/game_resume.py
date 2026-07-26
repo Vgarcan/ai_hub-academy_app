@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -31,6 +32,297 @@ _WAITING_GOAL_STATUSES = frozenset(
         GameGoal.Status.BLOCKED,
     }
 )
+
+APPROVAL_EXPIRED_CODE = "APPROVAL_EXPIRED"
+APPROVAL_EXPIRED_MESSAGE = (
+    f"{APPROVAL_EXPIRED_CODE}: This approval request has expired. "
+    "The requested action was not executed."
+)
+
+
+@dataclass(frozen=True)
+class _ExpiryResolution:
+    action_run_id: int
+    session_id: int
+    next_order: int | None
+    should_resume: bool
+
+
+@dataclass
+class _LockedApprovalLifecycle:
+    session: ExecutionSession
+    action_run: GameActionRun
+    approval: GameActionApprovalRequest
+    goal: GameGoal | None
+    workspace: object | None
+    continuation: GameContinuationRequest | None
+
+
+def _matching_approval_continuation(
+    *,
+    session: ExecutionSession,
+    action_run_id: int,
+) -> GameContinuationRequest | None:
+    """Lock the continuation belonging to one approval lifecycle.
+
+    Real dispatcher-created continuations carry ``action_run_id``. The
+    payload-less fallback preserves compatibility with older/manual rows while
+    the database constraint still guarantees at most one pending continuation
+    per session.
+    """
+    continuations = list(
+        GameContinuationRequest.objects.select_for_update()
+        .filter(
+            session=session,
+            reason_code=GameContinuationRequest.ReasonCode.NEEDS_APPROVAL,
+            status__in=[
+                GameContinuationRequest.Status.PENDING,
+                GameContinuationRequest.Status.EXPIRED,
+            ],
+        )
+        .order_by("-created_at")
+    )
+    for continuation in continuations:
+        if (continuation.payload or {}).get("action_run_id") == action_run_id:
+            return continuation
+    for continuation in continuations:
+        if (
+            continuation.status == GameContinuationRequest.Status.PENDING
+            and not (continuation.payload or {}).get("action_run_id")
+        ):
+            return continuation
+    return None
+
+
+def _lock_approval_lifecycle(action_run_id: int) -> _LockedApprovalLifecycle:
+    """Lock one approval lifecycle in the shared authoritative order.
+
+    Lock order:
+    ExecutionSession -> GameActionRun -> GameActionDefinition ->
+    GameActionApprovalRequest -> GameGoal -> GameWorkspace ->
+    GameContinuationRequest.
+    """
+    session_id = (
+        GameActionRun.objects.only("session_id")
+        .get(pk=action_run_id)
+        .session_id
+    )
+    session = ExecutionSession.objects.select_for_update().get(pk=session_id)
+    action_run = GameActionRun.objects.select_for_update().get(pk=action_run_id)
+
+    from ai_hub.models import GameActionDefinition, GameWorkspace
+
+    action_run.action = GameActionDefinition.objects.select_for_update().get(
+        pk=action_run.action_id
+    )
+    approval = GameActionApprovalRequest.objects.select_for_update().get(
+        action_run=action_run
+    )
+    goal = (
+        GameGoal.objects.select_for_update().get(pk=session.goal_id)
+        if session.goal_id
+        else None
+    )
+    workspace = (
+        GameWorkspace.objects.select_for_update().get(pk=goal.workspace_id)
+        if goal is not None
+        else None
+    )
+    continuation = _matching_approval_continuation(
+        session=session,
+        action_run_id=action_run.pk,
+    )
+    return _LockedApprovalLifecycle(
+        session=session,
+        action_run=action_run,
+        approval=approval,
+        goal=goal,
+        workspace=workspace,
+        continuation=continuation,
+    )
+
+
+def _append_action_resolution_to_session(
+    *,
+    session: ExecutionSession,
+    action_run: GameActionRun,
+    status: str,
+    payload: dict,
+) -> None:
+    context = dict(session.final_context or {})
+    observations = list(context.get("observations") or [])
+    already_recorded = any(
+        isinstance(item, dict)
+        and item.get("action_run_id") == action_run.pk
+        and item.get("resolution_status") == status
+        for item in observations
+    )
+    if not already_recorded:
+        observations.append(
+            {
+                "action_run_id": action_run.pk,
+                "action": action_run.action_name,
+                "resolution_status": status,
+                **payload,
+            }
+        )
+    context["observations"] = observations
+    session.final_context = context
+
+
+def _finalize_expired_approval_locked(
+    lifecycle: _LockedApprovalLifecycle,
+    *,
+    now=None,
+) -> _ExpiryResolution | None:
+    """Atomically close an expired lifecycle without executing its action."""
+    approval = lifecycle.approval
+    action_run = lifecycle.action_run
+    session = lifecycle.session
+    goal = lifecycle.goal
+    continuation = lifecycle.continuation
+    resolution_time = now or timezone.now()
+
+    is_expired = approval.status == GameActionApprovalRequest.Status.EXPIRED
+    deadline_passed = (
+        approval.status == GameActionApprovalRequest.Status.PENDING
+        and approval.expires_at is not None
+        and approval.expires_at <= resolution_time
+    )
+    if not (is_expired or deadline_passed):
+        return None
+
+    if action_run.status not in {
+        GameActionRun.Status.WAITING_APPROVAL,
+        GameActionRun.Status.FAILED,
+    }:
+        raise ValidationError(
+            "Expired approval cannot be reconciled because its action run has "
+            f"terminal status '{action_run.status}'."
+        )
+    if (
+        session.status == ExecutionSession.Status.WAITING_ASYNC
+        and continuation is None
+    ):
+        raise ValidationError(
+            "Expired approval cannot be reconciled without its matching "
+            "approval continuation."
+        )
+
+    if approval.status == GameActionApprovalRequest.Status.PENDING:
+        approval.status = GameActionApprovalRequest.Status.EXPIRED
+        approval.save(update_fields=["status"])
+
+    if action_run.status == GameActionRun.Status.WAITING_APPROVAL:
+        action_run.status = GameActionRun.Status.FAILED
+        action_run.error_detail = APPROVAL_EXPIRED_MESSAGE
+        action_run.finished_at = resolution_time
+        action_run.observation_payload = {
+            "action_name": action_run.action_name,
+            "action_type": action_run.action.action_type,
+            "resolution_status": "approval_expired",
+            "complete": False,
+        }
+        action_run.save(
+            update_fields=[
+                "status",
+                "error_detail",
+                "finished_at",
+                "observation_payload",
+            ]
+        )
+
+    continuation_closes_lifecycle = continuation is not None and continuation.status in {
+        GameContinuationRequest.Status.PENDING,
+        GameContinuationRequest.Status.EXPIRED,
+    }
+    if (
+        continuation is not None
+        and continuation.status == GameContinuationRequest.Status.PENDING
+    ):
+        continuation.status = GameContinuationRequest.Status.EXPIRED
+        continuation.resolved_at = resolution_time
+        continuation.save(update_fields=["status", "resolved_at"])
+
+    _append_action_resolution_to_session(
+        session=session,
+        action_run=action_run,
+        status="approval_expired",
+        payload={
+            "message": (
+                "The requested action was not executed because approval expired. "
+                "Choose a new action, request fresh approval, ask for information, "
+                "or finish with the information available."
+            ),
+        },
+    )
+
+    has_other_pending_continuation = GameContinuationRequest.objects.filter(
+        session=session,
+        status=GameContinuationRequest.Status.PENDING,
+    ).exclude(
+        pk=continuation.pk if continuation is not None else None
+    ).exists()
+    should_resume = (
+        continuation_closes_lifecycle
+        and not has_other_pending_continuation
+        and session.status == ExecutionSession.Status.WAITING_ASYNC
+        and goal is not None
+        and goal.status != GameGoal.Status.CANCELLED
+    )
+    next_order = None
+    session_update_fields = ["final_context", "updated_at"]
+    if should_resume:
+        session.status = ExecutionSession.Status.RUNNING
+        session.finished_at = None
+        session_update_fields.extend(["status", "finished_at"])
+        if goal.status in _WAITING_GOAL_STATUSES:
+            transition_goal_status(
+                goal,
+                GameGoal.Status.RUNNING,
+                reason=f"approval #{approval.pk} expired",
+            )
+        next_order = (session.step_runs.aggregate(Max("order"))["order__max"] or 0) + 1
+    elif (
+        session.status == ExecutionSession.Status.WAITING_ASYNC
+        and goal is not None
+        and goal.status == GameGoal.Status.CANCELLED
+    ):
+        session.status = ExecutionSession.Status.CANCELLED
+        session.finished_at = resolution_time
+        session_update_fields.extend(["status", "finished_at"])
+    session.save(update_fields=list(dict.fromkeys(session_update_fields)))
+
+    return _ExpiryResolution(
+        action_run_id=action_run.pk,
+        session_id=session.pk,
+        next_order=next_order,
+        should_resume=should_resume,
+    )
+
+
+def _resume_expired_approval(resolution: _ExpiryResolution) -> None:
+    if not resolution.should_resume or resolution.next_order is None:
+        return
+    from ai_hub.services.execution_runner import run_game_session_resume
+
+    run_game_session_resume(
+        resolution.session_id,
+        next_order=resolution.next_order,
+    )
+
+
+def finalize_expired_approval(
+    *,
+    action_run_id: int,
+) -> _ExpiryResolution | None:
+    """Finalize one expired approval and resume its parent outside DB locks."""
+    with transaction.atomic():
+        lifecycle = _lock_approval_lifecycle(action_run_id)
+        resolution = _finalize_expired_approval_locked(lifecycle)
+    if resolution is not None:
+        _resume_expired_approval(resolution)
+    return resolution
 
 
 @transaction.atomic
@@ -83,86 +375,138 @@ def resume_goal_execution(
 ) -> ExecutionSession:
     """Resolve a valid continuation and resume at the next unused step order."""
     require_game_feature("AI_HUB_GAME_RESUME_ENABLED")
+    expiry_resolution = None
+    next_order = None
     with transaction.atomic():
-        session = (
-            ExecutionSession.objects.select_for_update()
-            .get(pk=session_id)
-        )
-        goal = (
-            GameGoal.objects.select_for_update().select_related("workspace").get(pk=session.goal_id)
-            if session.goal_id
-            else None
-        )
-
+        session = ExecutionSession.objects.select_for_update().get(pk=session_id)
         if session.status != ExecutionSession.Status.WAITING_ASYNC:
             raise ValidationError(
                 f"Session #{session_id} cannot be resumed (current status: '{session.status}')."
             )
-        if goal is None:
-            raise ValidationError("Cannot resume a session that is not linked to a GAME goal.")
-        if goal.status == GameGoal.Status.CANCELLED:
-            raise ValidationError(
-                f"Cannot resume a session for a cancelled goal (goal #{goal.pk})."
-            )
 
-        cont_req = (
-            GameContinuationRequest.objects.select_for_update()
+        # The Session lock serializes pause/approve/reject/expiry/resume. Read a
+        # hint first so approval continuations can then acquire their remaining
+        # rows in the shared lifecycle lock order.
+        cont_req_hint = (
+            GameContinuationRequest.objects
             .filter(session=session, status=GameContinuationRequest.Status.PENDING)
             .order_by("-created_at")
             .first()
         )
-        if cont_req is None:
+        if cont_req_hint is None:
+            # Reconcile a historical partially closed expiry where the
+            # continuation was expired but the parent Session stayed waiting.
+            cont_req_hint = (
+                GameContinuationRequest.objects.filter(
+                    session=session,
+                    status=GameContinuationRequest.Status.EXPIRED,
+                    reason_code=GameContinuationRequest.ReasonCode.NEEDS_APPROVAL,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+        if cont_req_hint is None:
             raise ValidationError(
                 f"No pending continuation request found for session #{session_id}."
             )
 
-        if cont_req.reason_code == GameContinuationRequest.ReasonCode.NEEDS_APPROVAL:
-            action_run_id = (cont_req.payload or {}).get("action_run_id")
+        if (
+            cont_req_hint.reason_code
+            == GameContinuationRequest.ReasonCode.NEEDS_APPROVAL
+        ):
+            action_run_id = (cont_req_hint.payload or {}).get("action_run_id")
             if not action_run_id:
-                raise ValidationError("Approval continuation is missing its action run reference.")
-            try:
-                approval = GameActionApprovalRequest.objects.select_for_update().get(
-                    action_run_id=action_run_id,
-                    action_run__session=session,
+                raise ValidationError(
+                    "Approval continuation is missing its action run reference."
                 )
-            except GameActionApprovalRequest.DoesNotExist as exc:
+            try:
+                lifecycle = _lock_approval_lifecycle(action_run_id)
+            except (
+                GameActionRun.DoesNotExist,
+                GameActionApprovalRequest.DoesNotExist,
+            ) as exc:
                 raise ValidationError(
                     "Approval continuation has no matching approval request."
                 ) from exc
-            if approval.status not in {
-                GameActionApprovalRequest.Status.APPROVED,
-                GameActionApprovalRequest.Status.REJECTED,
-            }:
+            if lifecycle.session.pk != session.pk:
                 raise ValidationError(
-                    "Approval request must be approved or rejected before resume "
-                    f"(current status: '{approval.status}')."
+                    "Approval continuation does not belong to this GAME session."
+                )
+            if (
+                lifecycle.continuation is None
+                or lifecycle.continuation.pk != cont_req_hint.pk
+            ):
+                raise ValidationError(
+                    "Approval continuation does not match its action run."
                 )
 
-        existing_context = dict(session.final_context or {})
-        if continuation_payload:
-            existing_context["continuation_payload"] = continuation_payload
-        session.final_context = existing_context
-        session.status = ExecutionSession.Status.RUNNING
-        session.save(update_fields=["status", "final_context", "updated_at"])
-
-        cont_req.status = GameContinuationRequest.Status.RESOLVED
-        cont_req.resolved_at = timezone.now()
-        cont_req.resolved_by = resolved_by
-        cont_req.save(update_fields=["status", "resolved_at", "resolved_by"])
-
-        if goal.status in _WAITING_GOAL_STATUSES:
-            transition_goal_status(
-                goal,
-                GameGoal.Status.RUNNING,
-                reason=f"resumed by continuation #{cont_req.pk}",
+            expiry_resolution = _finalize_expired_approval_locked(lifecycle)
+            if expiry_resolution is None:
+                approval = lifecycle.approval
+                if approval.status not in {
+                    GameActionApprovalRequest.Status.APPROVED,
+                    GameActionApprovalRequest.Status.REJECTED,
+                }:
+                    raise ValidationError(
+                        "Approval request must be approved or rejected before resume "
+                        f"(current status: '{approval.status}')."
+                    )
+                goal = lifecycle.goal
+                cont_req = lifecycle.continuation
+                session = lifecycle.session
+            else:
+                goal = lifecycle.goal
+                cont_req = lifecycle.continuation
+        else:
+            goal = (
+                GameGoal.objects.select_for_update()
+                .select_related("workspace")
+                .get(pk=session.goal_id)
+                if session.goal_id
+                else None
+            )
+            cont_req = GameContinuationRequest.objects.select_for_update().get(
+                pk=cont_req_hint.pk
             )
 
-        max_order = session.step_runs.aggregate(Max("order"))["order__max"] or 0
-        next_order = max_order + 1
+        if expiry_resolution is None:
+            if goal is None:
+                raise ValidationError(
+                    "Cannot resume a session that is not linked to a GAME goal."
+                )
+            if goal.status == GameGoal.Status.CANCELLED:
+                raise ValidationError(
+                    f"Cannot resume a session for a cancelled goal (goal #{goal.pk})."
+                )
 
-    from ai_hub.services.execution_runner import run_game_session_resume
+            existing_context = dict(session.final_context or {})
+            if continuation_payload:
+                existing_context["continuation_payload"] = continuation_payload
+            session.final_context = existing_context
+            session.status = ExecutionSession.Status.RUNNING
+            session.save(update_fields=["status", "final_context", "updated_at"])
 
-    run_game_session_resume(session_id, next_order=next_order)
+            cont_req.status = GameContinuationRequest.Status.RESOLVED
+            cont_req.resolved_at = timezone.now()
+            cont_req.resolved_by = resolved_by
+            cont_req.save(update_fields=["status", "resolved_at", "resolved_by"])
+
+            if goal.status in _WAITING_GOAL_STATUSES:
+                transition_goal_status(
+                    goal,
+                    GameGoal.Status.RUNNING,
+                    reason=f"resumed by continuation #{cont_req.pk}",
+                )
+
+            max_order = session.step_runs.aggregate(Max("order"))["order__max"] or 0
+            next_order = max_order + 1
+
+    if expiry_resolution is not None:
+        _resume_expired_approval(expiry_resolution)
+    else:
+        from ai_hub.services.execution_runner import run_game_session_resume
+
+        run_game_session_resume(session_id, next_order=next_order)
     session.refresh_from_db()
     return session
 
@@ -171,25 +515,12 @@ def _append_action_resolution(*, action_run: GameActionRun, status: str, payload
     """Persist one action-resolution observation for the resumed parent agent."""
     with transaction.atomic():
         session = ExecutionSession.objects.select_for_update().get(pk=action_run.session_id)
-        context = dict(session.final_context or {})
-        observations = list(context.get("observations") or [])
-        already_recorded = any(
-            isinstance(item, dict)
-            and item.get("action_run_id") == action_run.pk
-            and item.get("resolution_status") == status
-            for item in observations
+        _append_action_resolution_to_session(
+            session=session,
+            action_run=action_run,
+            status=status,
+            payload=payload,
         )
-        if not already_recorded:
-            observations.append(
-                {
-                    "action_run_id": action_run.pk,
-                    "action": action_run.action_name,
-                    "resolution_status": status,
-                    **payload,
-                }
-            )
-        context["observations"] = observations
-        session.final_context = context
         session.save(update_fields=["final_context", "updated_at"])
 
 
@@ -232,57 +563,38 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
     """Atomically claim one pending approval, then execute its already-audited action."""
     if reviewed_by is None or not reviewed_by.has_perm("ai_hub.approve_game_action"):
         raise ValidationError("You do not have permission to approve GAME action requests.")
-    # Approval ultimately dispatches the action; refuse the whole operation when the
-    # dispatch kill-switch is off so we never leave an action approved-but-unexecuted.
-    require_game_feature("AI_HUB_GAME_ACTION_DISPATCH_ENABLED")
 
-    session_id = GameActionRun.objects.only("session_id").get(pk=action_run_id).session_id
-    expired = False
+    expiry_resolution = None
     reapproval_required = False
     reapproval_message = (
         "APPROVAL_REAPPROVAL_REQUIRED: the reviewed execution intent or its current "
         "authorization changed. Submit a fresh action request."
     )
     with transaction.atomic():
-        locked_session = ExecutionSession.objects.select_for_update().get(pk=session_id)
-        action_run = (
-            GameActionRun.objects.select_for_update()
-            .get(pk=action_run_id)
-        )
-        from ai_hub.models import GameActionDefinition, GameWorkspace
+        lifecycle = _lock_approval_lifecycle(action_run_id)
+        locked_session = lifecycle.session
+        action_run = lifecycle.action_run
+        approval_req = lifecycle.approval
+        goal = lifecycle.goal
+        workspace = lifecycle.workspace
+        expiry_resolution = _finalize_expired_approval_locked(lifecycle)
 
-        action_run.action = (
-            GameActionDefinition.objects.select_for_update()
-            .get(pk=action_run.action_id)
-        )
-        approval_req = GameActionApprovalRequest.objects.select_for_update().get(
-            action_run=action_run
-        )
-        goal = (
-            GameGoal.objects.select_for_update().get(pk=locked_session.goal_id)
-            if locked_session.goal_id
-            else None
-        )
-        workspace = (
-            GameWorkspace.objects.select_for_update().get(pk=goal.workspace_id)
-            if goal is not None
-            else None
-        )
-        if action_run.status != GameActionRun.Status.WAITING_APPROVAL:
-            raise ValidationError(
-                f"Action run #{action_run_id} is not awaiting approval "
-                f"(current status: '{action_run.status}')."
-            )
-        if approval_req.status != GameActionApprovalRequest.Status.PENDING:
-            raise ValidationError(
-                f"Approval request is not pending (status: '{approval_req.status}')."
-            )
+        if expiry_resolution is None:
+            # Approval ultimately dispatches the action; refuse the operation
+            # when the kill-switch is off so no action is left approved but
+            # unexecuted. Expiry closure itself never dispatches and remains
+            # available even while dispatch is disabled.
+            require_game_feature("AI_HUB_GAME_ACTION_DISPATCH_ENABLED")
+            if action_run.status != GameActionRun.Status.WAITING_APPROVAL:
+                raise ValidationError(
+                    f"Action run #{action_run_id} is not awaiting approval "
+                    f"(current status: '{action_run.status}')."
+                )
+            if approval_req.status != GameActionApprovalRequest.Status.PENDING:
+                raise ValidationError(
+                    f"Approval request is not pending (status: '{approval_req.status}')."
+                )
 
-        if approval_req.expires_at and approval_req.expires_at < timezone.now():
-            approval_req.status = GameActionApprovalRequest.Status.EXPIRED
-            approval_req.save(update_fields=["status"])
-            expired = True
-        else:
             try:
                 from ai_hub.services.game_action_dispatcher import (
                     build_game_action_approval_intent,
@@ -340,8 +652,9 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
                 action_run.started_at = timezone.now()
                 action_run.save(update_fields=["status", "started_at"])
 
-    if expired:
-        raise ValidationError("This approval request has expired. Submit a new request to proceed.")
+    if expiry_resolution is not None:
+        _resume_expired_approval(expiry_resolution)
+        raise ValidationError(APPROVAL_EXPIRED_MESSAGE)
     if reapproval_required:
         _append_action_resolution(
             action_run=action_run,
@@ -435,7 +748,6 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
     return action_run
 
 
-@transaction.atomic
 def reject_action_run(
     *, action_run_id: int, reviewed_by, review_note: str = ""
 ) -> tuple[GameActionRun, dict]:
@@ -443,52 +755,59 @@ def reject_action_run(
     if reviewed_by is None or not reviewed_by.has_perm("ai_hub.approve_game_action"):
         raise ValidationError("You do not have permission to reject GAME action requests.")
 
-    session_id = GameActionRun.objects.only("session_id").get(pk=action_run_id).session_id
-    ExecutionSession.objects.select_for_update().get(pk=session_id)
-    action_run = (
-        GameActionRun.objects.select_for_update()
-        .select_related("action")
-        .get(pk=action_run_id)
-    )
-    if action_run.status != GameActionRun.Status.WAITING_APPROVAL:
-        raise ValidationError(
-            f"Action run #{action_run_id} is not awaiting approval "
-            f"(current status: '{action_run.status}')."
-        )
+    expiry_resolution = None
+    rejection_observation = None
+    with transaction.atomic():
+        lifecycle = _lock_approval_lifecycle(action_run_id)
+        action_run = lifecycle.action_run
+        approval_req = lifecycle.approval
+        expiry_resolution = _finalize_expired_approval_locked(lifecycle)
 
-    approval_req = GameActionApprovalRequest.objects.select_for_update().get(
-        action_run=action_run
-    )
-    if approval_req.status != GameActionApprovalRequest.Status.PENDING:
-        raise ValidationError(
-            f"Approval request is not pending (status: '{approval_req.status}')."
-        )
+        if expiry_resolution is None:
+            if action_run.status != GameActionRun.Status.WAITING_APPROVAL:
+                raise ValidationError(
+                    f"Action run #{action_run_id} is not awaiting approval "
+                    f"(current status: '{action_run.status}')."
+                )
+            if approval_req.status != GameActionApprovalRequest.Status.PENDING:
+                raise ValidationError(
+                    f"Approval request is not pending (status: '{approval_req.status}')."
+                )
 
-    approval_req.status = GameActionApprovalRequest.Status.REJECTED
-    approval_req.reviewed_by = reviewed_by
-    approval_req.review_note = review_note or ""
-    approval_req.reviewed_at = timezone.now()
-    approval_req.save(
-        update_fields=["status", "reviewed_by", "review_note", "reviewed_at"]
-    )
+            approval_req.status = GameActionApprovalRequest.Status.REJECTED
+            approval_req.reviewed_by = reviewed_by
+            approval_req.review_note = review_note or ""
+            approval_req.reviewed_at = timezone.now()
+            approval_req.save(
+                update_fields=["status", "reviewed_by", "review_note", "reviewed_at"]
+            )
 
-    action_run.status = GameActionRun.Status.REJECTED
-    action_run.error_detail = f"Rejected by {reviewed_by}: {review_note or 'No reason given.'}"
-    action_run.finished_at = timezone.now()
-    action_run.save(update_fields=["status", "error_detail", "finished_at"])
+            action_run.status = GameActionRun.Status.REJECTED
+            action_run.error_detail = (
+                f"Rejected by {reviewed_by}: {review_note or 'No reason given.'}"
+            )
+            action_run.finished_at = timezone.now()
+            action_run.save(update_fields=["status", "error_detail", "finished_at"])
 
-    rejection_observation = {
-        "action_name": action_run.action_name,
-        "status": "rejected",
-        "review_note": review_note or "",
-        "message": (
-            f"Action '{action_run.action_name}' was rejected by a reviewer. "
-            "Choose an alternative action or finish with the information available."
-        ),
-    }
-    _append_action_resolution(
-        action_run=action_run,
-        status="rejected",
-        payload=rejection_observation,
-    )
+            rejection_observation = {
+                "action_name": action_run.action_name,
+                "status": "rejected",
+                "review_note": review_note or "",
+                "message": (
+                    f"Action '{action_run.action_name}' was rejected by a reviewer. "
+                    "Choose an alternative action or finish with the information available."
+                ),
+            }
+            _append_action_resolution_to_session(
+                session=lifecycle.session,
+                action_run=action_run,
+                status="rejected",
+                payload=rejection_observation,
+            )
+            lifecycle.session.save(update_fields=["final_context", "updated_at"])
+
+    if expiry_resolution is not None:
+        _resume_expired_approval(expiry_resolution)
+        raise ValidationError(APPROVAL_EXPIRED_MESSAGE)
+
     return action_run, rejection_observation

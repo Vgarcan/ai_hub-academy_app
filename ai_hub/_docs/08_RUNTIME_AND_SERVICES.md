@@ -298,6 +298,16 @@ loop stops immediately. Approval and rejection are row-locked, persisted as
 parent observations, and must be resolved before `resume_goal_execution()` can
 continue at the next unused step order.
 
+Expiry is a distinct terminal decision, not a rejection. Approve, reject and
+resume interactions opportunistically finalize a stale deadline through one
+row-locked service path. In a single transaction the Approval becomes
+`expired`, the unexecuted ActionRun becomes `failed`, the matching continuation
+becomes `expired`, and one `approval_expired` observation is stored. The parent
+session and Goal return to `running`; existing GAME resume processing then
+continues outside the transaction. No expired action is dispatched. A later
+same-action request is a new governed lifecycle with a new ActionRun, Approval,
+fingerprint and continuation.
+
 Each approval persists a redacted execution-intent snapshot plus a canonical
 fingerprint covering the payload, Action config/contracts/risk, linked Tool and
 effective permission, effective Agent, and relevant workspace policy decision.
@@ -313,7 +323,10 @@ boundary is reached and a fresh action request is required. Database locks are
 not held across external Tool or Provider execution.
 
 Real row-lock concurrency is verified by the PostgreSQL CI job. SQLite tests
-cover functional behavior but intentionally skip locking semantics.
+cover functional behavior but intentionally skip locking semantics. Approval
+expiry races with approve, reject and resume all serialize first on the parent
+ExecutionSession; exactly one path closes the continuation and schedules the
+resume, and locks are released before GAME or any external capability runs.
 
 ### Scoped memory
 

@@ -127,9 +127,14 @@ Test:
 - selected-action dispatch, failed-attempt audit, and controlled idempotency states,
 - immediate approval pause with exactly one pending continuation,
 - approval/rejection observation delivery after resume,
+- atomic approval-expiry finalization across Approval, ActionRun, continuation,
+  Session, Goal and the `approval_expired` observation,
+- zero Tool/provider execution for an expired action, historical broken-state
+  reconciliation, and a fresh governed same-action request on a later step,
 - closed configured action/agent allow-lists and safe external-write defaults,
 - scoped-memory workspace/goal/session isolation and runner injection,
-- PostgreSQL-only concurrent approval and scheduler claim serialization,
+- PostgreSQL-only concurrent approval, approval-expiry versus
+  approve/reject/resume, and scheduler claim serialization,
 - orphan cleanup revalidation on SQLite plus the PostgreSQL-only
   session-creation/cleanup interleaving,
 - staff-only access to dashboards containing execution payloads,

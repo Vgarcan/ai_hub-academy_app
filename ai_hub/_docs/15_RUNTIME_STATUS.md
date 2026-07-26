@@ -116,6 +116,12 @@ path changes.
   one immutable Agent/Tool capability snapshot, compares it and executes that
   same snapshot without carrying a database transaction across external work.
   Drift and pre-`0020` rows require a fresh request without side effects.
+- Approval expiry is a terminal non-execution outcome. One atomic row-locked
+  finalizer marks Approval/continuation `expired`, marks the ActionRun `failed`,
+  stores an `approval_expired` observation, returns Session/Goal to `running`,
+  and invokes the existing resume runner only after commit. Stale deadlines are
+  detected from approve, reject and resume; a later retry requires a new
+  governed approval lifecycle.
 - HTTP Tools reject `operation_mode=read` with write-capable methods. Their
   `http`/`https` scheme and hostname allow-list are checked before the initial
   request and before every bounded redirect; automatic redirects are disabled.

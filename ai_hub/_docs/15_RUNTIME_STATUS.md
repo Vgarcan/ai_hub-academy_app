@@ -111,8 +111,11 @@ path changes.
   the durable GAME approval path.
 - Durable GAME approval stores a redacted canonical intent and fingerprint for
   payload, Action/Tool configuration and contracts, effective Agent/permission,
-  and relevant workspace policy. Review and final dispatch both recheck it;
-  drift and pre-`0020` rows require a fresh request.
+  and relevant workspace policy. Review checks under its row locks; final
+  dispatch then re-reads authoritative state after that transaction, resolves
+  one immutable Agent/Tool capability snapshot, compares it and executes that
+  same snapshot without carrying a database transaction across external work.
+  Drift and pre-`0020` rows require a fresh request without side effects.
 - HTTP Tools reject `operation_mode=read` with write-capable methods. Their
   `http`/`https` scheme and hostname allow-list are checked before the initial
   request and before every bounded redirect; automatic redirects are disabled.

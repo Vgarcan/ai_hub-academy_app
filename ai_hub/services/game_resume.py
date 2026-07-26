@@ -193,6 +193,41 @@ def _append_action_resolution(*, action_run: GameActionRun, status: str, payload
         session.save(update_fields=["final_context", "updated_at"])
 
 
+def _reject_dispatch_time_approval_drift(
+    *,
+    action_run_id: int,
+    reviewed_by,
+    review_note: str,
+    error_detail: str,
+) -> GameActionRun:
+    """Fail a previously approved run back to the resumable reapproval state."""
+    with transaction.atomic():
+        action_run = GameActionRun.objects.select_for_update().get(pk=action_run_id)
+        approval_req = GameActionApprovalRequest.objects.select_for_update().get(
+            action_run=action_run
+        )
+        reviewed_at = timezone.now()
+        approval_req.status = GameActionApprovalRequest.Status.REJECTED
+        approval_req.reviewed_by = reviewed_by
+        approval_req.review_note = review_note or ""
+        approval_req.reviewed_at = reviewed_at
+        approval_req.save(
+            update_fields=[
+                "status",
+                "reviewed_by",
+                "review_note",
+                "reviewed_at",
+            ]
+        )
+        action_run.status = GameActionRun.Status.REJECTED
+        action_run.error_detail = error_detail
+        action_run.finished_at = reviewed_at
+        action_run.save(
+            update_fields=["status", "error_detail", "finished_at"]
+        )
+    return action_run
+
+
 def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = "") -> GameActionRun:
     """Atomically claim one pending approval, then execute its already-audited action."""
     if reviewed_by is None or not reviewed_by.has_perm("ai_hub.approve_game_action"):
@@ -325,13 +360,12 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
     try:
         from ai_hub.services.game_action_dispatcher import dispatch_game_action
 
-        with transaction.atomic():
-            output = dispatch_game_action(
-                action_run=action_run,
-                workspace=workspace,
-                goal=goal,
-                payload=dict(action_run.input_payload or {}),
-            )
+        output = dispatch_game_action(
+            action_run=action_run,
+            workspace=workspace,
+            goal=goal,
+            payload=dict(action_run.input_payload or {}),
+        )
         action_run.status = GameActionRun.Status.SUCCESS
         action_run.output_payload = output
         action_run.observation_payload = {
@@ -361,6 +395,29 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
             },
         )
     except Exception as exc:
+        from ai_hub.services.game_action_dispatcher import REAPPROVAL_REQUIRED_CODE
+
+        if (
+            isinstance(exc, ValidationError)
+            and REAPPROVAL_REQUIRED_CODE in str(exc)
+        ):
+            action_run = _reject_dispatch_time_approval_drift(
+                action_run_id=action_run_id,
+                reviewed_by=reviewed_by,
+                review_note=review_note,
+                error_detail=str(exc),
+            )
+            _append_action_resolution(
+                action_run=action_run,
+                status="reapproval_required",
+                payload={
+                    "message": (
+                        "The requested action was not executed because its reviewed "
+                        "intent or current authorization changed at dispatch."
+                    ),
+                },
+            )
+            raise
         action_run.status = GameActionRun.Status.FAILED
         action_run.error_detail = str(exc)
         action_run.finished_at = timezone.now()

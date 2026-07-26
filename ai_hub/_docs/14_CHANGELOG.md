@@ -18,6 +18,10 @@ Host-project features should be documented in the host project, not here.
 - GAME approvals persist a redacted canonical execution-intent snapshot and
   fingerprint. Approval and low-level dispatch both reject drift, revoked
   authorization and historical unverified rows before execution.
+- Approval dispatch now establishes a fresh database-backed linearization point
+  after review commits. It re-reads Action/Workspace/session state, resolves
+  Agent/Tool authorization once, compares that snapshot, and executes the exact
+  resolved Tool capability without holding a transaction across external work.
 - Added migration `0020_approval_execution_intent`; legacy approval rows retain
   blank fingerprints and require a fresh request.
 - HTTP Tools now stream and close every response, reject oversized

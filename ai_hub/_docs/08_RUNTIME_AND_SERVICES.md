@@ -301,10 +301,16 @@ continue at the next unused step order.
 Each approval persists a redacted execution-intent snapshot plus a canonical
 fingerprint covering the payload, Action config/contracts/risk, linked Tool and
 effective permission, effective Agent, and relevant workspace policy decision.
-Approval recomputes that fingerprint under the review locks, and the dispatcher
-checks it again immediately before execution. Drift, revoked authorization, an
-inactive Agent or a historical row without a fingerprint rejects the old run
-with `APPROVAL_REAPPROVAL_REQUIRED`; a fresh action request is required.
+Approval recomputes that fingerprint under the review locks. After that review
+transaction commits, the dispatcher discards its retained model instances,
+re-reads the authoritative run/session/Action/Goal/Workspace state, resolves
+current Agent and Tool authorization once, and checks the fingerprint at the
+execution linearization point. Tool execution receives that exact resolved
+Agent/Tool snapshot rather than resolving the capability again. Drift, revoked
+authorization, an inactive Agent or a historical row without a fingerprint
+rejects the old run with `APPROVAL_REAPPROVAL_REQUIRED`; no Tool/Provider
+boundary is reached and a fresh action request is required. Database locks are
+not held across external Tool or Provider execution.
 
 Real row-lock concurrency is verified by the PostgreSQL CI job. SQLite tests
 cover functional behavior but intentionally skip locking semantics.

@@ -97,7 +97,10 @@ Test:
 - unified GAME tool adapter behavior with the kill-switch disabled and enabled,
 - restrictive unified approval across action, Tool/grant and workspace risk
   policy, including immutable intent fingerprints, config/contract/payload
-  drift, revoked permissions, historical rows and approve/resume audit state,
+  drift, revoked permissions, historical rows and approve/resume audit state;
+  deterministic post-review/pre-dispatch mutations prove authoritative state is
+  re-read, side effects are suppressed on drift, and the Tool capability used
+  for fingerprinting is the same in-memory capability passed to execution,
 - direct and pipeline-backed GAME effective-agent consistency across Tool
   resolution, Knowledge, workspace policy, delegation and audit views,
 - rejection of HTTP `read` Tools configured with write-capable methods,

@@ -7182,6 +7182,142 @@ class GamePauseApprovalResumeTests(TestCase):
         approval.refresh_from_db()
         self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
 
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_dispatch_reloads_action_changed_after_approval_review(self):
+        from ai_hub.services import game_action_dispatcher as dispatcher
+
+        action_run, action, _ = self._request_tool_approval(
+            name="approval_post_review_action_drift"
+        )
+        original_dispatch = dispatcher.dispatch_game_action
+
+        def mutate_then_dispatch(**kwargs):
+            GameActionDefinition.objects.filter(pk=action.pk).update(
+                config={"mode": "changed-after-review"}
+            )
+            return original_dispatch(**kwargs)
+
+        with (
+            patch(
+                "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+                side_effect=mutate_then_dispatch,
+            ),
+            patch(
+                "ai_hub.services.game_action_dispatcher.execute_tool",
+                return_value={"result": "must not execute"},
+            ) as mocked_execute,
+            self.assertRaisesMessage(
+                ValidationError,
+                "APPROVAL_REAPPROVAL_REQUIRED",
+            ),
+        ):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        mocked_execute.assert_not_called()
+        action_run.refresh_from_db()
+        approval = GameActionApprovalRequest.objects.get(action_run=action_run)
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_dispatch_reloads_workspace_changed_after_approval_review(self):
+        from ai_hub.services import game_action_dispatcher as dispatcher
+
+        action_run, _, _ = self._request_tool_approval(
+            name="approval_post_review_workspace_drift"
+        )
+        original_dispatch = dispatcher.dispatch_game_action
+
+        def mutate_then_dispatch(**kwargs):
+            GameWorkspace.objects.filter(pk=self.workspace.pk).update(
+                default_policy={"allowed_tools": []}
+            )
+            return original_dispatch(**kwargs)
+
+        with (
+            patch(
+                "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+                side_effect=mutate_then_dispatch,
+            ),
+            patch(
+                "ai_hub.services.game_action_dispatcher.execute_tool",
+                return_value={"result": "must not execute"},
+            ) as mocked_execute,
+            self.assertRaisesMessage(
+                ValidationError,
+                "APPROVAL_REAPPROVAL_REQUIRED",
+            ),
+        ):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        mocked_execute.assert_not_called()
+        action_run.refresh_from_db()
+        approval = GameActionApprovalRequest.objects.get(action_run=action_run)
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_dispatch_executes_the_tool_snapshot_used_for_intent_verification(self):
+        from ai_hub.services import game_action_dispatcher as dispatcher
+
+        reviewed_config = {"template": "reviewed tool configuration"}
+        action_run, _, tool = self._request_tool_approval(
+            name="approval_single_tool_resolution",
+            tool_config=reviewed_config,
+        )
+        original_resolver = dispatcher._resolve_unified_tool_authorization
+        dispatch_resolution_count = 0
+        mutated = False
+        executed_configs = []
+        external_execution_atomic_depths = []
+        baseline_atomic_depth = len(connection.atomic_blocks)
+
+        def resolve_then_mutate(**kwargs):
+            nonlocal dispatch_resolution_count, mutated
+            agent, resolved_tool = original_resolver(**kwargs)
+            approval_status = GameActionApprovalRequest.objects.get(
+                action_run_id=action_run.pk
+            ).status
+            if approval_status == GameActionApprovalRequest.Status.APPROVED:
+                dispatch_resolution_count += 1
+                if not mutated:
+                    ToolDefinition.objects.filter(pk=tool.pk).update(
+                        config={"template": "changed-after-linearization"}
+                    )
+                    mutated = True
+            return agent, resolved_tool
+
+        def execute_resolved_tool(executed_tool, payload, *, agent=None):
+            executed_configs.append(dict(executed_tool.config or {}))
+            external_execution_atomic_depths.append(len(connection.atomic_blocks))
+            return {"result": "executed reviewed capability"}
+
+        with (
+            patch(
+                "ai_hub.services.game_action_dispatcher._resolve_unified_tool_authorization",
+                side_effect=resolve_then_mutate,
+            ),
+            patch(
+                "ai_hub.services.game_action_dispatcher.execute_tool",
+                side_effect=execute_resolved_tool,
+            ),
+        ):
+            approved = approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        self.assertEqual(approved.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(dispatch_resolution_count, 1)
+        self.assertEqual(executed_configs, [reviewed_config])
+        self.assertEqual(external_execution_atomic_depths, [baseline_atomic_depth])
+
     def test_approval_rejects_input_payload_tampering_before_dispatch(self):
         action_run = self._request_finish_approval(final_answer="reviewed value")
         action_run.input_payload = {"final_answer": "tampered value"}

@@ -45,6 +45,36 @@ path changes.
 - Keep provider choice centralized at the completion boundary as more adapters
   are added.
 
+## Orchestrator Fallback
+
+### CURRENT
+
+- `PipelineStep.input_mapping` creates one logical input from session context.
+  Primary and fallback Agents are independently prepared from that input.
+- A configured fallback uses its own contracts, Knowledge, resolved tool
+  manifest, identity, ModelConfig and ProviderConfig through the normal Agent
+  execution boundary.
+- Pipeline activation checks fallback contract presence and statically obvious
+  required-input mismatches. Runtime validation independently enforces Agent
+  input/output contracts.
+- Missing `output_mapping` source paths are failures for both normal and
+  fallback output.
+- `on_error=fallback_agent` makes one fallback attempt. `stop`, `continue` and
+  primary success do not prepare or invoke it.
+- Recovered steps use `status=success`, record the fallback as effective Agent,
+  leave `error_detail` empty and add structured `fallback_recovery` metadata to
+  the response. Double failures use `status=failed` and preserve both causes.
+- Categorized provider errors enter normal Orchestrator fallback policy.
+  Provider adapters never perform implicit provider switching.
+- Deterministic regressions are always runnable. The real Ollama fallback slice
+  is opt-in through the existing live environment variables and skips in
+  normal CI.
+
+### NOT IMPLEMENTED
+
+- Recursive fallback chains, general retries, backoff, worker recovery and
+  resumable generic Orchestrator checkpoints.
+
 ## Tools
 
 ### CURRENT

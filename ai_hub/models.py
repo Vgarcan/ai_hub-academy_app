@@ -361,10 +361,35 @@ class PipelineDefinition(models.Model):
             if got != expected:
                 raise ValidationError("Pipeline step order must be continuous starting at 1.")
             for step in steps:
-                if not step.agent.input_contract or not step.agent.output_contract:
-                    raise ValidationError(
-                        f"Agent '{step.agent.name}' must define input/output contracts before activating pipeline."
+                agents = [("Agent", step.agent)]
+                if (
+                    step.on_error == step.OnError.FALLBACK_AGENT
+                    and step.fallback_agent_id
+                ):
+                    agents.append(("Fallback agent", step.fallback_agent))
+                for label, agent in agents:
+                    if not agent.input_contract or not agent.output_contract:
+                        raise ValidationError(
+                            f"{label} '{agent.name}' must define input/output contracts "
+                            "before activating pipeline."
+                        )
+                    if not step.input_mapping:
+                        continue
+                    available_inputs = set(step.input_mapping)
+                    available_inputs.add("knowledge_context")
+                    required_inputs = (
+                        agent.input_contract.get("required", [])
+                        if isinstance(agent.input_contract, dict)
+                        else []
                     )
+                    missing_inputs = [
+                        key for key in required_inputs if key not in available_inputs
+                    ]
+                    if missing_inputs:
+                        raise ValidationError(
+                            f"{label} '{agent.name}' cannot receive required input keys: "
+                            f"{', '.join(missing_inputs)}."
+                        )
 
 
 class PipelineStep(models.Model):

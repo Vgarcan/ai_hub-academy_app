@@ -135,6 +135,99 @@ class LiveOllamaIntegrationTests(TestCase):
         self.assertFalse(self.provider.api_key_env_var)
         self.assertNotIn("api_key", json.dumps(step_run.response_payload).lower())
 
+    def test_live_orchestrator_recovers_unreachable_primary_with_ollama_fallback(self):
+        unreachable_provider = ProviderConfig.objects.create(
+            name="Live fallback unreachable primary",
+            provider_type=ProviderConfig.ProviderType.OLLAMA,
+            base_url="http://127.0.0.1:1",
+            default_timeout=2,
+        )
+        unreachable_model = ModelConfig.objects.create(
+            provider=unreachable_provider,
+            model_name=LIVE_MODEL,
+            temperature_default=0,
+            max_tokens_default=16,
+        )
+        unreachable_agent = AgentProfile.objects.create(
+            name="Live fallback primary failure",
+            role="Controlled provider failure",
+            model_config=unreachable_model,
+            input_contract={"required": ["prompt"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+        pipeline = PipelineDefinition.objects.create(
+            name="Live Ollama fallback pipeline",
+            global_input_contract={"required": ["prompt"]},
+            global_output_contract={"required": ["live_output"]},
+        )
+        PipelineStep.objects.create(
+            pipeline=pipeline,
+            agent=unreachable_agent,
+            fallback_agent=self.agent,
+            order=1,
+            input_mapping={"prompt": "prompt"},
+            output_mapping={"live_output": "llm.content"},
+            on_error=PipelineStep.OnError.FALLBACK_AGENT,
+        )
+        pipeline.is_active = True
+        pipeline.save(update_fields=["is_active"])
+        session = create_execution_session(
+            pipeline=pipeline,
+            runtime_mode=ExecutionSession.RuntimeMode.SYNC,
+            initial_context={
+                "prompt": "Reply with one short confirmation that fallback recovery worked."
+            },
+        )
+
+        real_post = requests.post
+        with patch(
+            "ai_hub.services.litellm_client.requests.post",
+            wraps=real_post,
+        ) as observed_post, patch.object(
+            litellm_client.litellm,
+            "completion",
+        ) as litellm_completion:
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        recovery = step_run.response_payload["fallback_recovery"]
+        called_urls = [call.args[0] for call in observed_post.call_args_list]
+
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.SUCCESS)
+        self.assertEqual(step_run.agent, self.agent)
+        self.assertEqual(step_run.error_detail, "")
+        self.assertTrue(session.final_context["live_output"].strip())
+        self.assertEqual(recovery["primary"]["agent_id"], unreachable_agent.pk)
+        self.assertEqual(
+            recovery["primary"]["error"]["category"],
+            "provider_unreachable",
+        )
+        self.assertEqual(recovery["fallback"]["agent_id"], self.agent.pk)
+        self.assertEqual(recovery["fallback"]["status"], "success")
+        self.assertEqual(recovery["final_outcome"], "recovered")
+        self.assertEqual(
+            step_run.response_payload["llm"]["provider"],
+            ProviderConfig.ProviderType.OLLAMA,
+        )
+        self.assertEqual(
+            step_run.response_payload["llm"]["provider_model"],
+            LIVE_MODEL.removeprefix("ollama/"),
+        )
+        self.assertIn("http://127.0.0.1:1/api/chat", called_urls)
+        self.assertIn(f"{LIVE_BASE_URL.rstrip('/')}/api/chat", called_urls)
+        litellm_completion.assert_not_called()
+        persisted_audit = json.dumps(
+            {
+                "request": step_run.request_payload,
+                "response": step_run.response_payload,
+                "error": step_run.error_detail,
+            }
+        ).lower()
+        self.assertNotIn("api_key", persisted_audit)
+        self.assertNotIn("authorization", persisted_audit)
+
     def test_controlled_unreachable_ollama_does_not_fall_back_to_litellm(self):
         unreachable_provider = ProviderConfig.objects.create(
             name="Controlled unavailable Ollama",

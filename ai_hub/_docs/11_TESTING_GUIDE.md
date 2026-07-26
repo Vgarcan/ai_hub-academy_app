@@ -70,7 +70,8 @@ Test pipeline rules:
 
 - Active pipeline requires valid steps.
 - Step order is deterministic.
-- Fallback agent is optional but compatible when present.
+- A configured fallback Agent is active, contracted and compatible with the
+  explicit logical input mapping.
 - Input and output mappings are valid dictionaries.
 
 ## Contract Tests
@@ -158,9 +159,13 @@ Test failure behavior:
 
 - `on_error = stop` stops the session.
 - `on_error = continue` records the error and continues safely.
-- `on_error = fallback` uses the fallback agent.
+- `on_error = fallback_agent` prepares and uses exactly one independent
+  fallback Agent.
 - Inactive pipelines are rejected.
 - Contract failures are visible in session and step errors.
+- Fallback regressions prove fresh payload preparation; independent Knowledge,
+  tools, identity, model and contracts; valid/invalid output mapping; recovered
+  audit state; double failure; non-fallback policies; and primary success.
 
 Test admin behavior:
 
@@ -400,6 +405,9 @@ Normal CI uses mocks and never contacts a developer endpoint. The live
 Provider → Model → Agent and one-step Orchestrator tests run only when both
 variables are explicitly present:
 
+The same opt-in module includes a controlled unreachable-primary to real
+Ollama-fallback slice.
+
 ```text
 AI_HUB_LIVE_OLLAMA_BASE_URL
 AI_HUB_LIVE_OLLAMA_MODEL
@@ -416,6 +424,10 @@ python manage.py test ai_hub.test_live_ollama --verbosity 2
 The test module skips cleanly when either value is absent. It has no localhost
 or LAN default. Discover an installed model with `GET <base_url>/api/tags`
 before running it; do not assume or download a model as part of the test.
+The fallback slice uses `127.0.0.1:1` only as a deterministic unreachable
+primary, then verifies the configured live Agent's provider/model, output
+mapping, persisted recovery audit and absence of implicit LiteLLM switching or
+credentials.
 
 The bundled CI runs the full SQLite suite against both the minimum Django 5.2
 LTS line and the current supported Django line. A separate PostgreSQL 16 job

@@ -122,9 +122,11 @@ The completion boundary reports stable classes for actionable failures:
 - `invalid_provider_response`: JSON or response content did not match the
   adapter contract.
 
-An Ollama failure stays an Ollama failure. AI Hub does not retry it through a
-different provider unless a caller explicitly implements a separate fallback
-policy.
+An Ollama failure stays an Ollama failure at the provider boundary. AI Hub does
+not silently retry it through a different provider. An Orchestrator
+`PipelineStep` may explicitly use `on_error=fallback_agent`; in that case the
+Orchestrator records the primary provider error and independently executes the
+configured fallback Agent with that Agent's own provider/model.
 
 ## Agent Does Not Appear In GAME Workspace
 
@@ -195,7 +197,13 @@ Check:
 - step order is continuous,
 - each step agent is active,
 - each agent has input and output contracts,
-- fallback agents are active when required.
+- fallback agents are active and have input/output contracts when required,
+- explicit input mappings can supply every required primary/fallback input key.
+
+If a mapped output path is absent, the step now fails with
+`Pipeline step output is missing mapped source paths` instead of inserting
+`None` into pipeline context. Inspect the Agent output contract and the
+`PipelineStep.output_mapping` source paths together.
 
 ## Pipeline Output Fails With Invalid JSON
 

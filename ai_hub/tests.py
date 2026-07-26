@@ -6744,6 +6744,7 @@ from ai_hub.models import (  # noqa: E402
 )
 from ai_hub.services.game_resume import (  # noqa: E402
     approve_action_run,
+    finalize_expired_approval,
     pause_session,
     reject_action_run,
     resume_goal_execution,
@@ -6900,6 +6901,17 @@ class GamePauseApprovalResumeTests(TestCase):
             action_input=action_input or {"query": "approved input"},
         )
         return action_run, action, tool
+
+    def _request_expiring_finish_approval(self, *, final_answer="expired answer"):
+        action_run = self._request_finish_approval(final_answer=final_answer)
+        approval = action_run.approval_request
+        approval.expires_at = timezone.now() - timedelta(minutes=1)
+        approval.save(update_fields=["expires_at"])
+        continuation = GameContinuationRequest.objects.get(
+            session=self.session,
+            status=GameContinuationRequest.Status.PENDING,
+        )
+        return action_run, approval, continuation
 
     # ---- Phase 08 spec test names ------------------------------------------
 
@@ -7537,18 +7549,378 @@ class GamePauseApprovalResumeTests(TestCase):
         with self.assertRaisesMessage(ValidationError, "cancelled goal"):
             resume_goal_execution(session_id=self.session.pk)
 
-    def test_expired_approval_cannot_resume_without_new_request(self):
-        action_run, approval_req = self._make_waiting_approval_run()
-        # Set expiry to the past
-        past = timezone.now() - timedelta(hours=2)
-        approval_req.expires_at = past
-        approval_req.save(update_fields=["expires_at"])
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_01_pending_approval_closes_atomically_on_expiry(self, mocked_resume):
+        action_run, approval, continuation = self._request_expiring_finish_approval()
 
-        with self.assertRaisesMessage(ValidationError, "expired"):
-            approve_action_run(action_run_id=action_run.pk, reviewed_by=self.approver)
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
 
-        approval_req.refresh_from_db()
-        self.assertEqual(approval_req.status, GameActionApprovalRequest.Status.EXPIRED)
+        action_run.refresh_from_db()
+        approval.refresh_from_db()
+        continuation.refresh_from_db()
+        self.session.refresh_from_db()
+        self.goal.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.EXPIRED)
+        self.assertEqual(action_run.status, GameActionRun.Status.FAILED)
+        self.assertEqual(
+            continuation.status,
+            GameContinuationRequest.Status.EXPIRED,
+        )
+        self.assertEqual(self.session.status, ExecutionSession.Status.RUNNING)
+        self.assertEqual(self.goal.status, GameGoal.Status.RUNNING)
+        mocked_resume.assert_called_once_with(self.session.pk, next_order=1)
+
+    def test_exp_01b_partial_expiry_failure_rolls_back_every_record(self):
+        action_run, approval, continuation = self._request_expiring_finish_approval()
+
+        with (
+            patch(
+                "ai_hub.services.game_resume.transition_goal_status",
+                side_effect=ValidationError("forced finalization failure"),
+            ),
+            self.assertRaisesMessage(
+                ValidationError,
+                "forced finalization failure",
+            ),
+        ):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        action_run.refresh_from_db()
+        approval.refresh_from_db()
+        continuation.refresh_from_db()
+        self.session.refresh_from_db()
+        self.goal.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.PENDING)
+        self.assertEqual(
+            action_run.status,
+            GameActionRun.Status.WAITING_APPROVAL,
+        )
+        self.assertEqual(
+            continuation.status,
+            GameContinuationRequest.Status.PENDING,
+        )
+        self.assertEqual(
+            self.session.status,
+            ExecutionSession.Status.WAITING_ASYNC,
+        )
+        self.assertEqual(
+            self.goal.status,
+            GameGoal.Status.WAITING_APPROVAL,
+        )
+        self.assertEqual(
+            (self.session.final_context or {}).get("observations", []),
+            [],
+        )
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    @patch("ai_hub.services.game_action_dispatcher.execute_tool")
+    def test_exp_02_expired_action_has_no_tool_or_provider_side_effect(
+        self,
+        mocked_execute_tool,
+        mocked_completion,
+        mocked_resume,
+    ):
+        action_run, _, _ = self._request_tool_approval(
+            name="expiry_no_side_effect",
+        )
+        approval = action_run.approval_request
+        approval.expires_at = timezone.now() - timedelta(minutes=1)
+        approval.save(update_fields=["expires_at"])
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        mocked_execute_tool.assert_not_called()
+        mocked_completion.assert_not_called()
+        mocked_resume.assert_called_once()
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_03_expired_continuation_is_not_pending(self, mocked_resume):
+        action_run, _, continuation = self._request_expiring_finish_approval()
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        continuation.refresh_from_db()
+        self.assertEqual(
+            continuation.status,
+            GameContinuationRequest.Status.EXPIRED,
+        )
+        self.assertIsNotNone(continuation.resolved_at)
+        self.assertFalse(
+            GameContinuationRequest.objects.filter(
+                session=self.session,
+                status=GameContinuationRequest.Status.PENDING,
+            ).exists()
+        )
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_04_session_and_goal_leave_waiting_states(self, mocked_resume):
+        action_run, _, _ = self._request_expiring_finish_approval()
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        self.session.refresh_from_db()
+        self.goal.refresh_from_db()
+        self.assertNotEqual(
+            self.session.status,
+            ExecutionSession.Status.WAITING_ASYNC,
+        )
+        self.assertNotEqual(
+            self.goal.status,
+            GameGoal.Status.WAITING_APPROVAL,
+        )
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_05_parent_receives_durable_expiry_observation(self, mocked_resume):
+        action_run, _, _ = self._request_expiring_finish_approval()
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        self.session.refresh_from_db()
+        action_run.refresh_from_db()
+        observations = self.session.final_context["observations"]
+        expiry_observations = [
+            item
+            for item in observations
+            if item.get("action_run_id") == action_run.pk
+            and item.get("resolution_status") == "approval_expired"
+        ]
+        self.assertEqual(len(expiry_observations), 1)
+        self.assertIn("not executed", expiry_observations[0]["message"])
+        self.assertEqual(
+            action_run.observation_payload["resolution_status"],
+            "approval_expired",
+        )
+        self.assertFalse(action_run.observation_payload["complete"])
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_exp_06_parent_game_continues_after_expiry(self, mocked_completion):
+        action_run, _, _ = self._request_expiring_finish_approval()
+        mocked_completion.return_value = {
+            "status": "ok",
+            "content": (
+                '{"action":"finish","message":"continued after expiry",'
+                '"complete":true,"final_answer":"safe finish"}'
+            ),
+        }
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        self.session.refresh_from_db()
+        self.goal.refresh_from_db()
+        action_run.refresh_from_db()
+        self.assertEqual(self.session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(self.goal.status, GameGoal.Status.COMPLETED)
+        self.assertEqual(action_run.status, GameActionRun.Status.FAILED)
+        mocked_completion.assert_called_once()
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_07_later_iteration_can_request_same_action_again(self, mocked_resume):
+        old_run, old_approval, old_continuation = (
+            self._request_expiring_finish_approval()
+        )
+        finalize_expired_approval(action_run_id=old_run.pk)
+
+        next_step = ExecutionStepRun.objects.create(
+            session=self.session,
+            order=1,
+            agent=self.agent,
+            action_name="game_iteration",
+            status=ExecutionStepRun.Status.RUNNING,
+        )
+        new_run = execute_game_action(
+            session=self.session,
+            step_run=next_step,
+            action_name=self.finish_def.name,
+            action_input=dict(old_run.input_payload),
+        )
+
+        old_run.refresh_from_db()
+        old_approval.refresh_from_db()
+        old_continuation.refresh_from_db()
+        self.assertNotEqual(new_run.pk, old_run.pk)
+        self.assertNotEqual(new_run.idempotency_key, old_run.idempotency_key)
+        self.assertEqual(old_run.status, GameActionRun.Status.FAILED)
+        self.assertEqual(
+            old_approval.status,
+            GameActionApprovalRequest.Status.EXPIRED,
+        )
+        self.assertEqual(
+            old_continuation.status,
+            GameContinuationRequest.Status.EXPIRED,
+        )
+        self.assertEqual(new_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertEqual(
+            new_run.approval_request.status,
+            GameActionApprovalRequest.Status.PENDING,
+        )
+        self.assertEqual(
+            GameContinuationRequest.objects.get(
+                session=self.session,
+                status=GameContinuationRequest.Status.PENDING,
+            ).payload["action_run_id"],
+            new_run.pk,
+        )
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_08_old_approval_cannot_authorize_new_action(self, mocked_resume):
+        old_run, _, _ = self._request_expiring_finish_approval()
+        finalize_expired_approval(action_run_id=old_run.pk)
+        next_step = ExecutionStepRun.objects.create(
+            session=self.session,
+            order=1,
+            agent=self.agent,
+            action_name="game_iteration",
+            status=ExecutionStepRun.Status.RUNNING,
+        )
+        new_run = execute_game_action(
+            session=self.session,
+            step_run=next_step,
+            action_name=self.finish_def.name,
+            action_input=dict(old_run.input_payload),
+        )
+        mocked_resume.reset_mock()
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=old_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        new_run.refresh_from_db()
+        self.session.refresh_from_db()
+        self.assertEqual(new_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertEqual(
+            new_run.approval_request.status,
+            GameActionApprovalRequest.Status.PENDING,
+        )
+        self.assertEqual(self.session.status, ExecutionSession.Status.WAITING_ASYNC)
+        mocked_resume.assert_not_called()
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    @patch("ai_hub.services.game_action_dispatcher.dispatch_game_action")
+    def test_exp_09_approve_after_deadline_reports_expired_without_execution(
+        self,
+        mocked_dispatch,
+        mocked_resume,
+    ):
+        action_run, approval, _ = self._request_expiring_finish_approval()
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        approval.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.EXPIRED)
+        self.assertIsNone(approval.reviewed_by)
+        self.assertIsNone(approval.reviewed_at)
+        mocked_dispatch.assert_not_called()
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_10_reject_after_deadline_preserves_expired_truth(self, mocked_resume):
+        action_run, approval, _ = self._request_expiring_finish_approval()
+
+        with self.assertRaisesMessage(ValidationError, "APPROVAL_EXPIRED"):
+            reject_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+                review_note="too late",
+            )
+
+        approval.refresh_from_db()
+        action_run.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.EXPIRED)
+        self.assertNotEqual(
+            approval.status,
+            GameActionApprovalRequest.Status.REJECTED,
+        )
+        self.assertEqual(action_run.status, GameActionRun.Status.FAILED)
+        self.assertNotIn("Rejected by", action_run.error_detail)
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_11_finalized_expiry_cannot_double_resume(self, mocked_resume):
+        action_run, _, _ = self._request_expiring_finish_approval()
+        finalize_expired_approval(action_run_id=action_run.pk)
+
+        with self.assertRaisesMessage(ValidationError, "cannot be resumed"):
+            resume_goal_execution(session_id=self.session.pk)
+
+        mocked_resume.assert_called_once_with(self.session.pk, next_order=1)
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_12_historical_broken_state_is_reconciled(self, mocked_resume):
+        action_run, approval, continuation = (
+            self._request_expiring_finish_approval()
+        )
+        approval.status = GameActionApprovalRequest.Status.EXPIRED
+        approval.save(update_fields=["status"])
+
+        resumed = resume_goal_execution(session_id=self.session.pk)
+
+        action_run.refresh_from_db()
+        approval.refresh_from_db()
+        continuation.refresh_from_db()
+        self.goal.refresh_from_db()
+        self.assertEqual(resumed.status, ExecutionSession.Status.RUNNING)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.EXPIRED)
+        self.assertEqual(action_run.status, GameActionRun.Status.FAILED)
+        self.assertEqual(
+            continuation.status,
+            GameContinuationRequest.Status.EXPIRED,
+        )
+        self.assertEqual(self.goal.status, GameGoal.Status.RUNNING)
+        mocked_resume.assert_called_once_with(self.session.pk, next_order=1)
+
+    @patch("ai_hub.services.execution_runner.run_game_session_resume")
+    def test_exp_12b_resume_detects_stale_pending_deadline(self, mocked_resume):
+        action_run, approval, continuation = (
+            self._request_expiring_finish_approval()
+        )
+
+        resumed = resume_goal_execution(session_id=self.session.pk)
+
+        action_run.refresh_from_db()
+        approval.refresh_from_db()
+        continuation.refresh_from_db()
+        self.assertEqual(resumed.status, ExecutionSession.Status.RUNNING)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.EXPIRED)
+        self.assertEqual(action_run.status, GameActionRun.Status.FAILED)
+        self.assertEqual(
+            continuation.status,
+            GameContinuationRequest.Status.EXPIRED,
+        )
+        mocked_resume.assert_called_once_with(self.session.pk, next_order=1)
 
     def test_only_authorised_user_can_approve_action(self):
         action_run, _ = self._make_waiting_approval_run()
@@ -8265,6 +8637,235 @@ class GameApprovalConcurrencyTests(TransactionTestCase):
         self.assertEqual(action_run.status, GameActionRun.Status.SUCCESS)
         self.assertEqual(results.count("success"), 1)
         self.assertEqual(len(results), 2)
+
+
+class GameApprovalExpiryConcurrencyTests(TransactionTestCase):
+    reset_sequences = True
+
+    def setUp(self):
+        if connection.vendor != "postgresql":
+            self.skipTest("Approval expiry races require PostgreSQL row-lock semantics.")
+
+        provider = ProviderConfig.objects.create(
+            name="approval-expiry-race-provider",
+            provider_type=ProviderConfig.ProviderType.TRAINING,
+        )
+        model_cfg = ModelConfig.objects.create(
+            provider=provider,
+            model_name="approval-expiry-race-model",
+        )
+        self.agent = AgentProfile.objects.create(
+            name="approval-expiry-race-agent",
+            role="approval expiry race",
+            model_config=model_cfg,
+        )
+        self.workspace = GameWorkspace.objects.create(
+            name="approval-expiry-race-workspace"
+        )
+        self.goal = create_goal(
+            workspace=self.workspace,
+            title="Approval expiry race",
+            description="Exactly one expiry resolution may resume the parent.",
+        )
+        self.session = create_goal_execution_session(
+            goal=self.goal,
+            entry_agent=self.agent,
+        )
+        self.action = GameActionDefinition.objects.create(
+            name="approval_expiry_race_action",
+            label="Approval expiry race action",
+            action_type=GameActionDefinition.ActionType.INTERNAL,
+            requires_approval=True,
+        )
+        self.action_run = execute_game_action(
+            session=self.session,
+            action_name=self.action.name,
+            action_input={},
+        )
+        self.approval = self.action_run.approval_request
+        self.approval.expires_at = timezone.now() - timedelta(minutes=1)
+        self.approval.save(update_fields=["expires_at"])
+        self.continuation = GameContinuationRequest.objects.get(
+            session=self.session,
+            status=GameContinuationRequest.Status.PENDING,
+        )
+        self.reviewer = get_user_model().objects.create_superuser(
+            username="approval-expiry-race-reviewer",
+            email="expiry-race@example.com",
+            password="test",
+        )
+
+    def _run_race(self, left, right):
+        from threading import Barrier, Lock
+
+        barrier = Barrier(2)
+        result_lock = Lock()
+        results = []
+
+        def invoke(fn):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                fn()
+                result = "success"
+            except Exception as exc:
+                result = type(exc).__name__
+            finally:
+                close_old_connections()
+            with result_lock:
+                results.append(result)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(invoke, left),
+                executor.submit(invoke, right),
+            ]
+            for future in futures:
+                future.result(timeout=30)
+        return results
+
+    def _assert_single_expiry_outcome(self, resume_calls):
+        self.action_run.refresh_from_db()
+        self.approval.refresh_from_db()
+        self.continuation.refresh_from_db()
+        self.session.refresh_from_db()
+        self.goal.refresh_from_db()
+
+        self.assertEqual(
+            self.approval.status,
+            GameActionApprovalRequest.Status.EXPIRED,
+        )
+        self.assertEqual(self.action_run.status, GameActionRun.Status.FAILED)
+        self.assertEqual(
+            self.continuation.status,
+            GameContinuationRequest.Status.EXPIRED,
+        )
+        self.assertEqual(self.session.status, ExecutionSession.Status.RUNNING)
+        self.assertEqual(self.goal.status, GameGoal.Status.RUNNING)
+        self.assertEqual(resume_calls, [self.session.pk])
+        self.assertEqual(
+            len(
+                [
+                    item
+                    for item in (self.session.final_context or {}).get(
+                        "observations", []
+                    )
+                    if item.get("action_run_id") == self.action_run.pk
+                    and item.get("resolution_status") == "approval_expired"
+                ]
+            ),
+            1,
+        )
+        self.assertEqual(
+            GameContinuationRequest.objects.filter(
+                session=self.session,
+                status=GameContinuationRequest.Status.PENDING,
+            ).count(),
+            0,
+        )
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    def _assert_serialized_results(self, results):
+        self.assertEqual(len(results), 2)
+        self.assertTrue(
+            set(results).issubset({"success", "ValidationError"}),
+            results,
+        )
+
+    def test_exp_pg_01_approve_vs_expiry_serializes_once(self):
+        from threading import Lock
+
+        resume_calls = []
+        resume_lock = Lock()
+
+        def record_resume(session_id, **kwargs):
+            with resume_lock:
+                resume_calls.append(session_id)
+            return session_id
+
+        def approve():
+            reviewer = get_user_model().objects.get(pk=self.reviewer.pk)
+            approve_action_run(
+                action_run_id=self.action_run.pk,
+                reviewed_by=reviewer,
+            )
+
+        with (
+            patch(
+                "ai_hub.services.execution_runner.run_game_session_resume",
+                side_effect=record_resume,
+            ),
+            patch(
+                "ai_hub.services.game_action_dispatcher.dispatch_game_action"
+            ) as mocked_dispatch,
+        ):
+            results = self._run_race(
+                lambda: finalize_expired_approval(
+                    action_run_id=self.action_run.pk
+                ),
+                approve,
+            )
+
+        self._assert_serialized_results(results)
+        mocked_dispatch.assert_not_called()
+        self._assert_single_expiry_outcome(resume_calls)
+
+    def test_exp_pg_02_reject_vs_expiry_serializes_once(self):
+        from threading import Lock
+
+        resume_calls = []
+        resume_lock = Lock()
+
+        def record_resume(session_id, **kwargs):
+            with resume_lock:
+                resume_calls.append(session_id)
+            return session_id
+
+        def reject():
+            reviewer = get_user_model().objects.get(pk=self.reviewer.pk)
+            reject_action_run(
+                action_run_id=self.action_run.pk,
+                reviewed_by=reviewer,
+            )
+
+        with patch(
+            "ai_hub.services.execution_runner.run_game_session_resume",
+            side_effect=record_resume,
+        ):
+            results = self._run_race(
+                lambda: finalize_expired_approval(
+                    action_run_id=self.action_run.pk
+                ),
+                reject,
+            )
+
+        self._assert_serialized_results(results)
+        self._assert_single_expiry_outcome(resume_calls)
+
+    def test_exp_pg_03_resume_vs_expiry_serializes_once(self):
+        from threading import Lock
+
+        resume_calls = []
+        resume_lock = Lock()
+
+        def record_resume(session_id, **kwargs):
+            with resume_lock:
+                resume_calls.append(session_id)
+            return session_id
+
+        with patch(
+            "ai_hub.services.execution_runner.run_game_session_resume",
+            side_effect=record_resume,
+        ):
+            results = self._run_race(
+                lambda: finalize_expired_approval(
+                    action_run_id=self.action_run.pk
+                ),
+                lambda: resume_goal_execution(session_id=self.session.pk),
+            )
+
+        self._assert_serialized_results(results)
+        self._assert_single_expiry_outcome(resume_calls)
 
 
 # ============================================================

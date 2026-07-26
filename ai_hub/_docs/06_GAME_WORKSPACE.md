@@ -260,7 +260,17 @@ sessions do not carry raw action payloads indefinitely.
 summarisation. The normal runner does not invoke it. Episodic checkpoints and
 memory retrieval are not implemented.
 
-An approval pause creates one pending action, approval request, and continuation. Approval or rejection is stored as an observation before resume, so the next agent iteration receives the human decision and action result. A pending approval cannot be resumed prematurely.
+An approval pause creates one pending action, approval request, and
+continuation. Approval or rejection is stored as an observation before resume,
+so the next agent iteration receives the human decision and action result. A
+pending approval cannot be resumed prematurely.
+
+If its deadline passes, the Approval remains `expired`, the unexecuted
+ActionRun becomes `failed`, and the matching continuation becomes `expired` in
+one atomic transition. GAME records one `approval_expired` observation and
+resumes the parent at the next unused step. The expired action never executes;
+requesting it again later creates a new ActionRun, Approval, fingerprint and
+continuation.
 
 The same effective agent identity scopes legacy selected Knowledge actions,
 resolved Knowledge adapters, workspace agent allow-lists, self-delegation

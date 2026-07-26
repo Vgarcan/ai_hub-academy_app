@@ -305,6 +305,14 @@ redacted execution-intent snapshot and its canonical fingerprint. Migration
 `0020_approval_execution_intent` leaves historical fingerprints blank so legacy
 approvals are never represented as verified.
 
+An approval deadline is finalized without a schema change. The Approval keeps
+the historically correct `expired` status; the non-executed ActionRun uses the
+existing terminal `failed` status with `APPROVAL_EXPIRED`; and the approval
+continuation uses its existing `expired` status and closure timestamp. These
+records, the parent `approval_expired` observation, and the transition from
+waiting Session/Goal state are committed atomically before resume processing
+runs.
+
 `GameWorkspaceAction` and `GameWorkspaceAgent` configure per-workspace permissions. Once at least one mapping of a type exists, that mapping set is treated as a closed allow-list. Policy services—not model output—decide permissions, approvals, external-write safety, and budgets.
 
 `GameGoalPlan.revision_history` stores JSON snapshots when `revise_plan()` advances the plan version. Plan versions and step orders start at one; step dependencies must point backwards within the same plan, and self/circular dependencies are rejected.

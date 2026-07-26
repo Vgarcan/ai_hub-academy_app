@@ -219,7 +219,15 @@ GAME automatically prepares context only with tools explicitly classified as rea
 
 When the explicit dispatcher is enabled, GAME executes only the action selected in the validated model decision. Known attempts are audited, workspace policy and budgets run before execution, and approval-required work pauses immediately. External writes are disabled unless workspace policy explicitly enables them.
 
-Reusable capabilities should be defined as `ToolDefinition` records and grouped through toolboxes/grants on the agent. A `GameActionDefinition` may then link to one of those reusable tools as a governed GAME wrapper. With `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=true`, GAME validates the workspace action policy, creates a `GameActionRun`, resolves the agent's tool access, executes the linked tool through the generic tool runtime, and records the reusable call in `ToolExecutionRun`.
+Reusable capabilities should be defined as `ToolDefinition` records and grouped
+through toolboxes/grants on the agent. A `GameActionDefinition` may then link to
+one of those reusable tools as a governed GAME wrapper. With
+`AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=true`, GAME creates a `GameActionRun`,
+resolves one effective agent (direct entry agent or first pipeline-step agent),
+validates workspace action policy and that agent's Tool access, and combines the
+action and effective Tool approval decisions. If either requires review, GAME
+pauses before contacting the Tool. An approved execution records the reusable
+call in `ToolExecutionRun` with the effective agent and approved audit state.
 
 The normal GAME model-call path now uses the same resolved manifest as
 Orchestrator, filtered to explicitly safe `context_tool` capabilities. The
@@ -253,6 +261,11 @@ summarisation. The normal runner does not invoke it. Episodic checkpoints and
 memory retrieval are not implemented.
 
 An approval pause creates one pending action, approval request, and continuation. Approval or rejection is stored as an observation before resume, so the next agent iteration receives the human decision and action result. A pending approval cannot be resumed prematurely.
+
+The same effective agent identity scopes legacy selected Knowledge actions,
+resolved Knowledge adapters, workspace agent allow-lists, self-delegation
+checks, Tool audit and the GAME timeline. Agent identifiers supplied in action
+input cannot replace that server-resolved identity.
 
 ## Goal Plans
 

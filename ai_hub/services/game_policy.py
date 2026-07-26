@@ -94,26 +94,29 @@ def validate_workspace_policy(policy: dict) -> None:
 def validate_goal_execution_policy(workspace, goal, session) -> None:
     """Verify workspace constraints before a goal execution session begins.
 
-    Checks policy structure and the workspace-agent allow-list. Raises PolicyViolationError
-    if the entry agent is explicitly disabled for this workspace.
+    Checks policy structure and the workspace-agent allow-list. Raises
+    PolicyViolationError if the effective GAME agent is not enabled for this
+    workspace.
     """
     from ai_hub.models import GameWorkspaceAgent
+    from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 
     policy = workspace.default_policy or {}
     if policy:
         validate_workspace_policy(policy)
 
-    if not session.entry_agent_id:
+    effective_agent = resolve_game_entry_agent(session)
+    if effective_agent is None:
         return
 
     agent_entries = GameWorkspaceAgent.objects.filter(workspace=workspace)
     if not agent_entries.exists():
         return
 
-    entry = agent_entries.filter(agent_id=session.entry_agent_id).first()
+    entry = agent_entries.filter(agent_id=effective_agent.pk).first()
     if entry is None or not entry.is_enabled:
         raise PolicyViolationError(
-            f"Agent '{session.entry_agent.name}' is not enabled for workspace '{workspace.name}'."
+            f"Agent '{effective_agent.name}' is not enabled for workspace '{workspace.name}'."
         )
 
 

@@ -247,13 +247,26 @@ Example config:
   "url": "https://api.example.com/customers/{customer_id}",
   "method": "GET",
   "allowed_hosts": ["api.example.com"],
-  "timeout": 10
+  "timeout": 10,
+  "max_redirects": 5
 }
 ```
 
 Do not store secrets in tool config. Use environment variables or host-project adapters.
 
-Python-callable tools are code-execution capabilities. Their dotted callable path must also appear in the host setting `AI_HUB_ALLOWED_TOOL_CALLABLES`. A Python callable classified as a GAME `context_tool` additionally requires `config.read_only=true`; HTTP context tools must use GET or HEAD and an explicitly allowed host.
+Python-callable tools are code-execution capabilities. Their dotted callable
+path must also appear in the host setting `AI_HUB_ALLOWED_TOOL_CALLABLES`. A
+Python callable classified as a GAME `context_tool` additionally requires
+`config.read_only=true`; HTTP context tools must use GET or HEAD and an
+explicitly allowed host.
+
+For every HTTP Tool, `operation_mode=read` requires `method=GET` or
+`method=HEAD`; `POST`, `PUT`, `PATCH` and `DELETE` require a non-read operation
+mode and the corresponding resolved permission. Only `http` and `https` URLs
+are accepted. `allowed_hosts` contains hostnames only—no scheme, path or
+port—and governs the initial request plus every redirect destination.
+`max_redirects` defaults to 5 and accepts 0 through 10. Invalid configurations
+are rejected by Admin/model validation and again before resolution/execution.
 
 ## GAME Feature Flags
 

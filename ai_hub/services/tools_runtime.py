@@ -1,6 +1,6 @@
 import importlib
 import json
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from django.conf import settings
@@ -11,6 +11,12 @@ from ai_hub.services.contracts import validate_payload
 from ai_hub.services.knowledge_tooling import (
     BIND_AGENT_CONTEXT_CONFIG_KEY,
     is_bound_knowledge_tool,
+)
+from ai_hub.services.http_tool_policy import (
+    HTTP_READ_METHODS,
+    HTTP_REDIRECT_STATUSES,
+    build_http_tool_configuration,
+    validate_http_destination,
 )
 
 
@@ -60,24 +66,81 @@ def _execute_python_callable(tool: ToolDefinition, payload: dict) -> dict:
 
 
 def _execute_http_tool(tool: ToolDefinition, payload: dict) -> dict:
-    config = tool.config or {}
-    url = config.get("url", "")
-    if not url:
-        raise ValidationError(f"Tool '{tool.name}' is missing 'url' in config.")
-    method = config.get("method", "POST").upper()
-    parsed_url = urlparse(url)
-    allowed_hosts = set(config.get("allowed_hosts") or [])
-    if not parsed_url.hostname or parsed_url.hostname not in allowed_hosts:
-        raise ValidationError(f"Tool '{tool.name}' HTTP host is not explicitly allowed.")
-    headers = config.get("headers", {})
-    timeout = min(max(int(config.get("timeout", 30)), 1), 60)
-    request_kwargs = {"headers": headers, "timeout": timeout}
-    if method in {"GET", "HEAD"}:
-        request_kwargs["params"] = payload
-    else:
-        request_kwargs["json"] = payload
-    response = requests.request(method, url, **request_kwargs)
-    return {"status_code": response.status_code, "body": response.text[:4000]}
+    runtime_config = build_http_tool_configuration(tool)
+    current_url = runtime_config.url
+    current_method = runtime_config.method
+    current_headers = runtime_config.headers
+    include_payload = True
+    redirects_followed = 0
+
+    while True:
+        validate_http_destination(
+            current_url,
+            runtime_config.allowed_hosts,
+            tool_name=tool.name,
+        )
+        request_kwargs = {
+            "headers": current_headers,
+            "timeout": runtime_config.timeout,
+            "allow_redirects": False,
+        }
+        if include_payload:
+            if current_method in HTTP_READ_METHODS:
+                request_kwargs["params"] = payload
+            else:
+                request_kwargs["json"] = payload
+
+        response = requests.request(current_method, current_url, **request_kwargs)
+        location = (getattr(response, "headers", {}) or {}).get("Location")
+        if response.status_code not in HTTP_REDIRECT_STATUSES or not location:
+            return {"status_code": response.status_code, "body": response.text[:4000]}
+
+        if redirects_followed >= runtime_config.max_redirects:
+            raise ValidationError(
+                f"Tool '{tool.name}' exceeded its redirect limit "
+                f"({runtime_config.max_redirects})."
+            )
+
+        next_url = urljoin(current_url, str(location).strip())
+        validate_http_destination(
+            next_url,
+            runtime_config.allowed_hosts,
+            tool_name=tool.name,
+        )
+        current_headers = _redirect_headers(current_headers, current_url, next_url)
+        current_method, include_payload = _redirect_method(
+            current_method,
+            response.status_code,
+            include_payload,
+        )
+        current_url = next_url
+        redirects_followed += 1
+
+
+def _redirect_method(method: str, status_code: int, include_payload: bool) -> tuple[str, bool]:
+    if status_code == 303 and method != "HEAD":
+        return "GET", False
+    if status_code == 302 and method != "HEAD":
+        return "GET", False
+    if status_code == 301 and method == "POST":
+        return "GET", False
+    return method, include_payload
+
+
+def _redirect_headers(headers: dict, source_url: str, target_url: str) -> dict:
+    source = urlparse(source_url)
+    target = urlparse(target_url)
+    source_origin = (source.scheme.lower(), source.hostname, source.port)
+    target_origin = (target.scheme.lower(), target.hostname, target.port)
+    if source_origin == target_origin:
+        return headers
+
+    sensitive_headers = {"authorization", "cookie", "proxy-authorization"}
+    return {
+        name: value
+        for name, value in headers.items()
+        if str(name).lower() not in sensitive_headers
+    }
 
 
 def _ensure_json_serializable(result: dict, tool_name: str) -> dict:

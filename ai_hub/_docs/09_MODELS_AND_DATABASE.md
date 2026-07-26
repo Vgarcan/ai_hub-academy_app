@@ -85,6 +85,11 @@ Tools should be treated as controlled capabilities. A tool attached to an agent
 does not mean every model can automatically use it. The runtime still decides
 whether that tool kind is available and safe.
 
+For HTTP Tools, `operation_mode` is validated against the real request method:
+`read` permits only GET or HEAD. The configuration also requires an
+`http`/`https` URL and an explicit hostname allow-list. These are model/runtime
+invariants rather than database constraints, so no schema migration is needed.
+
 ## `Toolbox`, `ToolboxTool`, `AgentToolboxAssignment`, and `AgentToolGrant`
 
 Toolboxes group related tools for a role or workflow.

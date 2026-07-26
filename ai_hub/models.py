@@ -123,6 +123,10 @@ class ToolDefinition(models.Model):
         for field_name in ("input_schema", "output_schema", "config"):
             if not isinstance(getattr(self, field_name), dict):
                 raise ValidationError({field_name: "Must be a JSON object."})
+        if self.tool_kind == self.ToolKind.HTTP and isinstance(self.config, dict):
+            from ai_hub.services.http_tool_policy import build_http_tool_configuration
+
+            build_http_tool_configuration(self)
 
 
 class Toolbox(models.Model):

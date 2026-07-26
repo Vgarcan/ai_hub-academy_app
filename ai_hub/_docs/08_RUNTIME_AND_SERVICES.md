@@ -89,9 +89,11 @@ decoder keep their contracts; the raw tool-protocol response remains in
 `tool_protocol_llm`.
 
 `agent_tool_runtime="legacy_preexecute"` selects the old `execute_agent()` shim.
-It sees only active direct `AgentProfile.tools`, pre-executes the allowed set,
-and injects all results into one model call. This exists for rollback while
-legacy prompts and demos migrate; new integrations should not select it.
+It sees only active direct `AgentProfile.tools`, intersects them with current
+grant/workspace resolution, excludes every Tool whose effective policy requires
+approval, pre-executes the remaining set and injects all results into one model
+call. This exists for rollback while legacy prompts and demos migrate; new
+integrations should not select it.
 
 ## Tool Resolution And Execution
 
@@ -104,9 +106,11 @@ legacy prompts and demos migrate; new integrations should not select it.
 - side-effect policy for external writes.
 
 The model-facing manifest includes labels, descriptions, risk, operation mode and
-schemas, but never exposes callable paths or private config. `execute_tool()`
-then enforces the resolved permission, callable allow-list, approval requirement
-and runtime safety checks before dispatching Python tools.
+schemas, but never exposes callable paths or private config. Governed callers
+enforce the resolved permission and effective approval decision before invoking
+`execute_tool()`. That low-level executor enforces contracts, callable allow-lists
+and kind-specific runtime safety; it is not a replacement for capability
+resolution.
 
 `ToolExecutionRun` records deliberate reusable tool calls and links them to the
 owning execution session and step. GAME selected actions continue to record
@@ -123,6 +127,16 @@ a selected action so the dispatcher can persist approval and resume state.
 Each successful tool keeps its complete result in `ToolExecutionRun`, while the
 copy returned to the model is capped by
 `AI_HUB_MAX_TOOL_OBSERVATION_CHARS`.
+
+HTTP Tool configuration is validated in the model/Admin, during capability
+resolution and again at execution. `operation_mode=read` accepts only `GET` or
+`HEAD`; write-capable methods require a write/execute operation mode and a
+matching grant. URLs require an explicit hostname allow-list and an `http` or
+`https` scheme. Redirects are followed explicitly rather than by the HTTP
+client: every hop is checked against the same allow-list before contact and the
+redirect count is bounded by `config.max_redirects` (default 5, maximum 10).
+Sensitive authentication/cookie headers are removed when a permitted redirect
+changes origin.
 
 ## Knowledge Retrieval
 
@@ -174,7 +188,8 @@ If a step fails, `on_error` determines whether the session stops, continues, or 
 
 The GAME runtime:
 
-1. resolves the entry agent,
+1. resolves one effective agent (the session entry agent, otherwise the first
+   pipeline-step agent),
 2. loads goal and runtime config,
 3. checks the workspace agent policy,
 4. executes only tools classified as safe context tools,
@@ -216,13 +231,23 @@ Missing or invalid categories are treated as action tools. Python context tools 
 GAME actions can now optionally link to a `ToolDefinition`. With the unified tool
 runtime flag enabled, `action_type=tool` dispatches through the same resolver and
 tool executor used by deliberate agents, while still preserving GAME policy,
-approval and `GameActionRun` audit.
+approval and `GameActionRun` audit. The Tool must be resolved for the effective
+GAME agent; model input cannot select or replace that identity. The effective
+approval decision is restrictive across the action definition, GAME/workspace
+policy and the resolved Tool policy. If any layer requires approval, execution
+pauses before `ToolExecutionRun` is created. After review, the reusable audit
+record is created with `approval_state=approved`.
 
 ### Actions, approval, and idempotency
 
 `execute_game_action()` creates a durable `GameActionRun` before validating a known action's input, policy, and budget. Contract, policy, budget, and handler failures are stored as failed attempts. Equivalent successful or waiting-approval calls return the existing run; terminal failed/rejected attempts return a controlled validation error rather than colliding with the unique idempotency key.
 
-Approval-required actions create one `GameActionApprovalRequest`, pause the session, move the goal to `waiting_approval`, and create one pending continuation. The iteration loop stops immediately. Approval and rejection are row-locked, persisted as parent observations, and must be resolved before `resume_goal_execution()` can continue at the next unused step order.
+Approval-required actions—including wrappers whose resolved Tool requires
+approval—create one `GameActionApprovalRequest`, pause the session, move the
+goal to `waiting_approval`, and create one pending continuation. The iteration
+loop stops immediately. Approval and rejection are row-locked, persisted as
+parent observations, and must be resolved before `resume_goal_execution()` can
+continue at the next unused step order.
 
 Real row-lock concurrency is verified by the PostgreSQL CI job. SQLite tests
 cover functional behavior but intentionally skip locking semantics.

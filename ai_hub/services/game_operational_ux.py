@@ -5,6 +5,7 @@ import re
 from django.db.models import Exists, OuterRef
 
 from ai_hub.models import GameGoal
+from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 
 
 _SENSITIVE_KEYS = frozenset({
@@ -311,6 +312,7 @@ def build_session_timeline(session, *, user=None):
     )
 
     events = []
+    effective_agent = resolve_game_entry_agent(session)
     if user is None or user.has_perm("ai_hub.view_executionsteprun"):
         for step in session.step_runs.select_related("agent").order_by("created_at", "pk"):
             observation = step.observation_payload or {}
@@ -338,7 +340,7 @@ def build_session_timeline(session, *, user=None):
                     "pk": run.pk,
                     "timestamp": run.started_at or session.created_at,
                     "status": run.status,
-                    "agent": session.entry_agent.name if session.entry_agent_id else "",
+                    "agent": effective_agent.name if effective_agent else "",
                     "action": run.action_name,
                     "summary": redact_text(
                         (run.output_payload or {}).get("message", "")

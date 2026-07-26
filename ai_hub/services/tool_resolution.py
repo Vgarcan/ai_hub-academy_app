@@ -8,6 +8,7 @@ from ai_hub.services.knowledge_tooling import (
     KNOWLEDGE_RETRIEVAL_TOOL_NAMES,
     is_bound_knowledge_tool,
 )
+from ai_hub.services.http_tool_policy import build_http_tool_configuration
 from ai_hub.services.tools_runtime import ALLOWED_TOOL_KINDS
 
 
@@ -54,9 +55,9 @@ def _policy_names(policy: dict, key: str) -> set[str] | None:
 
 def _effective_requires_approval(tool: ToolDefinition, grant: AgentToolGrant | None, workspace) -> bool:
     if grant is not None and grant.requires_approval_override is not None:
-        return bool(grant.requires_approval_override)
-
-    requires_approval = bool(tool.requires_approval)
+        requires_approval = bool(grant.requires_approval_override)
+    else:
+        requires_approval = bool(tool.requires_approval)
     policy = getattr(workspace, "default_policy", None) or {}
     safety = policy.get("safety", {}) if isinstance(policy, dict) else {}
     if not isinstance(safety, dict):
@@ -99,7 +100,11 @@ def _workspace_allows_tool(tool: ToolDefinition, workspace) -> bool:
 
 
 def _runtime_supports_tool(tool: ToolDefinition) -> bool:
-    return tool.tool_kind in ALLOWED_TOOL_KINDS
+    if tool.tool_kind not in ALLOWED_TOOL_KINDS:
+        return False
+    if tool.tool_kind == ToolDefinition.ToolKind.HTTP:
+        build_http_tool_configuration(tool)
+    return True
 
 
 def _permission_allows_operation(permission_level: str, operation_mode: str) -> bool:

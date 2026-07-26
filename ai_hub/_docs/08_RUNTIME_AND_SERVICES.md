@@ -93,6 +93,11 @@ The Orchestrator and GAME runners select an agent-call runtime from
 5. audit each call through `ToolExecutionRun`,
 6. return the final model output in the existing pipeline/GAME shape.
 
+All direct, Orchestrator, GAME and fallback Agent paths pass through the same
+active-state guard before Knowledge preparation, Tool resolution/execution or
+Provider access. Deactivating an Agent therefore takes effect for already
+configured pipelines and sessions.
+
 The output normally contains:
 
 ```json
@@ -161,7 +166,11 @@ matching grant. URLs require an explicit hostname allow-list and an `http` or
 client: every hop is checked against the same allow-list before contact and the
 redirect count is bounded by `config.max_redirects` (default 5, maximum 10).
 Sensitive authentication/cookie headers are removed when a permitted redirect
-changes origin.
+changes origin. Requests use streaming and every response is closed. A final
+body is bounded by `config.max_response_bytes` (default 1 MiB, clamped to
+1 KiB..10 MiB): an oversized `Content-Length` fails before body access and an
+unknown-length success or error body stops at `max_bytes + 1`. Bounded bytes are
+then decoded safely and retain the separate 4,000-character model-facing cap.
 
 ## Knowledge Retrieval
 
@@ -185,7 +194,10 @@ collection attachment as the authorization boundary and prevents agent
 impersonation. List, browse, search and read results have hard output bounds;
 read results report when content was truncated. Lexical search evaluates at
 most 1,000 matching chunks per call, materializes at most 20,000 characters per
-candidate for in-process scoring, and reports both truncation cases.
+candidate for in-process scoring, and reports both truncation cases. Candidate
+selection searches chunk content/section, document title and document tags in
+the database while preserving Agent collection scope and active
+collection/document filters.
 
 `AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=true` temporarily restores
 bounded eager text injection. It is compatibility behavior, not the normal
@@ -286,6 +298,14 @@ loop stops immediately. Approval and rejection are row-locked, persisted as
 parent observations, and must be resolved before `resume_goal_execution()` can
 continue at the next unused step order.
 
+Each approval persists a redacted execution-intent snapshot plus a canonical
+fingerprint covering the payload, Action config/contracts/risk, linked Tool and
+effective permission, effective Agent, and relevant workspace policy decision.
+Approval recomputes that fingerprint under the review locks, and the dispatcher
+checks it again immediately before execution. Drift, revoked authorization, an
+inactive Agent or a historical row without a fingerprint rejects the old run
+with `APPROVAL_REAPPROVAL_REQUIRED`; a fresh action request is required.
+
 Real row-lock concurrency is verified by the PostgreSQL CI job. SQLite tests
 cover functional behavior but intentionally skip locking semantics.
 
@@ -335,6 +355,13 @@ PostgreSQL CI job.
 `create_goal_execution_session()` links durable work to a runtime record while preserving legacy sessions that use only `goal_text`.
 
 Creation locks the goal, rejects inactive workspaces and terminal or waiting goals, prevents more than one active session per goal, creates the pending session, and moves a queued goal to `running` in one transaction. A goal already claimed by the scheduler may create its first session directly.
+
+Orphan cleanup may discover candidates optimistically, but it locks and
+revalidates each authoritative Goal immediately before cancellation. Session
+creation and cleanup take the same Goal lock and use one shared active-status
+set, so the serialized result can never be a cancelled Goal with a
+pending/running/waiting session. SQLite proves functional cases; PostgreSQL CI
+proves the cross-transaction interleaving.
 
 Runtime configuration precedence is:
 

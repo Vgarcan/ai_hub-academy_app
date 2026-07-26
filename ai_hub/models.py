@@ -1015,6 +1015,8 @@ class GameActionApprovalRequest(models.Model):
     goal = models.ForeignKey(GameGoal, on_delete=models.CASCADE, related_name="approval_requests")
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.PENDING)
     requested_payload = models.JSONField(default=dict, blank=True)
+    execution_intent_snapshot = models.JSONField(default=dict, blank=True)
+    execution_intent_fingerprint = models.CharField(max_length=64, blank=True)
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,

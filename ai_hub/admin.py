@@ -3039,6 +3039,7 @@ class GameActionApprovalRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
     change_form_template = "admin/ai_hub/gameactionapprovalrequest/change_form.html"
     readonly_fields = (
         "action_run", "goal", "status", "requested_payload_redacted",
+        "execution_intent_snapshot_redacted", "execution_intent_fingerprint",
         "reviewed_by", "review_note_redacted", "created_at", "reviewed_at", "expires_at",
     )
     fields = readonly_fields
@@ -3118,6 +3119,10 @@ class GameActionApprovalRequestAdmin(AIHubListPageMixin, admin.ModelAdmin):
     @admin.display(description=_("Requested payload (redacted)"))
     def requested_payload_redacted(self, obj):
         return _render_redacted_json(obj.requested_payload)
+
+    @admin.display(description=_("Execution intent snapshot (redacted)"))
+    def execution_intent_snapshot_redacted(self, obj):
+        return _render_redacted_json(obj.execution_intent_snapshot)
 
     @admin.display(description=_("Review note (redacted)"))
     def review_note_redacted(self, obj):

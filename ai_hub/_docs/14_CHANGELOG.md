@@ -9,6 +9,23 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Foundation boundary closure
+
+- Inactive Agents now fail at the shared runtime boundary before Knowledge,
+  Tool or Provider access in direct, Orchestrator, GAME and fallback paths.
+- Lexical Knowledge candidate selection now includes document tags while
+  preserving database bounds, active-state filters and Agent collection scope.
+- GAME approvals persist a redacted canonical execution-intent snapshot and
+  fingerprint. Approval and low-level dispatch both reject drift, revoked
+  authorization and historical unverified rows before execution.
+- Added migration `0020_approval_execution_intent`; legacy approval rows retain
+  blank fingerprints and require a fresh request.
+- HTTP Tools now stream and close every response, reject oversized
+  `Content-Length` before body access and enforce a bounded
+  `config.max_response_bytes` for success and error bodies.
+- Orphan Goal cleanup now locks/revalidates each candidate against the same Goal
+  lock used by session creation. PostgreSQL CI covers the controlled race.
+
 #### Orchestrator fallback hardening
 
 - Made `PipelineStep.input_mapping` the logical source for both primary and
@@ -593,7 +610,7 @@ SQLite  — local development and single-worker behaviour only
 PostgreSQL — required before running multiple scheduler workers concurrently
 ```
 
-- The current migration line is `0001`–`0019`. It includes durable GAME goals,
+- The current migration line is `0001`–`0020`. It includes durable GAME goals,
   action dispatch, memory, continuation/approval, policy, plans/delegation,
   toolboxes/tool audit, knowledge chunks, the Admin information architecture and
   retrieval-first foundations.

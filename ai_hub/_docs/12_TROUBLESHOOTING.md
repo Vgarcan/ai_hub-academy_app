@@ -178,6 +178,26 @@ fail-closed). Enable the flag in settings or the environment — see
 operations are hidden too, but direct model writes and not every lifecycle
 helper are uniformly gated; use Admin/database permissions for a hard stop.
 
+## Approval Requires A Fresh Request
+
+```text
+APPROVAL_REAPPROVAL_REQUIRED
+```
+
+The payload, Action/Tool configuration or contracts, effective Agent/permission,
+or relevant workspace policy no longer matches what was reviewed. Historical
+approval rows created before migration `0020` also have no verified
+fingerprint. The old run is rejected without execution; resume the parent flow
+and submit a fresh action request. Do not edit the stored fingerprint.
+
+## HTTP Tool Response Is Too Large
+
+An HTTP Tool can fail with `maximum response size` before reading the body when
+`Content-Length` is too large, or while streaming an unknown-length body. Set a
+bounded `config.max_response_bytes` only when the integration genuinely needs a
+larger response; the accepted range is 1 KiB..10 MiB and the unit is bytes.
+This is independent from the 4,000-character model-facing preview.
+
 ## Goal Is Stuck In Running
 
 A goal stays in `running` if its session never reached a terminal state (an interrupted run, or stub sessions left by tests). Cancel orphaned goals — those with no active session — with:
@@ -188,6 +208,9 @@ python manage.py cleanup_orphaned_goals
 ```
 
 A goal with an active session (pending/running/waiting_async) is never touched.
+Cleanup re-locks and rechecks each candidate, and session creation takes the
+same Goal lock. PostgreSQL CI verifies the cross-transaction race; a dry run is
+informational and does not lock candidates for later mutation.
 
 ## Pipeline Cannot Be Activated
 

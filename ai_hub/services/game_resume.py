@@ -203,15 +203,36 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
 
     session_id = GameActionRun.objects.only("session_id").get(pk=action_run_id).session_id
     expired = False
+    reapproval_required = False
+    reapproval_message = (
+        "APPROVAL_REAPPROVAL_REQUIRED: the reviewed execution intent or its current "
+        "authorization changed. Submit a fresh action request."
+    )
     with transaction.atomic():
         locked_session = ExecutionSession.objects.select_for_update().get(pk=session_id)
         action_run = (
             GameActionRun.objects.select_for_update()
-            .select_related("action")
             .get(pk=action_run_id)
+        )
+        from ai_hub.models import GameActionDefinition, GameWorkspace
+
+        action_run.action = (
+            GameActionDefinition.objects.select_for_update()
+            .select_related("tool")
+            .get(pk=action_run.action_id)
         )
         approval_req = GameActionApprovalRequest.objects.select_for_update().get(
             action_run=action_run
+        )
+        goal = (
+            GameGoal.objects.select_for_update().get(pk=locked_session.goal_id)
+            if locked_session.goal_id
+            else None
+        )
+        workspace = (
+            GameWorkspace.objects.select_for_update().get(pk=goal.workspace_id)
+            if goal is not None
+            else None
         )
         if action_run.status != GameActionRun.Status.WAITING_APPROVAL:
             raise ValidationError(
@@ -228,41 +249,81 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
             approval_req.save(update_fields=["status"])
             expired = True
         else:
-            approval_req.status = GameActionApprovalRequest.Status.APPROVED
-            approval_req.reviewed_by = reviewed_by
-            approval_req.review_note = review_note or ""
-            approval_req.reviewed_at = timezone.now()
-            approval_req.save(
-                update_fields=["status", "reviewed_by", "review_note", "reviewed_at"]
-            )
-            action_run.status = GameActionRun.Status.RUNNING
-            action_run.started_at = timezone.now()
-            action_run.save(update_fields=["status", "started_at"])
+            try:
+                from ai_hub.services.game_action_dispatcher import (
+                    build_game_action_approval_intent,
+                )
+                from ai_hub.services.game_policy import check_budget_before_action
+
+                _, current_fingerprint = build_game_action_approval_intent(
+                    session=locked_session,
+                    workspace=workspace,
+                    goal=goal,
+                    action_definition=action_run.action,
+                    payload=dict(action_run.input_payload or {}),
+                )
+                if (
+                    not approval_req.execution_intent_fingerprint
+                    or current_fingerprint
+                    != approval_req.execution_intent_fingerprint
+                ):
+                    raise ValidationError(reapproval_message)
+                check_budget_before_action(
+                    locked_session,
+                    action_run.action,
+                    action_run=action_run,
+                )
+            except ValidationError:
+                reviewed_at = timezone.now()
+                approval_req.status = GameActionApprovalRequest.Status.REJECTED
+                approval_req.reviewed_by = reviewed_by
+                approval_req.review_note = review_note or ""
+                approval_req.reviewed_at = reviewed_at
+                approval_req.save(
+                    update_fields=[
+                        "status",
+                        "reviewed_by",
+                        "review_note",
+                        "reviewed_at",
+                    ]
+                )
+                action_run.status = GameActionRun.Status.REJECTED
+                action_run.error_detail = reapproval_message
+                action_run.finished_at = reviewed_at
+                action_run.save(
+                    update_fields=["status", "error_detail", "finished_at"]
+                )
+                reapproval_required = True
+            else:
+                approval_req.status = GameActionApprovalRequest.Status.APPROVED
+                approval_req.reviewed_by = reviewed_by
+                approval_req.review_note = review_note or ""
+                approval_req.reviewed_at = timezone.now()
+                approval_req.save(
+                    update_fields=["status", "reviewed_by", "review_note", "reviewed_at"]
+                )
+                action_run.status = GameActionRun.Status.RUNNING
+                action_run.started_at = timezone.now()
+                action_run.save(update_fields=["status", "started_at"])
 
     if expired:
         raise ValidationError("This approval request has expired. Submit a new request to proceed.")
+    if reapproval_required:
+        _append_action_resolution(
+            action_run=action_run,
+            status="reapproval_required",
+            payload={
+                "message": (
+                    "The requested action was not executed because its reviewed "
+                    "intent or current authorization changed."
+                ),
+            },
+        )
+        raise ValidationError(reapproval_message)
 
     session = locked_session
-    goal = GameGoal.objects.select_related("workspace").get(pk=session.goal_id) if session.goal_id else None
-    workspace = goal.workspace if goal else None
     start = time.perf_counter()
     try:
-        if workspace is not None:
-            from ai_hub.services.game_policy import (
-                ApprovalRequiredByPolicyError,
-                validate_action_policy,
-            )
-
-            try:
-                validate_action_policy(
-                    workspace,
-                    goal,
-                    action_run.action,
-                    dict(action_run.input_payload or {}),
-                )
-            except ApprovalRequiredByPolicyError:
-                pass
-
         from ai_hub.services.game_action_dispatcher import dispatch_game_action
 
         with transaction.atomic():

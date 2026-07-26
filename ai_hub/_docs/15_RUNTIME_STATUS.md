@@ -54,6 +54,8 @@ path changes.
 - A configured fallback uses its own contracts, Knowledge, resolved tool
   manifest, identity, ModelConfig and ProviderConfig through the normal Agent
   execution boundary.
+- Direct, primary, fallback and GAME Agent calls enforce current `is_active`
+  before Knowledge preparation, Tool access or Provider invocation.
 - Pipeline activation checks fallback contract presence and statically obvious
   required-input mismatches. Runtime validation independently enforces Agent
   input/output contracts.
@@ -107,9 +109,16 @@ path changes.
   resolved Tool policy. Once either requires approval, a wrapper whose local
   `requires_approval` is false cannot bypass it; execution resumes only through
   the durable GAME approval path.
+- Durable GAME approval stores a redacted canonical intent and fingerprint for
+  payload, Action/Tool configuration and contracts, effective Agent/permission,
+  and relevant workspace policy. Review and final dispatch both recheck it;
+  drift and pre-`0020` rows require a fresh request.
 - HTTP Tools reject `operation_mode=read` with write-capable methods. Their
   `http`/`https` scheme and hostname allow-list are checked before the initial
   request and before every bounded redirect; automatic redirects are disabled.
+- HTTP responses are streamed and always closed. `config.max_response_bytes`
+  defaults to 1 MiB (clamped to 1 KiB..10 MiB), applies to success/error bodies
+  and is distinct from the 4,000-character model-facing preview.
 
 ### LEGACY
 
@@ -159,6 +168,8 @@ path changes.
   ignores model-supplied agent identifiers.
 - Prompt indexes and list/browse/search/read results have explicit bounds,
   including a finite lexical search candidate window.
+- Lexical candidates include document tags in the bounded database query while
+  retaining active document/collection and Agent collection filters.
 - Build Console text documents and migration `0019` receive an initial chunk
   when none exists.
 
@@ -247,16 +258,17 @@ path changes.
 
 ### CURRENT
 
-- Scheduler claims, approvals and delegation budget reservation use database row
-  locks.
+- Scheduler claims, approvals, delegation budget reservation and orphan cleanup
+  use database row locks. Goal session creation and orphan cleanup serialize on
+  the same Goal row and recheck active sessions before cancellation.
 - Functional tests pass on SQLite.
-- Three concurrency tests intentionally skip unless the database provides the
+- Four concurrency tests intentionally skip unless the database provides the
   required PostgreSQL locking semantics.
 - The host accepts `DATABASE_URL` or discrete `POSTGRES_*` settings and ships
   Psycopg 3.
 - CI runs SQLite against Django 5.2 LTS and the current supported Django line,
   plus a PostgreSQL 16 job. The PostgreSQL job runs the complete suite,
-  including all three concurrency tests.
+  including all four concurrency tests.
 
 ### TARGET
 

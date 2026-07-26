@@ -11,6 +11,9 @@ HTTP_SUPPORTED_METHODS = HTTP_READ_METHODS | HTTP_WRITE_METHODS
 HTTP_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 DEFAULT_HTTP_MAX_REDIRECTS = 5
 MAX_HTTP_REDIRECTS = 10
+DEFAULT_HTTP_MAX_RESPONSE_BYTES = 1024 * 1024
+MIN_HTTP_RESPONSE_BYTES = 1024
+MAX_HTTP_RESPONSE_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,7 @@ class HttpToolConfiguration:
     headers: dict
     timeout: int
     max_redirects: int
+    max_response_bytes: int
 
 
 def normalize_http_hostname(hostname: str) -> str:
@@ -123,6 +127,25 @@ def build_http_tool_configuration(tool) -> HttpToolConfiguration:
             f"{MAX_HTTP_REDIRECTS}."
         )
 
+    raw_max_response_bytes = config.get(
+        "max_response_bytes",
+        DEFAULT_HTTP_MAX_RESPONSE_BYTES,
+    )
+    if isinstance(raw_max_response_bytes, bool):
+        raise ValidationError(
+            f"Tool '{tool.name}' HTTP max_response_bytes must be an integer."
+        )
+    try:
+        max_response_bytes = int(raw_max_response_bytes)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(
+            f"Tool '{tool.name}' HTTP max_response_bytes must be an integer."
+        ) from exc
+    max_response_bytes = min(
+        max(max_response_bytes, MIN_HTTP_RESPONSE_BYTES),
+        MAX_HTTP_RESPONSE_BYTES,
+    )
+
     return HttpToolConfiguration(
         url=url,
         method=method,
@@ -130,4 +153,5 @@ def build_http_tool_configuration(tool) -> HttpToolConfiguration:
         headers=dict(headers),
         timeout=timeout,
         max_redirects=max_redirects,
+        max_response_bytes=max_response_bytes,
     )

@@ -9441,15 +9441,14 @@ class GameDelegationBudgetConcurrencyTests(TransactionTestCase):
             close_old_connections()
             try:
                 barrier.wait(timeout=10)
-                with patch("ai_hub.services.agent_runtime.completion_call", return_value=response):
-                    run_delegated_agent(
-                        session=ExecutionSession.objects.get(pk=session.pk),
-                        action_run=GameActionRun.objects.get(pk=action_id),
-                        workspace=GameWorkspace.objects.get(pk=workspace.pk),
-                        goal=GameGoal.objects.get(pk=goal.pk),
-                        target_agent_name=target.name,
-                        task="one slot only",
-                    )
+                run_delegated_agent(
+                    session=ExecutionSession.objects.get(pk=session.pk),
+                    action_run=GameActionRun.objects.get(pk=action_id),
+                    workspace=GameWorkspace.objects.get(pk=workspace.pk),
+                    goal=GameGoal.objects.get(pk=goal.pk),
+                    target_agent_name=target.name,
+                    task="one slot only",
+                )
                 result = "success"
             except Exception as exc:
                 result = type(exc).__name__
@@ -9458,10 +9457,11 @@ class GameDelegationBudgetConcurrencyTests(TransactionTestCase):
             with result_lock:
                 results.append(result)
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(delegate, action_id) for action_id in action_ids]
-            for future in futures:
-                future.result(timeout=30)
+        with patch("ai_hub.services.agent_runtime.completion_call", return_value=response):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(delegate, action_id) for action_id in action_ids]
+                for future in futures:
+                    future.result(timeout=30)
 
         self.assertEqual(GameDelegationRun.objects.count(), 1)
         self.assertEqual(results.count("success"), 1)

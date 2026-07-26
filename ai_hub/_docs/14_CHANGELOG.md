@@ -9,6 +9,24 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Orchestrator fallback hardening
+
+- Made `PipelineStep.input_mapping` the logical source for both primary and
+  fallback preparation; fallback Agents no longer inherit a copied primary
+  request.
+- Enforced configured fallback contracts at activation and required mapped
+  output source paths for normal and recovered steps.
+- Added structured `fallback_recovery` audit metadata for primary failure,
+  fallback status/identity and final outcome without adding a migration.
+- Made recovered steps record the fallback as effective Agent, clear the
+  non-terminal primary `error_detail` and preserve the primary cause inside
+  recovery metadata. Double failures retain both causes and remain terminal.
+- Added deterministic A-J coverage plus Knowledge/tool/model/provider,
+  non-fallback policy, mapping and cross-step payload regressions.
+- Added an environment-gated live vertical slice proving a controlled
+  unreachable primary can recover through a real configured Ollama fallback.
+  Normal CI still has no dependency on a developer endpoint.
+
 #### Provider routing and live Ollama validation
 
 - Made `ProviderConfig.provider_type` the authoritative completion-routing

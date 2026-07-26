@@ -207,7 +207,19 @@ The Orchestrator runtime:
 9. validates final output,
 10. marks the session as success or failed.
 
-If a step fails, `on_error` determines whether the session stops, continues, or tries a fallback agent.
+If a step fails, `on_error` determines whether the session stops, continues, or
+tries one fallback Agent. The fallback is prepared independently from the
+logical step input and runs through the normal Agent boundary, which resolves
+its own input/output contracts, Knowledge, tools, identity, model and provider.
+The primary prepared request is not reused. Provider errors such as
+`provider_unreachable` enter this normal Orchestrator policy; provider adapters
+never select another provider themselves.
+
+Both primary and fallback output mappings reject absent source paths. A
+recovered step stores the fallback response plus structured
+`fallback_recovery` attempt metadata, records the fallback as the effective
+step Agent and clears the non-terminal primary error from `error_detail`. A
+double failure remains failed and records both categorized causes.
 
 ## GAME Runtime
 
@@ -368,7 +380,10 @@ Each applied outcome stores a fingerprint on the session. Replaying the same his
 - status,
 - error detail.
 
-This is the audit trail for every run.
+This is the audit trail for every run. For recovered Orchestrator steps,
+`response_payload.fallback_recovery` distinguishes primary failure, fallback
+attempt/status and final recovered outcome. Primary failure evidence belongs
+there; `error_detail` represents only a current terminal failure.
 
 ## Final Output Handling
 

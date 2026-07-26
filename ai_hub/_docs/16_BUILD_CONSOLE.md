@@ -164,7 +164,10 @@ Both are parsed as JSON and stored on `PipelineDefinition.global_input_contract`
 
 Optional checkbox to set `PipelineDefinition.is_active=True` immediately on creation.
 
-A gate warning is shown: activating validates that steps are continuous and each step's agent has a valid contract. Leave this unchecked and activate later from the Orchestrator admin once all agents are verified.
+A gate warning is shown: activating validates that steps are continuous and
+each primary/configured fallback Agent has valid contracts and compatible
+explicit input keys. Leave this unchecked and activate later from the
+Orchestrator admin once all agents are verified.
 
 ### Step 7 — Review
 

@@ -222,7 +222,12 @@ Rules:
 
 - Step order should be unique within a pipeline.
 - Mappings should be explicit.
-- Fallback agents should have compatible contracts.
+- An active pipeline requires non-empty input/output contracts for each primary
+  Agent and configured fallback Agent.
+- When `input_mapping` explicitly defines the logical input keys, activation
+  rejects an Agent or fallback Agent whose required keys cannot be supplied.
+- Both primary and fallback output mappings fail when a configured source path
+  is absent.
 
 ## `GameWorkspace`
 
@@ -332,7 +337,9 @@ Important fields:
 - `session`: parent session.
 - `order`: step or iteration order.
 - `pipeline_step`: related pipeline step when applicable.
-- `agent`: agent used for this step.
+- `agent`: effective agent used for this step; after successful fallback
+  recovery this is the fallback Agent, while `pipeline_step.agent` still
+  identifies the configured primary.
 - `action_name`: GAME action or tool/action label.
 - `status`: pending, running, success, failed or skipped.
 - `request_payload`: payload sent to the runtime.
@@ -341,7 +348,13 @@ Important fields:
 - `latency_ms`: measured latency.
 - `error_detail`: failure details.
 
-Step runs are the primary audit trail for debugging model behavior.
+Step runs are the primary audit trail for debugging model behavior. A recovered
+Orchestrator response adds `fallback_recovery` to `response_payload`, with
+structured primary/fallback identities, statuses, categorized errors and the
+final outcome. Recovered steps use `status=success` with empty `error_detail`;
+double failures use `status=failed` and the fallback failure is the terminal
+error. This representation uses existing JSON fields and requires no extra
+database status or migration.
 
 ## `ToolExecutionRun`
 

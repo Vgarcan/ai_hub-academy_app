@@ -131,6 +131,80 @@ def _create_step_run(session: ExecutionSession, step) -> ExecutionStepRun:
     )
 
 
+def _mapped_path_exists(source: dict, source_key: str) -> bool:
+    current = source
+    for part in str(source_key).split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
+def _apply_step_output_mapping(output_payload: dict, mapping: dict) -> dict:
+    missing_paths = [
+        str(source_key)
+        for source_key in (mapping or {}).values()
+        if not _mapped_path_exists(output_payload, source_key)
+    ]
+    if missing_paths:
+        raise ValidationError(
+            "Pipeline step output is missing mapped source paths: "
+            f"{', '.join(missing_paths)}."
+        )
+    return apply_mapping(output_payload, mapping or {})
+
+
+def _execution_error_metadata(error: Exception) -> dict:
+    category = getattr(error, "category", "")
+    if not category:
+        category = (
+            "validation_error"
+            if isinstance(error, ValidationError)
+            else "execution_error"
+        )
+    return {
+        "category": str(category),
+        "type": type(error).__name__,
+        "detail": str(error),
+    }
+
+
+def _agent_attempt_metadata(agent, status: str, error: Exception | None = None) -> dict:
+    metadata = {
+        "agent_id": agent.pk,
+        "agent": agent.name,
+        "status": status,
+    }
+    if error is not None:
+        metadata["error"] = _execution_error_metadata(error)
+    return metadata
+
+
+def _fallback_recovery_metadata(
+    *,
+    primary_agent,
+    primary_error: Exception,
+    fallback_agent,
+    fallback_status: str,
+    final_outcome: str,
+    fallback_error: Exception | None = None,
+) -> dict:
+    return {
+        "attempted": True,
+        "primary": _agent_attempt_metadata(
+            primary_agent,
+            "failed",
+            primary_error,
+        ),
+        "fallback": _agent_attempt_metadata(
+            fallback_agent,
+            fallback_status,
+            fallback_error,
+        ),
+        "final_outcome": final_outcome,
+    }
+
+
 def _create_game_step_run(session: ExecutionSession, agent, order: int) -> ExecutionStepRun:
     return ExecutionStepRun.objects.create(
         session=session,
@@ -893,8 +967,17 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
     for index, step in enumerate(steps):
         step_run = _create_step_run(session, step)
         started = time.perf_counter()
+        logical_payload = {}
+        logical_payload_ready = False
+        payload = {}
         try:
-            payload = prepare_agent_payload(step.agent, context, step.input_mapping or {})
+            logical_payload = apply_mapping(context, step.input_mapping or {})
+            logical_payload_ready = True
+            payload = prepare_agent_payload(
+                step.agent,
+                copy.deepcopy(logical_payload),
+                {},
+            )
             output_payload = _execute_session_agent(
                 session=session,
                 step_run=step_run,
@@ -903,36 +986,75 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
                 agent_tool_runtime=agent_tool_runtime,
                 tool_policy=TOOL_POLICY_ALL,
             )
-            context.update(apply_mapping(output_payload, step.output_mapping or {}))
+            mapped_output = _apply_step_output_mapping(
+                output_payload,
+                step.output_mapping or {},
+            )
+            context.update(mapped_output)
             step_run.status = ExecutionStepRun.Status.SUCCESS
             step_run.request_payload = payload
             step_run.response_payload = output_payload
         except Exception as exc:
             step_run.status = ExecutionStepRun.Status.FAILED
             step_run.error_detail = str(exc)
-            step_run.request_payload = locals().get("payload", {})
+            step_run.request_payload = payload
             if step.on_error == step.OnError.CONTINUE:
                 pass
-            elif step.on_error == step.OnError.FALLBACK_AGENT and step.fallback_agent:
-                fallback_payload = dict(step_run.request_payload)
-                fallback_payload["knowledge_context"] = prepare_agent_payload(
-                    step.fallback_agent,
-                    context,
-                    {},
-                )["knowledge_context"]
-                output_payload = _execute_session_agent(
-                    session=session,
-                    step_run=step_run,
-                    agent=step.fallback_agent,
-                    payload=fallback_payload,
-                    agent_tool_runtime=agent_tool_runtime,
-                    tool_policy=TOOL_POLICY_ALL,
-                )
-                context.update(apply_mapping(output_payload, step.output_mapping or {}))
+            elif (
+                step.on_error == step.OnError.FALLBACK_AGENT
+                and step.fallback_agent
+                and logical_payload_ready
+            ):
+                primary_error = exc
+                step_run.agent = step.fallback_agent
+                step_run.request_payload = {}
+                try:
+                    fallback_payload = prepare_agent_payload(
+                        step.fallback_agent,
+                        copy.deepcopy(logical_payload),
+                        {},
+                    )
+                    step_run.request_payload = fallback_payload
+                    fallback_output = _execute_session_agent(
+                        session=session,
+                        step_run=step_run,
+                        agent=step.fallback_agent,
+                        payload=fallback_payload,
+                        agent_tool_runtime=agent_tool_runtime,
+                        tool_policy=TOOL_POLICY_ALL,
+                    )
+                    mapped_output = _apply_step_output_mapping(
+                        fallback_output,
+                        step.output_mapping or {},
+                    )
+                except Exception as fallback_error:
+                    step_run.status = ExecutionStepRun.Status.FAILED
+                    step_run.error_detail = str(fallback_error)
+                    step_run.response_payload = {
+                        "fallback_for": step.agent.name,
+                        "fallback_recovery": _fallback_recovery_metadata(
+                            primary_agent=step.agent,
+                            primary_error=primary_error,
+                            fallback_agent=step.fallback_agent,
+                            fallback_status="failed",
+                            fallback_error=fallback_error,
+                            final_outcome="failed",
+                        ),
+                    }
+                    raise
+                context.update(mapped_output)
                 step_run.status = ExecutionStepRun.Status.SUCCESS
+                step_run.error_detail = ""
                 step_run.response_payload = {
+                    **fallback_output,
                     "fallback_for": step.agent.name,
-                    **output_payload,
+                    "fallback_recovery": _fallback_recovery_metadata(
+                        primary_agent=step.agent,
+                        primary_error=primary_error,
+                        fallback_agent=step.fallback_agent,
+                        fallback_status="success",
+                        final_outcome="recovered",
+                    ),
                 }
             else:
                 raise
@@ -940,6 +1062,7 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
             step_run.latency_ms = int((time.perf_counter() - started) * 1000)
             step_run.save(
                 update_fields=[
+                    "agent",
                     "status",
                     "request_payload",
                     "response_payload",
@@ -980,6 +1103,8 @@ def run_execution_session(
         .prefetch_related(
             "pipeline__steps__agent__tools",
             "pipeline__steps__agent__knowledge_collections__documents",
+            "pipeline__steps__fallback_agent__tools",
+            "pipeline__steps__fallback_agent__knowledge_collections__documents",
         )
         .get(pk=session_id)
     )

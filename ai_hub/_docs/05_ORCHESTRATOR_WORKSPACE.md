@@ -120,6 +120,27 @@ Dot paths such as `llm.content` are supported.
 
 Use `stop` while testing. Use `continue` only for optional enrichment. Use fallback agents only when another agent can genuinely recover the step.
 
+Fallback is one governed recovery attempt, not a retry chain. The runner first
+derives the logical step input from pipeline context and `input_mapping`. It
+then prepares the primary and fallback Agents independently from that same
+logical input, so the fallback resolves its own Knowledge, tools, model,
+provider, identity and contracts. The primary Agent's prepared payload is never
+used as the fallback source.
+
+An active fallback configuration must define input and output contracts. When
+an explicit `input_mapping` makes an input mismatch statically obvious,
+activation rejects the pipeline. Runtime contract validation remains
+authoritative, and a missing `output_mapping` source path is a step failure
+rather than a successful `None` value.
+
+After successful recovery, the `ExecutionStepRun` is `success`, its effective
+`agent` is the fallback Agent and `error_detail` is empty. The response keeps
+the fallback output at its normal keys and adds `fallback_recovery`, which
+records the failed primary attempt, successful fallback attempt and
+`final_outcome = recovered`. If the fallback also fails, the step is `failed`,
+`error_detail` contains the fallback's terminal error and the same structured
+metadata preserves both failures.
+
 ## Admin UX
 
 Open:

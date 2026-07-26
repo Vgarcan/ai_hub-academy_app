@@ -44,13 +44,15 @@ from ai_hub.models import (
     ToolboxTool,
     ToolExecutionRun,
 )
-from ai_hub.services.litellm_client import completion_call
+from ai_hub.services.litellm_client import ProviderExecutionError, completion_call
 from ai_hub.services.admin_control_center import build_control_center_context
 from ai_hub.services.execution_sessions import create_execution_session
 from ai_hub.services.agent_runtime import (
+    apply_mapping,
     build_agent_knowledge_context,
     execute_agent,
     execute_agent_deliberate,
+    prepare_agent_payload,
 )
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.execution_runner import run_execution_session
@@ -2240,6 +2242,569 @@ class GameGoalExecutionTests(TestCase):
         self.assertEqual(result["applied"], 1)
         self.assertEqual(result["errors"], [])
         self.assertEqual(goal.status, GameGoal.Status.FAILED)
+
+
+class OrchestratorFallbackTests(TestCase):
+    def setUp(self):
+        self.provider = ProviderConfig.objects.create(
+            name="fallback-provider",
+            provider_type=ProviderConfig.ProviderType.TRAINING,
+        )
+        self.model = ModelConfig.objects.create(
+            provider=self.provider,
+            model_name="training",
+        )
+        self.primary = AgentProfile.objects.create(
+            name="fallback-primary",
+            role="Primary fallback test agent",
+            model_config=self.model,
+            input_contract={"required": ["source"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+        self.fallback = AgentProfile.objects.create(
+            name="fallback-secondary",
+            role="Secondary fallback test agent",
+            model_config=self.model,
+            input_contract={"required": ["source"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+
+    def _create_pipeline(
+        self,
+        *,
+        on_error=PipelineStep.OnError.FALLBACK_AGENT,
+        fallback_agent=None,
+        input_mapping=None,
+        output_mapping=None,
+        global_output_contract=None,
+    ):
+        pipeline = PipelineDefinition.objects.create(
+            name=f"fallback-pipeline-{PipelineDefinition.objects.count() + 1}",
+            global_input_contract={"required": ["source"]},
+            global_output_contract=(
+                {"required": ["result"]}
+                if global_output_contract is None
+                else global_output_contract
+            ),
+        )
+        step = PipelineStep.objects.create(
+            pipeline=pipeline,
+            agent=self.primary,
+            fallback_agent=self.fallback if fallback_agent is None else fallback_agent,
+            order=1,
+            input_mapping={"source": "source"} if input_mapping is None else input_mapping,
+            output_mapping={"result": "llm.content"} if output_mapping is None else output_mapping,
+            on_error=on_error,
+        )
+        pipeline.is_active = True
+        pipeline.save(update_fields=["is_active"])
+        return pipeline, step
+
+    def _create_session(self, pipeline, initial_context=None):
+        return create_execution_session(
+            pipeline=pipeline,
+            runtime_mode=ExecutionSession.RuntimeMode.SYNC,
+            initial_context=initial_context or {"source": "logical input"},
+        )
+
+    @staticmethod
+    def _success_output(agent, content="fallback result"):
+        return {
+            "agent": agent.name,
+            "llm": {"status": "ok", "content": content},
+            "tools": {},
+        }
+
+    def test_fallback_A_prepares_fresh_payload_from_logical_step_input(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+        observed = []
+
+        def fake_prepare(agent, context, mapping, *, workspace=None):
+            payload = apply_mapping(context, mapping or {})
+            payload["prepared_for"] = agent.name
+            payload["knowledge_context"] = {"collections": [agent.name]}
+            return payload
+
+        def fake_execute(*, agent, payload, **kwargs):
+            observed.append((agent, dict(payload)))
+            if agent == self.primary:
+                raise RuntimeError("primary failed")
+            return self._success_output(agent)
+
+        with patch(
+            "ai_hub.services.execution_runner.prepare_agent_payload",
+            side_effect=fake_prepare,
+        ), patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual([agent for agent, _payload in observed], [self.primary, self.fallback])
+        self.assertEqual(observed[0][1]["prepared_for"], self.primary.name)
+        self.assertEqual(observed[1][1]["prepared_for"], self.fallback.name)
+        self.assertEqual(observed[1][1]["source"], "logical input")
+
+    def test_fallback_A_isolates_nested_logical_input_from_primary_mutation(self):
+        pipeline, _step = self._create_pipeline(
+            input_mapping={
+                "source": "source",
+                "details": "details",
+            },
+        )
+        session = self._create_session(
+            pipeline,
+            initial_context={
+                "source": "logical input",
+                "details": {"owner": "session", "items": ["original"]},
+            },
+        )
+        fallback_payload = {}
+
+        def fake_execute(*, agent, payload, **kwargs):
+            if agent == self.primary:
+                payload["details"]["owner"] = "primary mutation"
+                payload["details"]["items"].append("primary")
+                raise RuntimeError("primary failed after mutation")
+            fallback_payload.update(payload)
+            return self._success_output(agent)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(
+            fallback_payload["details"],
+            {"owner": "session", "items": ["original"]},
+        )
+        self.assertEqual(
+            session.final_context["details"],
+            {"owner": "session", "items": ["original"]},
+        )
+
+    def test_fallback_B_rejects_obvious_input_incompatibility_at_activation(self):
+        self.fallback.input_contract = {"required": ["source", "language"]}
+        self.fallback.save(update_fields=["input_contract"])
+        pipeline, _step = self._create_pipeline()
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "Fallback agent 'fallback-secondary' cannot receive required input keys: language",
+        ):
+            pipeline.full_clean()
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_fallback_B_validates_fallback_input_before_provider_execution(self, mocked_call):
+        self.fallback.input_contract = {"required": ["source", "language"]}
+        self.fallback.save(update_fields=["input_contract"])
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+        mocked_call.side_effect = RuntimeError("primary provider failed")
+
+        run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertIn("fallback-secondary", session.error_detail)
+        self.assertIn("language", session.error_detail)
+        self.assertEqual(mocked_call.call_count, 1)
+
+    def test_fallback_preparation_failure_does_not_retain_primary_request(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+
+        def fake_prepare(agent, context, mapping, *, workspace=None):
+            if agent == self.fallback:
+                raise ValidationError("fallback preparation failed")
+            return prepare_agent_payload(
+                agent,
+                context,
+                mapping,
+                workspace=workspace,
+            )
+
+        with patch(
+            "ai_hub.services.execution_runner.prepare_agent_payload",
+            side_effect=fake_prepare,
+        ), patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=RuntimeError("primary execution failed"),
+        ) as mocked_execute:
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        recovery = step_run.response_payload["fallback_recovery"]
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertEqual(step_run.agent, self.fallback)
+        self.assertEqual(step_run.request_payload, {})
+        self.assertEqual(mocked_execute.call_count, 1)
+        self.assertEqual(
+            recovery["primary"]["error"]["detail"],
+            "primary execution failed",
+        )
+        self.assertEqual(recovery["fallback"]["status"], "failed")
+        self.assertIn(
+            "fallback preparation failed",
+            recovery["fallback"]["error"]["detail"],
+        )
+
+    def test_fallback_contracts_are_required_when_activating_pipeline(self):
+        self.fallback.input_contract = {}
+        self.fallback.output_contract = {}
+        self.fallback.save(update_fields=["input_contract", "output_contract"])
+        pipeline, _step = self._create_pipeline()
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "Fallback agent 'fallback-secondary' must define input/output contracts",
+        ):
+            pipeline.full_clean()
+
+    def test_fallback_C_does_not_inherit_primary_knowledge(self):
+        primary_collection = KnowledgeCollection.objects.create(name="Primary-only knowledge")
+        fallback_collection = KnowledgeCollection.objects.create(name="Fallback-only knowledge")
+        self.primary.knowledge_collections.add(primary_collection)
+        self.fallback.knowledge_collections.add(fallback_collection)
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+        observed = {}
+
+        def fake_execute(*, agent, payload, **kwargs):
+            observed[agent.name] = payload
+            if agent == self.primary:
+                raise RuntimeError("primary failed")
+            return self._success_output(agent)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        fallback_knowledge = observed[self.fallback.name]["knowledge_context"]
+        self.assertIn(fallback_collection.name, fallback_knowledge["collections"])
+        self.assertNotIn(primary_collection.name, fallback_knowledge["collections"])
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_fallback_C_resolves_its_own_tools_and_model(self, mocked_call):
+        fallback_model = ModelConfig.objects.create(
+            provider=self.provider,
+            model_name="training/assistant",
+        )
+        self.fallback.model_config = fallback_model
+        self.fallback.save(update_fields=["model_config"])
+        primary_tool = ToolDefinition.objects.create(
+            name="primary-only-tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "primary"},
+        )
+        fallback_tool = ToolDefinition.objects.create(
+            name="fallback-only-tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "fallback"},
+        )
+        self.primary.tools.add(primary_tool)
+        self.fallback.tools.add(fallback_tool)
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+        mocked_call.side_effect = [
+            RuntimeError("primary provider failed"),
+            {"status": "ok", "content": "fallback model result"},
+        ]
+
+        run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        manifest_names = {
+            item["name"] for item in step_run.response_payload["tool_manifest"]
+        }
+        called_models = [
+            call.kwargs["model"] for call in mocked_call.call_args_list
+        ]
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(called_models, ["training", "training/assistant"])
+        self.assertEqual(manifest_names, {fallback_tool.name})
+        self.assertNotIn(primary_tool.name, manifest_names)
+
+    def test_fallback_D_executes_and_records_fallback_identity(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+        executed_agents = []
+
+        def fake_execute(*, agent, **kwargs):
+            executed_agents.append(agent)
+            if agent == self.primary:
+                raise RuntimeError("primary failed")
+            return self._success_output(agent)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        step_run = ExecutionStepRun.objects.get(session=session)
+        recovery = step_run.response_payload["fallback_recovery"]
+        self.assertEqual(executed_agents, [self.primary, self.fallback])
+        self.assertEqual(step_run.response_payload["agent"], self.fallback.name)
+        self.assertEqual(recovery["primary"]["agent_id"], self.primary.pk)
+        self.assertEqual(recovery["fallback"]["agent_id"], self.fallback.pk)
+        self.assertEqual(recovery["fallback"]["agent"], self.fallback.name)
+
+    def test_fallback_E_applies_valid_output_mapping_to_final_context(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+
+        def fake_execute(*, agent, **kwargs):
+            if agent == self.primary:
+                raise RuntimeError("primary failed")
+            return self._success_output(agent, content="mapped fallback result")
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(session.final_context["result"], "mapped fallback result")
+
+    def test_fallback_F_missing_mapped_output_path_is_terminal_failure(self):
+        pipeline, _step = self._create_pipeline(
+            output_mapping={"summary": "result.summary"},
+            global_output_contract={"required": ["summary"]},
+        )
+        session = self._create_session(pipeline)
+
+        def fake_execute(*, agent, **kwargs):
+            if agent == self.primary:
+                raise RuntimeError("primary failed")
+            return self._success_output(agent)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertIn("result.summary", session.error_detail)
+
+    def test_fallback_G_persists_unambiguous_recovered_audit(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+
+        def fake_execute(*, agent, **kwargs):
+            if agent == self.primary:
+                raise RuntimeError("primary audit failure")
+            return self._success_output(agent)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        step_run = ExecutionStepRun.objects.get(session=session)
+        recovery = step_run.response_payload["fallback_recovery"]
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.SUCCESS)
+        self.assertEqual(step_run.error_detail, "")
+        self.assertTrue(recovery["attempted"])
+        self.assertEqual(recovery["primary"]["status"], "failed")
+        self.assertEqual(recovery["primary"]["error"]["detail"], "primary audit failure")
+        self.assertEqual(recovery["fallback"]["status"], "success")
+        self.assertEqual(recovery["final_outcome"], "recovered")
+
+    def test_provider_failure_category_enters_normal_fallback_audit(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+
+        def fake_execute(*, agent, **kwargs):
+            if agent == self.primary:
+                raise ProviderExecutionError(
+                    "provider_unreachable",
+                    "Primary provider is unavailable.",
+                )
+            return self._success_output(agent)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ):
+            run_execution_session(session.pk)
+
+        step_run = ExecutionStepRun.objects.get(session=session)
+        recovery = step_run.response_payload["fallback_recovery"]
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.SUCCESS)
+        self.assertEqual(
+            recovery["primary"]["error"]["category"],
+            "provider_unreachable",
+        )
+        self.assertEqual(recovery["fallback"]["status"], "success")
+
+    def test_fallback_H_preserves_both_failures_and_terminal_error(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+
+        def fake_execute(*, agent, **kwargs):
+            if agent == self.primary:
+                raise RuntimeError("primary failed first")
+            raise ValidationError("fallback failed second")
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=fake_execute,
+        ) as mocked_execute:
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        recovery = step_run.response_payload["fallback_recovery"]
+        self.assertEqual(mocked_execute.call_count, 2)
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertIn("fallback failed second", step_run.error_detail)
+        self.assertEqual(recovery["primary"]["error"]["detail"], "primary failed first")
+        self.assertEqual(recovery["fallback"]["error"]["detail"], "['fallback failed second']")
+        self.assertEqual(recovery["fallback"]["status"], "failed")
+        self.assertEqual(recovery["final_outcome"], "failed")
+
+    def test_fallback_I_stop_policy_never_invokes_configured_fallback(self):
+        pipeline, _step = self._create_pipeline(on_error=PipelineStep.OnError.STOP)
+        session = self._create_session(pipeline)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=RuntimeError("primary stop failure"),
+        ) as mocked_execute:
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(mocked_execute.call_count, 1)
+        self.assertEqual(mocked_execute.call_args.kwargs["agent"], self.primary)
+
+    def test_fallback_I_continue_policy_never_invokes_configured_fallback(self):
+        pipeline, _step = self._create_pipeline(
+            on_error=PipelineStep.OnError.CONTINUE,
+            global_output_contract={},
+        )
+        session = self._create_session(pipeline)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            side_effect=RuntimeError("optional enrichment failed"),
+        ) as mocked_execute:
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertIn("optional enrichment failed", step_run.error_detail)
+        self.assertEqual(mocked_execute.call_count, 1)
+        self.assertEqual(mocked_execute.call_args.kwargs["agent"], self.primary)
+
+    def test_fallback_J_primary_success_never_prepares_or_executes_fallback(self):
+        pipeline, _step = self._create_pipeline()
+        session = self._create_session(pipeline)
+
+        with patch(
+            "ai_hub.services.execution_runner.prepare_agent_payload",
+            wraps=prepare_agent_payload,
+        ) as mocked_prepare, patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            return_value=self._success_output(self.primary, content="primary result"),
+        ) as mocked_execute:
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ExecutionSession.Status.SUCCESS)
+        self.assertEqual(mocked_prepare.call_count, 1)
+        self.assertEqual(mocked_prepare.call_args.args[0], self.primary)
+        self.assertEqual(mocked_execute.call_count, 1)
+        self.assertEqual(mocked_execute.call_args.kwargs["agent"], self.primary)
+
+    def test_primary_missing_mapped_output_path_is_terminal_failure(self):
+        pipeline, _step = self._create_pipeline(
+            on_error=PipelineStep.OnError.STOP,
+            output_mapping={"summary": "result.summary"},
+            global_output_contract={"required": ["summary"]},
+        )
+        session = self._create_session(pipeline)
+
+        with patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            return_value=self._success_output(self.primary),
+        ):
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertIn("result.summary", session.error_detail)
+
+    def test_step_preparation_failure_does_not_reuse_previous_step_payload(self):
+        second_agent = AgentProfile.objects.create(
+            name="preparation-failure-agent",
+            role="Preparation failure probe",
+            model_config=self.model,
+            input_contract={"required": ["source"]},
+            output_contract={"required": ["agent", "llm", "tools"]},
+        )
+        pipeline, _step = self._create_pipeline(
+            on_error=PipelineStep.OnError.STOP,
+            global_output_contract={},
+        )
+        PipelineStep.objects.create(
+            pipeline=pipeline,
+            agent=second_agent,
+            order=2,
+            input_mapping={"source": "source"},
+            on_error=PipelineStep.OnError.STOP,
+        )
+        session = self._create_session(pipeline)
+
+        def fake_prepare(agent, context, mapping, *, workspace=None):
+            if agent == second_agent:
+                raise ValidationError("second preparation failed")
+            return prepare_agent_payload(
+                agent,
+                context,
+                mapping,
+                workspace=workspace,
+            )
+
+        with patch(
+            "ai_hub.services.execution_runner.prepare_agent_payload",
+            side_effect=fake_prepare,
+        ), patch(
+            "ai_hub.services.execution_runner._execute_session_agent",
+            return_value=self._success_output(self.primary),
+        ):
+            run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        second_run = session.step_runs.get(order=2)
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(second_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertEqual(second_run.request_payload, {})
+        self.assertIn("second preparation failed", second_run.error_detail)
 
 
 class HubExecutionSessionTests(TestCase):

@@ -128,12 +128,13 @@ Slow two-minute model runs do not block the user interface and do not create dup
 
 Tools are powerful and need strict controls.
 
-Delivered: explicit allow-lists (callable registry, HTTP allowed-hosts, GET/HEAD
-context rule), toolbox/grant resolution, model-facing manifest redaction,
-default deliberate runner integration, session/step-linked tool audit via
-`ToolExecutionRun`, tool/action audit logs via `GameActionRun`, context-only
-GAME manifests, an explicit legacy pre-execution shim, optional unified GAME
-tool dispatch, starter toolboxes, and timeout clamping.
+Delivered: explicit allow-lists (callable registry and per-hop HTTP
+allowed-hosts), GET/HEAD read semantics, bounded redirects, toolbox/grant
+resolution, model-facing manifest redaction, default deliberate runner
+integration, session/step-linked tool audit via `ToolExecutionRun`, tool/action
+audit logs via `GameActionRun`, context-only GAME manifests, an explicit legacy
+pre-execution shim, effective approval enforcement in optional unified GAME
+dispatch, starter toolboxes, and timeout clamping.
 
 Still recommended:
 

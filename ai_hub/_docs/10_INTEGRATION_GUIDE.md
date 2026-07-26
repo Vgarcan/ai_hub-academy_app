@@ -178,13 +178,21 @@ Recommended host flow:
 5. Keep callable implementations in `AI_HUB_ALLOWED_TOOL_CALLABLES`.
 6. For external writes, require workspace policy and/or approval before execution.
 
-For GAME, create a `GameActionDefinition` only when the tool should be available as a governed selected action. Link that action to the reusable `ToolDefinition`; GAME will still enforce action policy, approval, budget and audit through `GameActionRun`, while the reusable tool execution is recorded in `ToolExecutionRun` when the unified runtime flag is enabled.
+For GAME, create a `GameActionDefinition` only when the tool should be available
+as a governed selected action. Link that action to the reusable
+`ToolDefinition`; GAME enforces the action policy plus the Tool's effective
+resolved permission/approval requirement through `GameActionRun`. The reusable
+execution is recorded in `ToolExecutionRun` when the unified runtime flag is
+enabled.
 
 The built-in Orchestrator and GAME runners use the deliberate resolved manifest
 by default and let the agent request one tool at a time. Session and step audit
 links are supplied automatically. Host code should normally create and run an
 `ExecutionSession` instead of calling `execute_agent_deliberate()` or
-`execute_tool()` directly.
+`execute_tool()` directly. `execute_tool()` is intentionally a low-level
+contract/kind executor: a host that calls it directly owns capability and
+approval authorization. The bundled runners and GAME dispatcher provide those
+governed boundaries.
 
 If a host must roll back an existing flow temporarily, set the session
 `runtime_config.agent_tool_runtime` to `legacy_preexecute`. Do not use that mode

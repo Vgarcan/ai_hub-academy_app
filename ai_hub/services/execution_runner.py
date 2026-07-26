@@ -15,6 +15,7 @@ from ai_hub.services.agent_runtime import (
     prepare_agent_payload,
 )
 from ai_hub.services.contracts import validate_payload
+from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 from ai_hub.services.tools_runtime import TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY
 
 
@@ -88,7 +89,12 @@ def _execute_session_agent(
     tool_policy: str,
 ) -> dict:
     if agent_tool_runtime == AGENT_TOOL_RUNTIME_LEGACY:
-        output_payload = execute_agent(agent, payload, tool_policy=tool_policy)
+        output_payload = execute_agent(
+            agent,
+            payload,
+            tool_policy=tool_policy,
+            workspace=_session_workspace(session),
+        )
     else:
         workspace = _session_workspace(session)
         output_payload = execute_agent_deliberate(
@@ -473,16 +479,6 @@ def _game_observation(output_payload: dict, runtime_config: dict) -> dict:
     }
 
 
-def _resolve_game_entry_agent(session: ExecutionSession):
-    if session.entry_agent_id:
-        return session.entry_agent
-    if session.pipeline_id:
-        first_step = session.pipeline.steps.select_related("agent").order_by("order").first()
-        if first_step:
-            return first_step.agent
-    return None
-
-
 def _dispatch_observation_action(
     session: ExecutionSession,
     observation: dict,
@@ -538,7 +534,7 @@ def _run_game_session(
     )
     if session.runtime_mode == ExecutionSession.RuntimeMode.HYBRID:
         raise ValidationError("GAME Hybrid continuation is not enabled yet. Use sync or async mode.")
-    entry_agent = _resolve_game_entry_agent(session)
+    entry_agent = resolve_game_entry_agent(session)
     if not entry_agent:
         raise ValidationError("GAME sessions require an entry agent or a pipeline with at least one step.")
     if not entry_agent.is_active:

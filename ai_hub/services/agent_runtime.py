@@ -590,10 +590,25 @@ def execute_agent_deliberate(
     return output_payload
 
 
-def execute_agent(agent: AgentProfile, payload: dict, *, tool_policy: str = TOOL_POLICY_ALL) -> dict:
+def execute_agent(
+    agent: AgentProfile,
+    payload: dict,
+    *,
+    tool_policy: str = TOOL_POLICY_ALL,
+    workspace=None,
+) -> dict:
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
+    direct_tool_ids = set(
+        agent.tools.filter(is_active=True).values_list("pk", flat=True)
+    )
+    resolution = resolve_agent_tools(agent, workspace=workspace)
+    executable_direct_tools = [
+        resolved.tool
+        for resolved in resolution.tools
+        if resolved.tool.pk in direct_tool_ids and not resolved.requires_approval
+    ]
     tools_data = execute_tools(
-        agent.tools.filter(is_active=True),
+        executable_direct_tools,
         payload,
         policy=tool_policy,
         agent=agent,

@@ -92,6 +92,13 @@ Test:
 - exclusion of unresumable approval tools from ordinary runner manifests,
 - Control Center tool edges derived from the same resolved manifest,
 - unified GAME tool adapter behavior with the kill-switch disabled and enabled,
+- restrictive unified approval across action, Tool/grant and workspace risk
+  policy, including approve/resume audit state,
+- direct and pipeline-backed GAME effective-agent consistency across Tool
+  resolution, Knowledge, workspace policy, delegation and audit views,
+- rejection of HTTP `read` Tools configured with write-capable methods,
+- per-hop HTTP redirect allow-list/scheme enforcement, bounded loops and
+  cross-origin credential stripping without real network access,
 - default retrieval-only knowledge context with automatic
   browse/search/read/citation tools,
 - server-bound Knowledge identity, cross-agent isolation, deny grants and

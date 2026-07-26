@@ -5,6 +5,7 @@ from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from django.contrib import admin
 from django.contrib.auth import get_user_model
@@ -531,6 +532,51 @@ class ToolResolutionTests(TestCase):
         resolution = resolve_agent_tools(self.agent)
 
         self.assertEqual(resolution.tool_names(), ["grant-read-tool"])
+
+    def test_invalid_http_read_configuration_fails_during_resolution(self):
+        tool = self.make_tool(
+            "misclassified-http-write",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/resource",
+                "method": "POST",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+        self.agent.tools.add(tool)
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "HTTP tools with operation_mode READ must use GET or HEAD",
+        ):
+            resolve_agent_tools(self.agent)
+
+    def test_writable_http_tool_resolves_with_matching_grant(self):
+        tool = self.make_tool(
+            "governed-http-write",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.STATE_WRITE,
+            config={
+                "url": "https://allowed.example/resource",
+                "method": "POST",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+        tool.full_clean()
+        AgentToolGrant.objects.create(
+            agent=self.agent,
+            tool=tool,
+            permission_level=AgentToolGrant.PermissionLevel.STATE_WRITE,
+        )
+
+        resolution = resolve_agent_tools(self.agent)
+
+        self.assertEqual(resolution.tool_names(), ["governed-http-write"])
+        self.assertEqual(
+            resolution.tools[0].permission_level,
+            AgentToolGrant.PermissionLevel.STATE_WRITE,
+        )
 
     def test_restrictive_agent_grant_overrides_toolbox_access(self):
         tool = self.make_tool(
@@ -1487,6 +1533,38 @@ class DeliberateToolRuntimeTests(TestCase):
         prompt_result = sent_payload["tool_results"]["deliberate-tool"]
         self.assertTrue(prompt_result["truncated"])
         self.assertLessEqual(len(json.dumps(prompt_result, sort_keys=True)), 512)
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_legacy_runtime_does_not_preexecute_approval_required_tool(self, mocked_call):
+        self.make_prompt_tool(requires_approval=True)
+        mocked_call.return_value = {"status": "ok", "content": "done"}
+
+        output = execute_agent(self.agent, {"query": "hello"})
+
+        self.assertEqual(output["tools"], {})
+        sent_payload = json.loads(
+            mocked_call.call_args.kwargs["messages"][1]["content"]
+        )
+        self.assertNotIn("tool_results", sent_payload)
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_legacy_runtime_honours_workspace_effective_approval(self, mocked_call):
+        self.make_prompt_tool(risk_level=ToolDefinition.RiskLevel.MEDIUM)
+        workspace = GameWorkspace.objects.create(
+            name="legacy-approval-workspace",
+            default_policy={
+                "safety": {"require_approval_for_medium_risk": True},
+            },
+        )
+        mocked_call.return_value = {"status": "ok", "content": "done"}
+
+        output = execute_agent(
+            self.agent,
+            {"query": "hello"},
+            workspace=workspace,
+        )
+
+        self.assertEqual(output["tools"], {})
 
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_unknown_or_unauthorised_tool_is_blocked(self, mocked_call):
@@ -3057,6 +3135,284 @@ class HubToolSafetyTests(TestCase):
         with self.assertRaisesMessage(ValidationError, "HTTP host is not explicitly allowed"):
             execute_tools([tool], {})
         mocked_request.assert_not_called()
+
+    def test_http_read_operation_accepts_only_get_and_head(self):
+        for method in ("GET", "HEAD"):
+            with self.subTest(method=method):
+                tool = ToolDefinition(
+                    name=f"read-{method.lower()}",
+                    tool_kind=ToolDefinition.ToolKind.HTTP,
+                    operation_mode=ToolDefinition.OperationMode.READ,
+                    config={
+                        "url": "https://allowed.example/resource",
+                        "method": method,
+                        "allowed_hosts": ["allowed.example"],
+                    },
+                )
+                tool.full_clean()
+
+    def test_http_read_operation_rejects_write_capable_methods(self):
+        for method in ("POST", "PUT", "PATCH", "DELETE"):
+            with self.subTest(method=method):
+                tool = ToolDefinition(
+                    name=f"invalid-read-{method.lower()}",
+                    tool_kind=ToolDefinition.ToolKind.HTTP,
+                    operation_mode=ToolDefinition.OperationMode.READ,
+                    config={
+                        "url": "https://allowed.example/resource",
+                        "method": method,
+                        "allowed_hosts": ["allowed.example"],
+                    },
+                )
+                with self.assertRaisesMessage(
+                    ValidationError,
+                    "HTTP tools with operation_mode READ must use GET or HEAD",
+                ):
+                    tool.full_clean()
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_runtime_rejects_invalid_read_configuration_before_request(self, mocked_request):
+        tool = ToolDefinition.objects.create(
+            name="runtime-invalid-read-post",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/resource",
+                "method": "POST",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "HTTP tools with operation_mode READ must use GET or HEAD",
+        ):
+            execute_tool(tool, {"value": "must not leave"})
+        mocked_request.assert_not_called()
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_writable_configuration_still_executes(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(
+            status_code=200,
+            headers={},
+            text="written",
+        )
+        tool = ToolDefinition(
+            name="valid-state-write-post",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.STATE_WRITE,
+            config={
+                "url": "https://allowed.example/resource",
+                "method": "POST",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+        tool.full_clean()
+        tool.save()
+
+        result = execute_tool(tool, {"value": "allowed"})
+
+        self.assertEqual(result, {"status_code": 200, "body": "written"})
+        mocked_request.assert_called_once()
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_redirect_within_allowed_host_succeeds(self, mocked_request):
+        mocked_request.side_effect = [
+            SimpleNamespace(
+                status_code=302,
+                headers={"Location": "/final"},
+                text="redirect",
+            ),
+            SimpleNamespace(status_code=200, headers={}, text="ok"),
+        ]
+        tool = ToolDefinition.objects.create(
+            name="same-host-redirect",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        result = execute_tool(tool, {})
+
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(mocked_request.call_count, 2)
+        self.assertEqual(
+            [call.args[1] for call in mocked_request.call_args_list],
+            ["https://allowed.example/start", "https://allowed.example/final"],
+        )
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_redirect_to_second_allowed_host_succeeds(self, mocked_request):
+        mocked_request.side_effect = [
+            SimpleNamespace(
+                status_code=307,
+                headers={"Location": "https://second.example/final"},
+                text="redirect",
+            ),
+            SimpleNamespace(status_code=200, headers={}, text="ok"),
+        ]
+        tool = ToolDefinition.objects.create(
+            name="second-host-redirect",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example", "second.example"],
+            },
+        )
+
+        result = execute_tool(tool, {})
+
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(mocked_request.call_count, 2)
+        self.assertTrue(
+            all(
+                call.kwargs["allow_redirects"] is False
+                for call in mocked_request.call_args_list
+            )
+        )
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_cross_origin_redirect_drops_sensitive_headers(self, mocked_request):
+        mocked_request.side_effect = [
+            SimpleNamespace(
+                status_code=302,
+                headers={"Location": "https://second.example/final"},
+                text="redirect",
+            ),
+            SimpleNamespace(status_code=200, headers={}, text="ok"),
+        ]
+        tool = ToolDefinition.objects.create(
+            name="credential-safe-redirect",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example", "second.example"],
+                "headers": {
+                    "Authorization": "Bearer secret",
+                    "Cookie": "session=secret",
+                    "X-Public": "kept",
+                },
+            },
+        )
+
+        execute_tool(tool, {})
+
+        second_headers = mocked_request.call_args_list[1].kwargs["headers"]
+        self.assertEqual(second_headers, {"X-Public": "kept"})
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_redirect_to_forbidden_host_stops_before_contact(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(
+            status_code=302,
+            headers={"Location": "https://forbidden.example/private"},
+            text="redirect",
+        )
+        tool = ToolDefinition.objects.create(
+            name="forbidden-host-redirect",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "HTTP host is not explicitly allowed"):
+            execute_tool(tool, {})
+        self.assertEqual(mocked_request.call_count, 1)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_redirect_to_loopback_stops_before_contact(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(
+            status_code=302,
+            headers={"Location": "http://127.0.0.1:9000/private"},
+            text="redirect",
+        )
+        tool = ToolDefinition.objects.create(
+            name="loopback-redirect",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "HTTP host is not explicitly allowed"):
+            execute_tool(tool, {})
+        self.assertEqual(mocked_request.call_count, 1)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_redirect_limit_terminates_loop(self, mocked_request):
+        mocked_request.side_effect = [
+            SimpleNamespace(status_code=302, headers={"Location": "/two"}, text=""),
+            SimpleNamespace(status_code=302, headers={"Location": "/three"}, text=""),
+            SimpleNamespace(status_code=302, headers={"Location": "/four"}, text=""),
+        ]
+        tool = ToolDefinition.objects.create(
+            name="redirect-loop",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/one",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+                "max_redirects": 2,
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "exceeded its redirect limit"):
+            execute_tool(tool, {})
+        self.assertEqual(mocked_request.call_count, 3)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_unsupported_initial_scheme_fails_before_request(self, mocked_request):
+        tool = ToolDefinition.objects.create(
+            name="unsupported-http-scheme",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "file://allowed.example/private",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "HTTP URL scheme must be http or https"):
+            execute_tool(tool, {})
+        mocked_request.assert_not_called()
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_redirect_to_unsupported_scheme_stops_before_contact(self, mocked_request):
+        mocked_request.return_value = SimpleNamespace(
+            status_code=302,
+            headers={"Location": "file://allowed.example/private"},
+            text="redirect",
+        )
+        tool = ToolDefinition.objects.create(
+            name="unsupported-redirect-scheme",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "HTTP URL scheme must be http or https"):
+            execute_tool(tool, {})
+        self.assertEqual(mocked_request.call_count, 1)
 
 
 class HubOllamaClientTests(TestCase):
@@ -4691,6 +5047,304 @@ class GameActionDispatcherTests(TestCase):
         self.assertTrue(GameActionApprovalRequest.objects.filter(action_run=action_run).exists())
         self.assertEqual(ToolExecutionRun.objects.count(), 0)
 
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_unified_tool_requirement_cannot_be_disabled_by_action(self):
+        transition_goal_status(self.goal, GameGoal.Status.RUNNING, reason="tool approval")
+        tool = ToolDefinition.objects.create(
+            name="tool_requires_approval",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "must wait"},
+            requires_approval=True,
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="action_without_approval",
+            label="Action without approval",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            requires_approval=False,
+        )
+
+        action_run = self._dispatch("action_without_approval", {})
+
+        self.assertEqual(action_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertTrue(GameActionApprovalRequest.objects.filter(action_run=action_run).exists())
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_unified_action_requirement_still_gates_tool_without_requirement(self):
+        transition_goal_status(self.goal, GameGoal.Status.RUNNING, reason="action approval")
+        tool = ToolDefinition.objects.create(
+            name="action_requires_approval_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "must wait"},
+            requires_approval=False,
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="action_requires_approval",
+            label="Action requires approval",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            requires_approval=True,
+        )
+
+        action_run = self._dispatch("action_requires_approval", {})
+
+        self.assertEqual(action_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_unified_tool_workspace_risk_policy_requires_approval(self):
+        transition_goal_status(self.goal, GameGoal.Status.RUNNING, reason="workspace approval")
+        self.workspace.default_policy = {
+            "safety": {"require_approval_for_medium_risk": True},
+        }
+        self.workspace.save(update_fields=["default_policy"])
+        tool = ToolDefinition.objects.create(
+            name="workspace_requires_approval_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "must wait"},
+            risk_level=ToolDefinition.RiskLevel.MEDIUM,
+            requires_approval=False,
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="low_risk_action_wrapper",
+            label="Low-risk action wrapper",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            risk_level=ToolDefinition.RiskLevel.LOW,
+            requires_approval=False,
+        )
+
+        action_run = self._dispatch("low_risk_action_wrapper", {})
+
+        self.assertEqual(action_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_workspace_approval_cannot_be_disabled_by_agent_grant_override(self):
+        transition_goal_status(self.goal, GameGoal.Status.RUNNING, reason="workspace approval")
+        self.workspace.default_policy = {
+            "safety": {"require_approval_for_medium_risk": True},
+        }
+        self.workspace.save(update_fields=["default_policy"])
+        tool = ToolDefinition.objects.create(
+            name="grant_cannot_lower_workspace_approval",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "must wait"},
+            risk_level=ToolDefinition.RiskLevel.MEDIUM,
+            requires_approval=True,
+        )
+        AgentToolGrant.objects.create(
+            agent=self.agent,
+            tool=tool,
+            requires_approval_override=False,
+        )
+        GameActionDefinition.objects.create(
+            name="grant_override_action",
+            label="Grant override action",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            requires_approval=False,
+        )
+
+        action_run = self._dispatch("grant_override_action", {})
+
+        self.assertEqual(action_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_low_level_dispatch_cannot_bypass_effective_tool_approval(self):
+        from ai_hub.services.game_action_dispatcher import dispatch_game_action
+
+        tool = ToolDefinition.objects.create(
+            name="low_level_approval_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "must not run"},
+            requires_approval=True,
+        )
+        self.agent.tools.add(tool)
+        action = GameActionDefinition.objects.create(
+            name="low_level_approval_action",
+            label="Low-level approval action",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            requires_approval=False,
+        )
+        action_run = GameActionRun.objects.create(
+            session=self.session,
+            action=action,
+            idempotency_key="low-level-approval-bypass",
+            action_name=action.name,
+            iteration=1,
+            status=GameActionRun.Status.RUNNING,
+        )
+
+        with self.assertRaisesMessage(ValidationError, "requires approval"):
+            dispatch_game_action(
+                action_run=action_run,
+                workspace=self.workspace,
+                goal=self.goal,
+                payload={},
+            )
+
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_pipeline_game_uses_first_step_agent_for_tool_resolution_and_audit(self):
+        pipeline_agent = AgentProfile.objects.create(
+            name="pipeline-dispatcher-agent",
+            role="Pipeline dispatcher",
+            model_config=self.model,
+        )
+        pipeline = PipelineDefinition.objects.create(name="GAME effective agent pipeline")
+        PipelineStep.objects.create(pipeline=pipeline, agent=pipeline_agent, order=1)
+        self.session.entry_agent = None
+        self.session.pipeline = pipeline
+        self.session.save(update_fields=["entry_agent", "pipeline"])
+        tool = ToolDefinition.objects.create(
+            name="pipeline_agent_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "pipeline agent only"},
+        )
+        pipeline_agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="pipeline_agent_action",
+            label="Pipeline agent action",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+        )
+
+        action_run = self._dispatch("pipeline_agent_action", {})
+
+        self.assertEqual(action_run.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(ToolExecutionRun.objects.get().agent, pipeline_agent)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_pipeline_game_rejects_tool_not_granted_to_effective_agent(self):
+        pipeline_agent = AgentProfile.objects.create(
+            name="pipeline-restricted-agent",
+            role="Restricted pipeline dispatcher",
+            model_config=self.model,
+        )
+        pipeline = PipelineDefinition.objects.create(name="GAME restricted agent pipeline")
+        PipelineStep.objects.create(pipeline=pipeline, agent=pipeline_agent, order=1)
+        self.session.entry_agent = None
+        self.session.pipeline = pipeline
+        self.session.save(update_fields=["entry_agent", "pipeline"])
+        tool = ToolDefinition.objects.create(
+            name="wrong_agent_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "wrong agent"},
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="wrong_agent_action",
+            label="Wrong agent action",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+        )
+
+        with self.assertRaisesMessage(ValidationError, "not available to agent"):
+            self._dispatch("wrong_agent_action", {})
+
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_unified_tool_rejects_inactive_effective_agent(self):
+        self.agent.is_active = False
+        self.agent.save(update_fields=["is_active"])
+        tool = ToolDefinition.objects.create(
+            name="inactive_agent_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "must not run"},
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="inactive_agent_action",
+            label="Inactive agent action",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+        )
+
+        with self.assertRaisesMessage(ValidationError, "must be active"):
+            self._dispatch("inactive_agent_action", {})
+
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_pipeline_game_bound_tool_ignores_model_supplied_agent_identity(self):
+        seed_starter_toolboxes()
+        pipeline_agent = AgentProfile.objects.create(
+            name="pipeline-bound-agent",
+            role="Bound pipeline dispatcher",
+            model_config=self.model,
+        )
+        pipeline_collection = KnowledgeCollection.objects.create(name="Pipeline agent library")
+        pipeline_agent.knowledge_collections.add(pipeline_collection)
+        pipeline = PipelineDefinition.objects.create(name="GAME bound agent pipeline")
+        PipelineStep.objects.create(pipeline=pipeline, agent=pipeline_agent, order=1)
+        self.session.entry_agent = None
+        self.session.pipeline = pipeline
+        self.session.save(update_fields=["entry_agent", "pipeline"])
+        tool = ToolDefinition.objects.get(name="list_knowledge_libraries")
+        GameActionDefinition.objects.create(
+            name="pipeline_bound_knowledge_action",
+            label="Pipeline bound knowledge action",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+        )
+
+        action_run = self._dispatch(
+            "pipeline_bound_knowledge_action",
+            {"agent_id": self.agent.pk, "agent_name": self.agent.name},
+        )
+
+        tool_run = ToolExecutionRun.objects.get()
+        self.assertEqual(action_run.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(tool_run.agent, pipeline_agent)
+        self.assertEqual(tool_run.input_payload["agent_id"], pipeline_agent.pk)
+        self.assertNotIn("agent_name", tool_run.input_payload)
+        self.assertEqual(
+            action_run.output_payload["tool_result"]["libraries"][0]["name"],
+            pipeline_collection.name,
+        )
+
+    def test_pipeline_game_context_actions_use_effective_agent_knowledge(self):
+        pipeline_agent = AgentProfile.objects.create(
+            name="pipeline-knowledge-agent",
+            role="Pipeline knowledge reader",
+            model_config=self.model,
+        )
+        pipeline_collection = KnowledgeCollection.objects.create(name="Pipeline private library")
+        pipeline_agent.knowledge_collections.add(pipeline_collection)
+        pipeline_document = KnowledgeDocument.objects.create(
+            collection=pipeline_collection,
+            title="Pipeline-only runbook",
+            curated_text="The pipeline-only marker is delta-echo.",
+            status=KnowledgeDocument.Status.ACTIVE,
+        )
+        pipeline = PipelineDefinition.objects.create(name="GAME knowledge pipeline")
+        PipelineStep.objects.create(pipeline=pipeline, agent=pipeline_agent, order=1)
+        self.session.entry_agent = None
+        self.session.pipeline = pipeline
+        self.session.save(update_fields=["entry_agent", "pipeline"])
+
+        search_run = self._dispatch("search_knowledge", {"query": "delta-echo"})
+        read_run = self._dispatch(
+            "read_document",
+            {"document_id": pipeline_document.pk},
+        )
+
+        self.assertEqual(search_run.output_payload["matched_documents"], 1)
+        self.assertEqual(
+            search_run.output_payload["knowledge_context"][0]["title"],
+            pipeline_document.title,
+        )
+        self.assertIn("delta-echo", read_run.output_payload["content"])
+
     def test_idempotency_key_unique_db_constraint(self):
         import hashlib, json
         payload = {"session_id": self.session.pk, "step_run_id": None, "action_id": self.finish_def.pk, "input": {}}
@@ -5336,6 +5990,42 @@ class GamePauseApprovalResumeTests(TestCase):
         cont_req = GameContinuationRequest.objects.get(session=self.session)
         self.assertEqual(cont_req.status, GameContinuationRequest.Status.PENDING)
 
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_approved_unified_tool_executes_with_approved_audit_state(self):
+        tool = ToolDefinition.objects.create(
+            name="approved_unified_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config={"template": "approved result"},
+            requires_approval=True,
+        )
+        self.agent.tools.add(tool)
+        GameActionDefinition.objects.create(
+            name="approved_unified_action",
+            label="Approved unified action",
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            requires_approval=False,
+        )
+        action_run = execute_game_action(
+            session=self.session,
+            action_name="approved_unified_action",
+            action_input={},
+        )
+
+        self.assertEqual(action_run.status, GameActionRun.Status.WAITING_APPROVAL)
+        self.assertEqual(ToolExecutionRun.objects.count(), 0)
+
+        approved_run = approve_action_run(
+            action_run_id=action_run.pk,
+            reviewed_by=self.approver,
+        )
+
+        tool_run = ToolExecutionRun.objects.get()
+        self.assertEqual(approved_run.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(tool_run.status, ToolExecutionRun.Status.SUCCESS)
+        self.assertEqual(tool_run.approval_state, ToolExecutionRun.ApprovalState.APPROVED)
+        self.assertEqual(tool_run.agent, self.agent)
+
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_resume_preserves_historical_step_runs(self, mocked_call):
         mocked_call.return_value = {
@@ -5565,6 +6255,30 @@ class GamePoliciesTests(TestCase):
         )
         session = self._make_session()
         with self.assertRaises(PolicyViolationError):
+            validate_goal_execution_policy(self.workspace, self.goal, session)
+
+    def test_workspace_policy_uses_pipeline_effective_agent(self):
+        pipeline_agent = AgentProfile.objects.create(
+            name="policy-pipeline-agent",
+            role="Pipeline policy agent",
+            model_config=self.model_cfg,
+        )
+        pipeline = PipelineDefinition.objects.create(name="Policy GAME pipeline")
+        PipelineStep.objects.create(pipeline=pipeline, agent=pipeline_agent, order=1)
+        GameWorkspaceAgent.objects.create(
+            workspace=self.workspace,
+            agent=self.agent,
+            is_enabled=True,
+        )
+        session = self._make_session()
+        session.entry_agent = None
+        session.pipeline = pipeline
+        session.save(update_fields=["entry_agent", "pipeline"])
+
+        with self.assertRaisesMessage(
+            PolicyViolationError,
+            pipeline_agent.name,
+        ):
             validate_goal_execution_policy(self.workspace, self.goal, session)
 
     def test_low_risk_action_runs_without_approval_when_allowed(self):
@@ -6979,6 +7693,27 @@ class GamePostPhase12StabilizationTests(TestCase):
                 task="Do not recurse into yourself.",
             )
 
+    def test_pipeline_effective_agent_cannot_self_delegate_by_default(self):
+        pipeline = PipelineDefinition.objects.create(name="Post-12 parent pipeline")
+        PipelineStep.objects.create(
+            pipeline=pipeline,
+            agent=self.parent_agent,
+            order=1,
+        )
+        self.parent_session.entry_agent = None
+        self.parent_session.pipeline = pipeline
+        self.parent_session.save(update_fields=["entry_agent", "pipeline"])
+
+        with self.assertRaisesMessage(ValidationError, "Self-delegation"):
+            run_delegated_agent(
+                session=self.parent_session,
+                action_run=self.make_parent_action("pipeline-self"),
+                workspace=self.workspace,
+                goal=self.goal,
+                target_agent_name=self.parent_agent.name,
+                task="Do not recurse through the pipeline identity.",
+            )
+
     def test_self_delegation_requires_explicit_policy(self):
         self.workspace.default_policy = {"safety": {"allow_self_delegation": True}}
         self.workspace.full_clean()
@@ -7180,6 +7915,35 @@ class GamePostPhase12StabilizationTests(TestCase):
             {"step", "action", "continuation", "approval"},
         )
         self.assertIn(run.pk, [event["pk"] for event in events if event["kind"] == "action"])
+
+    def test_pipeline_effective_agent_is_used_in_game_audit_views(self):
+        from ai_hub.services.admin_control_center import build_game_graph_context
+        from ai_hub.services.game_operational_ux import build_session_timeline
+
+        pipeline = PipelineDefinition.objects.create(name="Post-12 audit pipeline")
+        PipelineStep.objects.create(
+            pipeline=pipeline,
+            agent=self.parent_agent,
+            order=1,
+        )
+        self.parent_session.entry_agent = None
+        self.parent_session.pipeline = pipeline
+        self.parent_session.save(update_fields=["entry_agent", "pipeline"])
+        run, _, _ = self._make_pending_approval()
+
+        timeline = build_session_timeline(self.parent_session)
+        action_event = next(
+            event for event in timeline
+            if event["kind"] == "action" and event["pk"] == run.pk
+        )
+        graph = build_game_graph_context()
+        agent_node = next(
+            node for node in graph["game_graph"]["graph"]["nodes"]
+            if node["id"] == f"agent:{self.parent_session.pk}"
+        )
+
+        self.assertEqual(action_event["agent"], self.parent_agent.name)
+        self.assertEqual(agent_node["label"], self.parent_agent.name)
 
     def test_goal_and_memory_flags_close_execution_and_read_boundaries(self):
         with override_settings(AI_HUB_GAME_GOALS_ENABLED=False):

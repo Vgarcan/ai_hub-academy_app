@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from ai_hub.models import ExecutionSession, GameActionDefinition, GameActionRun, ToolExecutionRun
 from ai_hub.services.contracts import validate_payload
+from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 from ai_hub.services.game_feature_flags import is_game_feature_enabled, require_game_feature
 from ai_hub.services.tool_resolution import resolve_agent_tools
 from ai_hub.services.tools_runtime import bind_tool_runtime_context, execute_tool
@@ -162,14 +163,9 @@ def _handle_search_knowledge(action_run: GameActionRun, workspace, goal, payload
     if not query:
         raise ValidationError("search_knowledge requires a non-empty 'query'.")
 
-    entry_agent = action_run.session.entry_agent
-    if not entry_agent:
-        return {
-            "action_name": "search_knowledge",
-            "query": query,
-            "knowledge_context": [],
-            "matched_documents": 0,
-        }
+    entry_agent = resolve_game_entry_agent(action_run.session)
+    if entry_agent is None:
+        raise ValidationError("search_knowledge requires an effective GAME agent.")
 
     query_lower = query.lower()
     results = []
@@ -217,12 +213,12 @@ def _handle_read_document(action_run: GameActionRun, workspace, goal, payload: d
 
     from ai_hub.models import KnowledgeDocument
 
-    entry_agent = action_run.session.entry_agent
-    allowed_collection_ids: set = set()
-    if entry_agent:
-        allowed_collection_ids = set(
-            entry_agent.knowledge_collections.filter(is_active=True).values_list("id", flat=True)
-        )
+    entry_agent = resolve_game_entry_agent(action_run.session)
+    if entry_agent is None:
+        raise ValidationError("read_document requires an effective GAME agent.")
+    allowed_collection_ids = set(
+        entry_agent.knowledge_collections.filter(is_active=True).values_list("id", flat=True)
+    )
 
     try:
         doc = KnowledgeDocument.objects.get(
@@ -294,13 +290,7 @@ _HANDLER_REGISTRY = {
 }
 
 
-def _dispatch_unified_tool_action(
-    *,
-    action_run: GameActionRun,
-    workspace,
-    payload: dict,
-) -> dict:
-    action_definition = action_run.action
+def _resolve_unified_tool_authorization(*, session, workspace, action_definition):
     tool = action_definition.tool
     if tool is None:
         raise ValidationError(f"Action '{action_definition.name}' is not linked to a reusable tool.")
@@ -310,14 +300,47 @@ def _dispatch_unified_tool_action(
             "to execute GAME actions linked to reusable tools."
         )
 
-    agent = action_run.session.entry_agent
-    if agent is not None:
-        resolution = resolve_agent_tools(agent, workspace=workspace, execution_context={"session": action_run.session})
-        allowed_tools = {resolved.tool.pk: resolved for resolved in resolution.tools}
-        if tool.pk not in allowed_tools:
-            raise ValidationError(
-                f"Tool '{tool.name}' is not available to agent '{agent.name}' in this GAME session."
-            )
+    agent = resolve_game_entry_agent(session)
+    if agent is None:
+        raise ValidationError(
+            f"Action '{action_definition.name}' cannot resolve an effective GAME agent."
+        )
+    if not agent.is_active:
+        raise ValidationError(
+            f"Effective GAME agent '{agent.name}' must be active before executing tools."
+        )
+    resolution = resolve_agent_tools(
+        agent,
+        workspace=workspace,
+        execution_context={"session": session},
+    )
+    allowed_tools = {resolved.tool.pk: resolved for resolved in resolution.tools}
+    resolved_tool = allowed_tools.get(tool.pk)
+    if resolved_tool is None:
+        raise ValidationError(
+            f"Tool '{tool.name}' is not available to agent '{agent.name}' in this GAME session."
+        )
+    return agent, resolved_tool
+
+
+def _dispatch_unified_tool_action(
+    *,
+    action_run: GameActionRun,
+    workspace,
+    payload: dict,
+    approval_granted: bool,
+) -> dict:
+    action_definition = action_run.action
+    agent, resolved_tool = _resolve_unified_tool_authorization(
+        session=action_run.session,
+        workspace=workspace,
+        action_definition=action_definition,
+    )
+    tool = resolved_tool.tool
+    if resolved_tool.requires_approval and not approval_granted:
+        raise ValidationError(
+            f"Tool '{tool.name}' requires approval before execution."
+        )
 
     effective_payload = bind_tool_runtime_context(tool, payload, agent=agent)
     tool_run = ToolExecutionRun.objects.create(
@@ -328,7 +351,11 @@ def _dispatch_unified_tool_action(
         status=ToolExecutionRun.Status.RUNNING,
         input_payload=effective_payload,
         risk_level=tool.risk_level,
-        approval_state=ToolExecutionRun.ApprovalState.NOT_REQUIRED,
+        approval_state=(
+            ToolExecutionRun.ApprovalState.APPROVED
+            if approval_granted
+            else ToolExecutionRun.ApprovalState.NOT_REQUIRED
+        ),
         started_at=timezone.now(),
     )
     start = time.perf_counter()
@@ -355,6 +382,15 @@ def _dispatch_unified_tool_action(
     }
 
 
+def _has_durable_action_approval(action_run: GameActionRun) -> bool:
+    from ai_hub.models import GameActionApprovalRequest
+
+    return GameActionApprovalRequest.objects.filter(
+        action_run=action_run,
+        status=GameActionApprovalRequest.Status.APPROVED,
+    ).exists()
+
+
 def dispatch_game_action(
     *,
     action_run: GameActionRun,
@@ -364,12 +400,19 @@ def dispatch_game_action(
 ) -> dict:
     """Execute one action and return the output dict. Caller manages audit record lifecycle."""
     action_definition = action_run.action
+    approval_granted = _has_durable_action_approval(action_run)
+
+    if action_definition.requires_approval and not approval_granted:
+        raise ValidationError(
+            f"Action '{action_definition.name}' requires approval before execution."
+        )
 
     if action_definition.tool_id:
         output = _dispatch_unified_tool_action(
             action_run=action_run,
             workspace=workspace,
             payload=payload,
+            approval_granted=approval_granted,
         )
         _validate_action_output(action_definition, output)
         return output
@@ -471,10 +514,28 @@ def execute_game_action(
         ) from exc
 
     policy_requires_approval = False
+    tool_requires_approval = False
     try:
         validated_input = _validate_action_input(action_definition, action_input)
         action_run.input_payload = validated_input
         action_run.save(update_fields=["input_payload"])
+        effective_agent = resolve_game_entry_agent(session)
+        if effective_agent is None:
+            raise ValidationError(
+                f"Action '{safe_name}' cannot resolve an effective GAME agent."
+            )
+        if not effective_agent.is_active:
+            raise ValidationError(
+                f"Effective GAME agent '{effective_agent.name}' must be active "
+                "before executing actions."
+            )
+        if action_definition.tool_id:
+            _, resolved_tool = _resolve_unified_tool_authorization(
+                session=session,
+                workspace=workspace,
+                action_definition=action_definition,
+            )
+            tool_requires_approval = resolved_tool.requires_approval
         if workspace is not None:
             from ai_hub.services.game_policy import (
                 ApprovalRequiredByPolicyError,
@@ -493,7 +554,9 @@ def execute_game_action(
                 action_run=action_run,
             )
             if delegation_context is not None and (
-                action_definition.requires_approval or policy_requires_approval
+                action_definition.requires_approval
+                or policy_requires_approval
+                or tool_requires_approval
             ):
                 raise PolicyViolationError(
                     "Delegated sessions cannot execute approval-gated actions. "
@@ -510,7 +573,11 @@ def execute_game_action(
 
     # Actions that require human approval (by definition or by workspace policy) create an
     # approval request and pause the session.
-    if action_definition.requires_approval or policy_requires_approval:
+    if (
+        action_definition.requires_approval
+        or policy_requires_approval
+        or tool_requires_approval
+    ):
         from ai_hub.models import GameActionApprovalRequest
         from ai_hub.services.game_resume import pause_session
 

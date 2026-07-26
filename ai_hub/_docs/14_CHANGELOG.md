@@ -9,6 +9,24 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Foundation invariant hardening
+
+- Unified GAME wrappers now pause when either the action policy or the Tool's
+  effective resolved policy requires approval. The low-level dispatcher
+  rechecks this boundary, and approved reusable executions record
+  `approval_state=approved`.
+- The `legacy_preexecute` compatibility shim remains direct-tools-only but now
+  applies effective grant/workspace resolution and excludes approval-requiring
+  Tools instead of preexecuting them.
+- Direct and pipeline-backed GAME sessions share one effective-agent resolver
+  for runner execution, Tool authorization, Knowledge access, workspace agent
+  policy, self-delegation protection and audit displays. Model/action input
+  cannot replace the bound agent identity.
+- HTTP Tool validation rejects `operation_mode=read` with POST, PUT, PATCH or
+  DELETE both before resolution and at execution.
+- HTTP redirects are handled explicitly with per-hop scheme/hostname checks,
+  a bounded redirect count and cross-origin credential-header removal.
+
 #### Safe Admin JSON editing
 
 - Added a dependency-free, progressively enhanced JSON editor to every editable

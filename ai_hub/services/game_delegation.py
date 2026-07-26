@@ -12,6 +12,7 @@ from ai_hub.models import (
     GameWorkspaceAction,
 )
 from ai_hub.services.game_feature_flags import require_game_feature
+from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 
 
 _DELEGATED_READ_ACTIONS = frozenset({"search_knowledge", "read_document"})
@@ -72,7 +73,8 @@ def run_delegated_agent(
     allow_self = (workspace.default_policy or {}).get("safety", {}).get(
         "allow_self_delegation", False
     )
-    if target_agent.pk == session.entry_agent_id and not allow_self:
+    effective_agent = resolve_game_entry_agent(session)
+    if effective_agent is not None and target_agent.pk == effective_agent.pk and not allow_self:
         raise ValidationError("Self-delegation is disabled by workspace policy.")
 
     # Reserve the delegation budget under the goal lock, but never hold the lock

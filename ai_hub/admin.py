@@ -2344,6 +2344,7 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
         return custom_urls + urls
 
     def change_view(self, request, object_id, form_url="", extra_context=None):
+        from .services.game_agent_resolution import resolve_game_entry_agent
         from .services.game_operational_ux import build_session_timeline
 
         extra_context = extra_context or {}
@@ -2377,7 +2378,7 @@ class ExecutionSessionAdmin(AIHubFormHelpMixin, admin.ModelAdmin):
                 "runtime_kind": session.runtime_kind,
                 "runtime_mode": session.runtime_mode,
                 "status": session.status,
-                "entry_agent": session.entry_agent,
+                "entry_agent": resolve_game_entry_agent(session),
                 "pipeline": session.pipeline,
                 "goal": session.goal,
                 "source_label": session.source_label,

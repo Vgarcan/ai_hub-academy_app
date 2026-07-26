@@ -24,6 +24,7 @@ from ai_hub.models import (
     ProviderConfig,
     ToolDefinition,
 )
+from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 from ai_hub.services.tool_resolution import resolve_agent_tools
 
 PROVIDER_HEALTH_CACHE_SECONDS = 45
@@ -671,15 +672,15 @@ def build_game_graph_context() -> dict:
                 _admin_url("executionsession", session.id),
             )
         )
-        agent = session.entry_agent
-        agent_label = agent.name if agent else "Entry agent missing"
+        agent = resolve_game_entry_agent(session)
+        agent_label = agent.name if agent else "Effective agent missing"
         nodes.append(
             _node(
                 f"agent:{session.id}",
                 agent_label,
                 "agent",
                 "ok" if agent and agent.is_active else "warning",
-                agent.role if agent else "No entry agent",
+                agent.role if agent else "No effective agent",
                 _admin_url("agentprofile", agent.id) if agent else "",
             )
         )

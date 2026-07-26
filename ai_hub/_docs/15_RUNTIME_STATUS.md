@@ -42,15 +42,25 @@ path changes.
 - A selected GAME `GameActionDefinition` can wrap a reusable `ToolDefinition`.
   With `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True`, that action passes through
   resolved permissions and the generic executor while retaining `GameActionRun`
-  policy, approval and audit.
+  policy, approval and audit. Session entry-agent and pipeline-backed GAME paths
+  share one effective-agent resolver for capabilities, Knowledge, workspace
+  policy and audit identity.
+- Unified GAME approval is restrictive across action policy and the effective
+  resolved Tool policy. Once either requires approval, a wrapper whose local
+  `requires_approval` is false cannot bypass it; execution resumes only through
+  the durable GAME approval path.
+- HTTP Tools reject `operation_mode=read` with write-capable methods. Their
+  `http`/`https` scheme and hostname allow-list are checked before the initial
+  request and before every bounded redirect; automatic redirects are disabled.
 
 ### LEGACY
 
 - Direct `AgentProfile.tools` attachments remain a compatibility input to the
   resolver.
 - `agent_tool_runtime="legacy_preexecute"` (or the matching host default)
-  selects `execute_agent()`, which pre-executes allowed direct tools before the
-  model decides what it needs.
+  selects `execute_agent()`, which pre-executes only direct tools still allowed
+  by effective grant/workspace resolution and excludes approval-requiring
+  capabilities before the model call.
 - `allow_legacy_game_action_tools=True` has an effect only in that legacy mode
   and remains restricted to trusted host integrations.
 

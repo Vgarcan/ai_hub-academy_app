@@ -1,18 +1,63 @@
 import hashlib
 import json
 import time
+from copy import deepcopy
+from dataclasses import dataclass
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from ai_hub.models import ExecutionSession, GameActionDefinition, GameActionRun, ToolExecutionRun
+from ai_hub.models import (
+    ExecutionSession,
+    GameActionDefinition,
+    GameActionRun,
+    GameGoal,
+    GameWorkspace,
+    ToolExecutionRun,
+)
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 from ai_hub.services.game_feature_flags import is_game_feature_enabled, require_game_feature
-from ai_hub.services.tool_resolution import resolve_agent_tools
+from ai_hub.services.game_operational_ux import redact_payload
+from ai_hub.services.tool_resolution import ResolvedTool, resolve_agent_tools
 from ai_hub.services.tools_runtime import bind_tool_runtime_context, execute_tool
+
+
+REAPPROVAL_REQUIRED_CODE = "APPROVAL_REAPPROVAL_REQUIRED"
+
+
+@dataclass(frozen=True)
+class ResolvedGameActionAuthorization:
+    """One current authorization result reused by intent hashing and execution."""
+
+    agent: object
+    resolved_tool: ResolvedTool | None
+    policy_requires_approval: bool
+    workspace_policy_intent: dict | None
+
+
+@dataclass(frozen=True)
+class ResolvedGameActionDispatch:
+    """Fresh database-backed dispatch snapshot at the execution linearization point."""
+
+    action_run: GameActionRun
+    session: ExecutionSession
+    action_definition: GameActionDefinition
+    workspace: GameWorkspace | None
+    goal: GameGoal | None
+    payload: dict
+    approval: object | None
+    authorization: ResolvedGameActionAuthorization
+
+    @property
+    def approval_granted(self) -> bool:
+        if self.approval is None:
+            return False
+        from ai_hub.models import GameActionApprovalRequest
+
+        return self.approval.status == GameActionApprovalRequest.Status.APPROVED
 
 
 def _resolve_action_definition(action_name: str) -> GameActionDefinition:
@@ -163,7 +208,9 @@ def _handle_search_knowledge(action_run: GameActionRun, workspace, goal, payload
     if not query:
         raise ValidationError("search_knowledge requires a non-empty 'query'.")
 
-    entry_agent = resolve_game_entry_agent(action_run.session)
+    entry_agent = getattr(action_run, "_resolved_effective_agent", None)
+    if entry_agent is None:
+        entry_agent = resolve_game_entry_agent(action_run.session)
     if entry_agent is None:
         raise ValidationError("search_knowledge requires an effective GAME agent.")
 
@@ -213,7 +260,9 @@ def _handle_read_document(action_run: GameActionRun, workspace, goal, payload: d
 
     from ai_hub.models import KnowledgeDocument
 
-    entry_agent = resolve_game_entry_agent(action_run.session)
+    entry_agent = getattr(action_run, "_resolved_effective_agent", None)
+    if entry_agent is None:
+        entry_agent = resolve_game_entry_agent(action_run.session)
     if entry_agent is None:
         raise ValidationError("read_document requires an effective GAME agent.")
     allowed_collection_ids = set(
@@ -323,28 +372,379 @@ def _resolve_unified_tool_authorization(*, session, workspace, action_definition
     return agent, resolved_tool
 
 
+def _relevant_workspace_policy_intent(
+    *,
+    workspace,
+    action_definition,
+    policy_requires_approval: bool,
+) -> dict | None:
+    if workspace is None:
+        return None
+
+    from ai_hub.models import GameWorkspaceAction
+
+    policy = workspace.default_policy or {}
+    safety = policy.get("safety", {}) if isinstance(policy, dict) else {}
+    allowed_actions = policy.get("allowed_actions") if isinstance(policy, dict) else None
+    workspace_actions = GameWorkspaceAction.objects.filter(workspace=workspace)
+    action_entry = workspace_actions.filter(action=action_definition).first()
+
+    risk_approval_key = (
+        "require_approval_for_high_risk"
+        if action_definition.risk_level == "high"
+        else "require_approval_for_medium_risk"
+        if action_definition.risk_level == "medium"
+        else None
+    )
+    return {
+        "workspace_id": workspace.pk,
+        "workspace_is_active": bool(workspace.is_active),
+        "workspace_action_allowlist_enabled": workspace_actions.exists(),
+        "workspace_action_entry": (
+            {
+                "is_enabled": bool(action_entry.is_enabled),
+                "requires_approval_override": action_entry.requires_approval_override,
+            }
+            if action_entry is not None
+            else None
+        ),
+        "named_action_allowlist_enabled": allowed_actions is not None,
+        "action_is_named_in_allowlist": (
+            action_definition.name in allowed_actions
+            if isinstance(allowed_actions, list)
+            else None
+        ),
+        "allows_external_writes": (
+            bool(safety.get("allow_external_writes", False))
+            if action_definition.risk_level == "high"
+            else None
+        ),
+        "risk_approval_setting": (
+            bool(safety.get(risk_approval_key, False))
+            if risk_approval_key is not None
+            else None
+        ),
+        "approval_required_by_policy": bool(policy_requires_approval),
+    }
+
+
+def _resolve_game_action_authorization(
+    *,
+    session,
+    workspace,
+    goal,
+    action_definition,
+    payload: dict,
+) -> ResolvedGameActionAuthorization:
+    """Resolve the current Agent, policy, and Tool capability exactly once."""
+    if not action_definition.is_active:
+        raise ValidationError(
+            f"Action '{action_definition.name}' is inactive and cannot be executed."
+        )
+
+    agent = resolve_game_entry_agent(session)
+    if agent is None:
+        raise ValidationError(
+            f"Action '{action_definition.name}' cannot resolve an effective GAME agent."
+        )
+    if not agent.is_active:
+        raise ValidationError(
+            f"Effective GAME agent '{agent.name}' must be active before execution."
+        )
+    if workspace is not None and not workspace.is_active:
+        raise ValidationError(
+            f"Workspace '{workspace.name}' is inactive and cannot execute actions."
+        )
+    if workspace is not None:
+        from ai_hub.services.game_policy import validate_agent_for_workspace
+
+        validate_agent_for_workspace(workspace, agent)
+
+    policy_requires_approval = False
+    if workspace is not None:
+        from ai_hub.services.game_policy import (
+            ApprovalRequiredByPolicyError,
+            validate_action_policy,
+        )
+
+        try:
+            validate_action_policy(
+                workspace,
+                goal,
+                action_definition,
+                payload,
+            )
+        except ApprovalRequiredByPolicyError:
+            policy_requires_approval = True
+
+    resolved_tool = None
+    if action_definition.tool_id:
+        _, resolved_tool = _resolve_unified_tool_authorization(
+            session=session,
+            workspace=workspace,
+            action_definition=action_definition,
+        )
+
+    return ResolvedGameActionAuthorization(
+        agent=agent,
+        resolved_tool=resolved_tool,
+        policy_requires_approval=policy_requires_approval,
+        workspace_policy_intent=_relevant_workspace_policy_intent(
+            workspace=workspace,
+            action_definition=action_definition,
+            policy_requires_approval=policy_requires_approval,
+        ),
+    )
+
+
+def _build_game_action_approval_intent_from_authorization(
+    *,
+    session,
+    goal,
+    action_definition,
+    payload: dict,
+    authorization: ResolvedGameActionAuthorization,
+) -> tuple[dict, str]:
+    """Hash one already-resolved authorization without querying it a second time."""
+    agent = authorization.agent
+    resolved_tool = authorization.resolved_tool
+    raw_intent = {
+        "version": 1,
+        "session_id": session.pk,
+        "goal_id": goal.pk if goal is not None else None,
+        "payload": payload,
+        "action": {
+            "id": action_definition.pk,
+            "name": action_definition.name,
+            "action_type": action_definition.action_type,
+            "tool_id": action_definition.tool_id,
+            "input_contract": action_definition.input_contract or {},
+            "output_contract": action_definition.output_contract or {},
+            "config": action_definition.config or {},
+            "risk_level": action_definition.risk_level,
+            "requires_approval": bool(action_definition.requires_approval),
+            "is_active": bool(action_definition.is_active),
+        },
+        "effective_agent": {
+            "id": agent.pk,
+            "is_active": bool(agent.is_active),
+        },
+        "tool": (
+            {
+                "id": resolved_tool.tool.pk,
+                "name": resolved_tool.tool.name,
+                "tool_kind": resolved_tool.tool.tool_kind,
+                "input_schema": resolved_tool.tool.input_schema or {},
+                "output_schema": resolved_tool.tool.output_schema or {},
+                "config": resolved_tool.tool.config or {},
+                "risk_level": resolved_tool.tool.risk_level,
+                "operation_mode": resolved_tool.tool.operation_mode,
+                "requires_approval": bool(resolved_tool.tool.requires_approval),
+                "is_active": bool(resolved_tool.tool.is_active),
+                "permission_source": resolved_tool.source,
+                "permission_level": resolved_tool.permission_level,
+                "effective_requires_approval": bool(resolved_tool.requires_approval),
+            }
+            if resolved_tool is not None
+            else None
+        ),
+        "workspace_policy": authorization.workspace_policy_intent,
+    }
+    canonical = json.dumps(
+        raw_intent,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return (
+        redact_payload(raw_intent),
+        hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    )
+
+
+def build_game_action_approval_intent(
+    *,
+    session,
+    workspace,
+    goal,
+    action_definition,
+    payload: dict,
+) -> tuple[dict, str]:
+    """Build the exact, redacted execution intent presented for approval."""
+    authorization = _resolve_game_action_authorization(
+        session=session,
+        workspace=workspace,
+        goal=goal,
+        action_definition=action_definition,
+        payload=payload,
+    )
+    return _build_game_action_approval_intent_from_authorization(
+        session=session,
+        goal=goal,
+        action_definition=action_definition,
+        payload=payload,
+        authorization=authorization,
+    )
+
+
+def require_current_approved_intent(
+    *,
+    dispatch: ResolvedGameActionDispatch,
+    current_fingerprint: str,
+) -> None:
+    """Compare one fresh dispatch snapshot with its durable approval."""
+    from ai_hub.models import GameActionApprovalRequest
+
+    approval = dispatch.approval
+    if approval is None:
+        raise ValidationError(
+            f"Action '{dispatch.action_run.action_name}' has no durable approval request."
+        )
+
+    if approval.status != GameActionApprovalRequest.Status.APPROVED:
+        raise ValidationError(
+            f"Action '{dispatch.action_run.action_name}' does not have an approved request."
+        )
+    if not approval.execution_intent_fingerprint:
+        raise ValidationError(
+            f"{REAPPROVAL_REQUIRED_CODE}: this approval predates immutable intent "
+            "verification."
+        )
+    if current_fingerprint != approval.execution_intent_fingerprint:
+        raise ValidationError(
+            f"{REAPPROVAL_REQUIRED_CODE}: the reviewed execution intent changed."
+        )
+
+
+def _resolve_game_action_dispatch(
+    *,
+    action_run_id: int,
+    fallback_workspace_id: int | None,
+    fallback_goal_id: int | None,
+) -> ResolvedGameActionDispatch:
+    """Re-read and freeze the authoritative state used by one dispatch."""
+    from ai_hub.models import GameActionApprovalRequest
+    from ai_hub.services.game_policy import check_budget_before_action
+
+    action_run = GameActionRun.objects.get(pk=action_run_id)
+    session = ExecutionSession.objects.get(pk=action_run.session_id)
+    action_definition = GameActionDefinition.objects.get(pk=action_run.action_id)
+
+    goal_id = session.goal_id or fallback_goal_id
+    goal = GameGoal.objects.get(pk=goal_id) if goal_id is not None else None
+    workspace_id = (
+        goal.workspace_id
+        if goal is not None
+        else fallback_workspace_id
+    )
+    workspace = (
+        GameWorkspace.objects.get(pk=workspace_id)
+        if workspace_id is not None
+        else None
+    )
+
+    # Populate only with freshly loaded instances. Handlers and Tool audit creation
+    # must not fall back to objects retained by the approval-review transaction.
+    action_run.session = session
+    action_run.action = action_definition
+    if goal is not None and workspace is not None:
+        goal.workspace = workspace
+    if session.goal_id and goal is not None:
+        session.goal = goal
+
+    approval = GameActionApprovalRequest.objects.filter(
+        action_run_id=action_run.pk
+    ).first()
+    approval_granted = (
+        approval is not None
+        and approval.status == GameActionApprovalRequest.Status.APPROVED
+    )
+    payload = deepcopy(action_run.input_payload or {})
+
+    try:
+        authorization = _resolve_game_action_authorization(
+            session=session,
+            workspace=workspace,
+            goal=goal,
+            action_definition=action_definition,
+            payload=payload,
+        )
+        check_budget_before_action(
+            session,
+            action_definition,
+            action_run=action_run,
+        )
+        _, current_fingerprint = _build_game_action_approval_intent_from_authorization(
+            session=session,
+            goal=goal,
+            action_definition=action_definition,
+            payload=payload,
+            authorization=authorization,
+        )
+    except ValidationError as exc:
+        if approval_granted:
+            raise ValidationError(
+                f"{REAPPROVAL_REQUIRED_CODE}: current execution authorization changed."
+            ) from exc
+        raise
+
+    dispatch = ResolvedGameActionDispatch(
+        action_run=action_run,
+        session=session,
+        action_definition=action_definition,
+        workspace=workspace,
+        goal=goal,
+        payload=payload,
+        approval=approval,
+        authorization=authorization,
+    )
+    if approval_granted:
+        require_current_approved_intent(
+            dispatch=dispatch,
+            current_fingerprint=current_fingerprint,
+        )
+
+    requires_approval = (
+        action_definition.requires_approval
+        or authorization.policy_requires_approval
+        or (
+            authorization.resolved_tool is not None
+            and authorization.resolved_tool.requires_approval
+        )
+    )
+    if requires_approval and not approval_granted:
+        raise ValidationError(
+            f"Action '{action_definition.name}' requires approval before execution."
+        )
+    return dispatch
+
+
 def _dispatch_unified_tool_action(
     *,
-    action_run: GameActionRun,
-    workspace,
-    payload: dict,
-    approval_granted: bool,
+    dispatch: ResolvedGameActionDispatch,
 ) -> dict:
-    action_definition = action_run.action
-    agent, resolved_tool = _resolve_unified_tool_authorization(
-        session=action_run.session,
-        workspace=workspace,
-        action_definition=action_definition,
-    )
+    action_run = dispatch.action_run
+    action_definition = dispatch.action_definition
+    agent = dispatch.authorization.agent
+    resolved_tool = dispatch.authorization.resolved_tool
+    if resolved_tool is None:
+        raise ValidationError(
+            f"Action '{action_definition.name}' has no resolved Tool capability."
+        )
     tool = resolved_tool.tool
-    if resolved_tool.requires_approval and not approval_granted:
+    if resolved_tool.requires_approval and not dispatch.approval_granted:
         raise ValidationError(
             f"Tool '{tool.name}' requires approval before execution."
         )
 
-    effective_payload = bind_tool_runtime_context(tool, payload, agent=agent)
+    effective_payload = bind_tool_runtime_context(
+        tool,
+        deepcopy(dispatch.payload),
+        agent=agent,
+    )
     tool_run = ToolExecutionRun.objects.create(
-        session=action_run.session,
+        session=dispatch.session,
         step_run=action_run.step_run,
         agent=agent,
         tool=tool,
@@ -353,7 +753,7 @@ def _dispatch_unified_tool_action(
         risk_level=tool.risk_level,
         approval_state=(
             ToolExecutionRun.ApprovalState.APPROVED
-            if approval_granted
+            if dispatch.approval_granted
             else ToolExecutionRun.ApprovalState.NOT_REQUIRED
         ),
         started_at=timezone.now(),
@@ -382,15 +782,6 @@ def _dispatch_unified_tool_action(
     }
 
 
-def _has_durable_action_approval(action_run: GameActionRun) -> bool:
-    from ai_hub.models import GameActionApprovalRequest
-
-    return GameActionApprovalRequest.objects.filter(
-        action_run=action_run,
-        status=GameActionApprovalRequest.Status.APPROVED,
-    ).exists()
-
-
 def dispatch_game_action(
     *,
     action_run: GameActionRun,
@@ -399,22 +790,18 @@ def dispatch_game_action(
     payload: dict,
 ) -> dict:
     """Execute one action and return the output dict. Caller manages audit record lifecycle."""
-    action_definition = action_run.action
-    approval_granted = _has_durable_action_approval(action_run)
+    dispatch = _resolve_game_action_dispatch(
+        action_run_id=action_run.pk,
+        fallback_workspace_id=workspace.pk if workspace is not None else None,
+        fallback_goal_id=goal.pk if goal is not None else None,
+    )
+    action_run = dispatch.action_run
+    action_definition = dispatch.action_definition
+    action_run._resolved_effective_agent = dispatch.authorization.agent
 
-    if action_definition.requires_approval and not approval_granted:
-        raise ValidationError(
-            f"Action '{action_definition.name}' requires approval before execution."
-        )
-
-    if action_definition.tool_id:
-        output = _dispatch_unified_tool_action(
-            action_run=action_run,
-            workspace=workspace,
-            payload=payload,
-            approval_granted=approval_granted,
-        )
-        _validate_action_output(action_definition, output)
+    if dispatch.authorization.resolved_tool is not None:
+        output = _dispatch_unified_tool_action(dispatch=dispatch)
+        _validate_action_output(dispatch.action_definition, output)
         return output
 
     type_handlers = _HANDLER_REGISTRY.get(action_definition.action_type)
@@ -430,7 +817,12 @@ def dispatch_game_action(
             f"(type: {action_definition.action_type})."
         )
 
-    output = handler_fn(action_run, workspace, goal, payload)
+    output = handler_fn(
+        action_run,
+        dispatch.workspace,
+        dispatch.goal,
+        deepcopy(dispatch.payload),
+    )
     _validate_action_output(action_definition, output)
     return output
 
@@ -593,13 +985,22 @@ def execute_game_action(
             raise exc
 
         try:
+            intent_snapshot, intent_fingerprint = build_game_action_approval_intent(
+                session=session,
+                workspace=workspace,
+                goal=goal,
+                action_definition=action_definition,
+                payload=dict(validated_input),
+            )
             with transaction.atomic():
                 action_run.status = GameActionRun.Status.WAITING_APPROVAL
                 action_run.save(update_fields=["status"])
                 GameActionApprovalRequest.objects.create(
                     action_run=action_run,
                     goal=goal,
-                    requested_payload=dict(validated_input),
+                    requested_payload=redact_payload(dict(validated_input)),
+                    execution_intent_snapshot=intent_snapshot,
+                    execution_intent_fingerprint=intent_fingerprint,
                 )
                 pause_session(
                     session=session,
@@ -624,13 +1025,12 @@ def execute_game_action(
     action_run.save(update_fields=["status", "started_at"])
     start = time.perf_counter()
     try:
-        with transaction.atomic():
-            output = dispatch_game_action(
-                action_run=action_run,
-                workspace=workspace,
-                goal=goal,
-                payload=validated_input,
-            )
+        output = dispatch_game_action(
+            action_run=action_run,
+            workspace=workspace,
+            goal=goal,
+            payload=validated_input,
+        )
         action_run.status = GameActionRun.Status.SUCCESS
         action_run.output_payload = output
         action_run.observation_payload = {

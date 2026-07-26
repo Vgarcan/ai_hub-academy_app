@@ -270,8 +270,11 @@ class SafeAdminJSONIntegrationTests(TestCase):
                 "redacted": {"payload_redacted"},
             },
             GameActionApprovalRequest: {
-                "raw": {"requested_payload"},
-                "redacted": {"requested_payload_redacted"},
+                "raw": {"requested_payload", "execution_intent_snapshot"},
+                "redacted": {
+                    "requested_payload_redacted",
+                    "execution_intent_snapshot_redacted",
+                },
             },
             GameGoal: {
                 "raw": {"result", "transition_metadata"},

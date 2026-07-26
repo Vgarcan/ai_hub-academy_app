@@ -62,6 +62,8 @@ Test provider and model rules:
 Test agent rules:
 
 - Agent requires an active model for execution.
+- An inactive Agent is rejected by direct, Orchestrator, GAME and fallback
+  paths before Knowledge, Tool or Provider boundaries.
 - Agent contracts accept valid payloads.
 - Agent contracts reject missing required keys.
 - Agent list can identify pipeline usage and GAME usage.
@@ -94,18 +96,25 @@ Test:
 - Control Center tool edges derived from the same resolved manifest,
 - unified GAME tool adapter behavior with the kill-switch disabled and enabled,
 - restrictive unified approval across action, Tool/grant and workspace risk
-  policy, including approve/resume audit state,
+  policy, including immutable intent fingerprints, config/contract/payload
+  drift, revoked permissions, historical rows and approve/resume audit state;
+  deterministic post-review/pre-dispatch mutations prove authoritative state is
+  re-read, side effects are suppressed on drift, and the Tool capability used
+  for fingerprinting is the same in-memory capability passed to execution,
 - direct and pipeline-backed GAME effective-agent consistency across Tool
   resolution, Knowledge, workspace policy, delegation and audit views,
 - rejection of HTTP `read` Tools configured with write-capable methods,
 - per-hop HTTP redirect allow-list/scheme enforcement, bounded loops and
   cross-origin credential stripping without real network access,
+- streamed HTTP response-byte limits for success/error bodies, early
+  `Content-Length` rejection, exact/+1 boundaries and response closure,
 - default retrieval-only knowledge context with automatic
   browse/search/read/citation tools,
 - server-bound Knowledge identity, cross-agent isolation, deny grants and
   workspace policy,
 - bounded Knowledge prompt indexes, lexical candidates and
-  list/browse/search/read outputs,
+  list/browse/search/read outputs, including tag-only matches with the same
+  Agent/collection/active-state isolation,
 - initial chunk creation for curated Build Console documents,
 - starter toolbox and starter demo seeds, including idempotency,
 - explicit legacy Orchestrator/GAME pre-execution behavior,
@@ -121,6 +130,8 @@ Test:
 - closed configured action/agent allow-lists and safe external-write defaults,
 - scoped-memory workspace/goal/session isolation and runner injection,
 - PostgreSQL-only concurrent approval and scheduler claim serialization,
+- orphan cleanup revalidation on SQLite plus the PostgreSQL-only
+  session-creation/cleanup interleaving,
 - staff-only access to dashboards containing execution payloads,
 - Django 5.2 LTS and current-Django migration/system-check compatibility,
 
@@ -395,7 +406,9 @@ Admin mutation-bypass and payload-redaction regressions are green.
 - Use small prompts and small payloads.
 - Do not require real API keys for unit tests.
 - Do not depend on local Ollama models in CI.
-- Run the concurrent GAME claim test against PostgreSQL; SQLite intentionally skips it because it cannot prove row-lock semantics.
+- Run all GAME concurrency tests against PostgreSQL; SQLite intentionally skips
+  scheduler claim, approval review, delegation budget and orphan-cleanup races
+  because it cannot prove row-lock semantics.
 - Use factories or fixtures for provider/model/agent setup.
 - Keep host-specific fixtures outside AI Hub.
 
@@ -432,8 +445,9 @@ credentials.
 The bundled CI runs the full SQLite suite against both the minimum Django 5.2
 LTS line and the current supported Django line. A separate PostgreSQL 16 job
 runs the complete suite, including concurrent scheduler claim, approval review
-and delegation-budget reservation. Test totals are intentionally not frozen in
-this guide; use the summary printed by the current suite.
+delegation-budget reservation and orphan cleanup/session creation. Test totals
+are intentionally not frozen in this guide; use the summary printed by the
+current suite.
 
 ## Before Shipping
 

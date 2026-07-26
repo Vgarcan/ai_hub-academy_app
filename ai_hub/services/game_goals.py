@@ -4,8 +4,15 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from ai_hub.models import GameGoal, GameWorkspace
+from ai_hub.models import ExecutionSession, GameGoal, GameWorkspace
 from ai_hub.services.game_feature_flags import require_game_feature
+
+
+ACTIVE_GOAL_SESSION_STATUSES = (
+    ExecutionSession.Status.PENDING,
+    ExecutionSession.Status.RUNNING,
+    ExecutionSession.Status.WAITING_ASYNC,
+)
 
 
 ALLOWED_GOAL_TRANSITIONS = {
@@ -141,15 +148,9 @@ def find_orphaned_running_goals(*, workspace=None, older_than=None):
     Returns a list of candidate GameGoal instances (no mutation).
     """
     from django.db.models import Exists, OuterRef
-    from ai_hub.models import ExecutionSession
-
     active_session = ExecutionSession.objects.filter(
         goal_id=OuterRef("pk"),
-        status__in=(
-            ExecutionSession.Status.PENDING,
-            ExecutionSession.Status.RUNNING,
-            ExecutionSession.Status.WAITING_ASYNC,
-        ),
+        status__in=ACTIVE_GOAL_SESSION_STATUSES,
     )
     qs = (
         GameGoal.objects.filter(status=GameGoal.Status.RUNNING)
@@ -168,17 +169,40 @@ def cancel_orphaned_running_goals(*, workspace=None, older_than=None):
 
     See :func:`find_orphaned_running_goals` for the orphan definition. Each goal is
     transitioned RUNNING → CANCELLED through ``transition_goal_status`` so the
-    lifecycle lock and transition metadata stay consistent. Best-effort: a goal
-    that gained an active session between selection and transition is still
-    cancelled, which is acceptable for a maintenance sweep.
+    lifecycle lock and transition metadata stay consistent. Candidate discovery
+    is optimistic; mutation locks the authoritative Goal and re-reads active
+    sessions. Session creation takes the same Goal lock, so both paths serialize.
 
     Returns the list of goals that were cancelled.
     """
     cancelled = []
-    for goal in find_orphaned_running_goals(workspace=workspace, older_than=older_than):
-        cancelled.append(
-            transition_goal_status(
-                goal, GameGoal.Status.CANCELLED, reason="orphaned running goal cleanup"
+    candidates = find_orphaned_running_goals(
+        workspace=workspace,
+        older_than=older_than,
+    )
+    age_cutoff = timezone.now() - older_than if older_than is not None else None
+    for candidate in candidates:
+        with transaction.atomic():
+            try:
+                locked_goal = GameGoal.objects.select_for_update().get(pk=candidate.pk)
+            except GameGoal.DoesNotExist:
+                continue
+            if locked_goal.status != GameGoal.Status.RUNNING:
+                continue
+            if workspace is not None and locked_goal.workspace_id != workspace.pk:
+                continue
+            if age_cutoff is not None and locked_goal.updated_at >= age_cutoff:
+                continue
+            if ExecutionSession.objects.filter(
+                goal=locked_goal,
+                status__in=ACTIVE_GOAL_SESSION_STATUSES,
+            ).exists():
+                continue
+            cancelled.append(
+                transition_goal_status(
+                    locked_goal,
+                    GameGoal.Status.CANCELLED,
+                    reason="orphaned running goal cleanup",
+                )
             )
-        )
     return cancelled

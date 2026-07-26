@@ -4,15 +4,11 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from ai_hub.models import AgentProfile, ExecutionSession, GameGoal
-from ai_hub.services.game_goals import transition_goal_status
-from ai_hub.services.game_feature_flags import require_game_feature
-
-
-ACTIVE_SESSION_STATUSES = (
-    ExecutionSession.Status.PENDING,
-    ExecutionSession.Status.RUNNING,
-    ExecutionSession.Status.WAITING_ASYNC,
+from ai_hub.services.game_goals import (
+    ACTIVE_GOAL_SESSION_STATUSES,
+    transition_goal_status,
 )
+from ai_hub.services.game_feature_flags import require_game_feature
 
 
 def _build_goal_text(goal: GameGoal) -> str:
@@ -40,7 +36,10 @@ def create_goal_execution_session(
         raise ValidationError(f"Cannot start a session for a goal with status '{locked_goal.status}'.")
     if not entry_agent.is_active:
         raise ValidationError("GAME entry agent must be active before creating a goal session.")
-    if ExecutionSession.objects.filter(goal=locked_goal, status__in=ACTIVE_SESSION_STATUSES).exists():
+    if ExecutionSession.objects.filter(
+        goal=locked_goal,
+        status__in=ACTIVE_GOAL_SESSION_STATUSES,
+    ).exists():
         raise ValidationError("This GAME goal already has an active execution session.")
 
     call_config = runtime_config or {}

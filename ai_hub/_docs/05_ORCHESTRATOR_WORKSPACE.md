@@ -127,6 +127,10 @@ logical input, so the fallback resolves its own Knowledge, tools, model,
 provider, identity and contracts. The primary Agent's prepared payload is never
 used as the fallback source.
 
+Agent activity is rechecked at runtime, not only when the pipeline is saved.
+If a primary or fallback Agent is deactivated after activation, execution fails
+before Knowledge preparation, Tool execution or any Provider call.
+
 An active fallback configuration must define input and output contracts. When
 an explicit `input_mapping` makes an input mismatch statically obvious,
 activation rejects the pipeline. Runtime contract validation remains

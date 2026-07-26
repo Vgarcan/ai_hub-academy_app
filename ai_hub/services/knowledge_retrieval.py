@@ -239,6 +239,7 @@ def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, lim
             | Q(content__icontains=word)
             | Q(section_title__icontains=word)
             | Q(document__title__icontains=word)
+            | Q(document__tags__icontains=word)
         ),
         words,
         Q(),

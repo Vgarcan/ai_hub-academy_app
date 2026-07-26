@@ -222,6 +222,10 @@ Recommended `tags` shape:
 ["refunds", "policy", "support"]
 ```
 
+Lexical search can return a chunk when the query appears only in its parent
+document tags; candidate/result limits and Agent collection isolation still
+apply.
+
 ## Tool Configuration
 
 The preferred configuration groups tools into `Toolbox` records, assigns those
@@ -268,7 +272,8 @@ Example config:
   "method": "GET",
   "allowed_hosts": ["api.example.com"],
   "timeout": 10,
-  "max_redirects": 5
+  "max_redirects": 5,
+  "max_response_bytes": 1048576
 }
 ```
 
@@ -287,6 +292,11 @@ are accepted. `allowed_hosts` contains hostnames only—no scheme, path or
 port—and governs the initial request plus every redirect destination.
 `max_redirects` defaults to 5 and accepts 0 through 10. Invalid configurations
 are rejected by Admin/model validation and again before resolution/execution.
+`max_response_bytes` is the network response-body limit in bytes. It defaults
+to 1 MiB and is defensively clamped to 1 KiB..10 MiB; malformed values are
+rejected. HTTP bodies are streamed and stopped at this boundary. The separate
+4,000-character result preview remains a model-context limit, not a network
+resource limit.
 
 ## GAME Feature Flags
 

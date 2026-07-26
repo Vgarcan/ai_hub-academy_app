@@ -31,6 +31,12 @@ KNOWLEDGE_PROMPT_MAX_TAG_CHARS = 100
 DEFAULT_MAX_TOOL_OBSERVATION_CHARS = 12000
 
 
+def require_active_agent(agent: AgentProfile) -> None:
+    """Fail closed before an inactive Agent reaches Knowledge, Tools or a provider."""
+    if not agent.is_active:
+        raise ValidationError(f"Agent '{agent.name}' is inactive and cannot execute.")
+
+
 def get_mapped_value(source: dict, source_key: str):
     current = source
     for part in str(source_key).split("."):
@@ -176,6 +182,7 @@ def build_agent_knowledge_context(agent: AgentProfile, *, workspace=None) -> dic
 
 
 def prepare_agent_payload(agent: AgentProfile, context: dict, mapping: dict, *, workspace=None) -> dict:
+    require_active_agent(agent)
     payload = apply_mapping(context, mapping or {})
     payload["knowledge_context"] = build_agent_knowledge_context(agent, workspace=workspace)
     return payload
@@ -355,6 +362,7 @@ def execute_agent_deliberate(
     unwrap_final_answer: bool = False,
     allow_approval_requests: bool = True,
 ) -> dict:
+    require_active_agent(agent)
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
     model_cfg = resolve_model_config(agent.model_config)
     resolution = resolve_agent_tools(agent, workspace=workspace, execution_context=execution_context)
@@ -598,6 +606,7 @@ def execute_agent(
     tool_policy: str = TOOL_POLICY_ALL,
     workspace=None,
 ) -> dict:
+    require_active_agent(agent)
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
     direct_tool_ids = set(
         agent.tools.filter(is_active=True).values_list("pk", flat=True)

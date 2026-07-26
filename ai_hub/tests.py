@@ -1,11 +1,11 @@
 import json
 import importlib
+from io import BytesIO
 from unittest.mock import patch
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 from django.contrib import admin
 from django.contrib.auth import get_user_model
@@ -87,6 +87,33 @@ from ai_hub.services.tools_runtime import (
 )
 from _core.database_config import build_database_config
 # DreamPost was the original host-app model; replaced with User for portability
+
+
+class StreamingHttpResponse:
+    """Requests-like response double that fails if an unbounded text read occurs."""
+
+    class RawBody:
+        def __init__(self, body):
+            self.buffer = BytesIO(body)
+            self.read_sizes = []
+
+        def read(self, amount=-1, decode_content=False):
+            self.read_sizes.append(amount)
+            return self.buffer.read(amount)
+
+    def __init__(self, *, status_code=200, headers=None, body=b"", encoding="utf-8"):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.raw = self.RawBody(body)
+        self.encoding = encoding
+        self.closed = False
+
+    @property
+    def text(self):
+        raise AssertionError("HTTP Tool runtime must not materialize response.text")
+
+    def close(self):
+        self.closed = True
 
 
 class DatabaseConfigurationTests(TestCase):
@@ -1053,6 +1080,54 @@ class KnowledgeRetrievalTests(TestCase):
         self.assertIn("30 days", result["results"][0]["snippet"])
         self.assertEqual(result["results"][0]["citation"]["document_title"], "Refund policy")
 
+    def test_search_returns_chunk_when_query_exists_only_in_document_tags(self):
+        self.document.title = "Operations Manual"
+        self.document.tags = ["invoice", "finance", "approval"]
+        self.document.save(update_fields=["title", "tags"])
+
+        result = search_knowledge(self.agent, query="finance", limit=5)
+
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["candidates_scanned"], 2)
+        self.assertEqual(
+            {item["chunk_id"] for item in result["results"]},
+            set(self.document.chunks.values_list("pk", flat=True)),
+        )
+        self.assertTrue(all(item["score"] == 3 for item in result["results"]))
+
+    def test_tag_search_does_not_cross_agent_collection_boundary(self):
+        self.private_document.tags = ["confidential-finance"]
+        self.private_document.save(update_fields=["tags"])
+
+        result = search_knowledge(self.agent, query="confidential-finance", limit=5)
+
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["candidates_scanned"], 0)
+
+    def test_tag_search_excludes_inactive_documents_and_collections(self):
+        archived = KnowledgeDocument.objects.create(
+            collection=self.collection,
+            title="Archived operations",
+            tags=["dormant-finance"],
+            status=KnowledgeDocument.Status.ARCHIVED,
+        )
+        KnowledgeDocumentChunk.objects.create(
+            document=archived,
+            chunk_index=1,
+            section_title="Archived",
+            content="No query term in this chunk.",
+        )
+        self.private_document.tags = ["dormant-finance"]
+        self.private_document.save(update_fields=["tags"])
+        self.other_collection.is_active = False
+        self.other_collection.save(update_fields=["is_active"])
+        self.agent.knowledge_collections.add(self.other_collection)
+
+        result = search_knowledge(self.agent, query="dormant-finance", limit=5)
+
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["candidates_scanned"], 0)
+
     def test_search_rejects_unauthorised_collection(self):
         with self.assertRaisesMessage(ValidationError, "not accessible"):
             search_knowledge(self.agent, query="refund", collection_id=self.other_collection.pk)
@@ -1081,6 +1156,35 @@ class KnowledgeRetrievalTests(TestCase):
         self.assertEqual(result["candidate_limit"], 2)
         self.assertTrue(result["candidates_truncated"])
         self.assertEqual(result["total"], 2)
+
+    @patch("ai_hub.services.knowledge_retrieval.MAX_SEARCH_RESULTS", 1)
+    @patch("ai_hub.services.knowledge_retrieval.MAX_SEARCH_CANDIDATES", 2)
+    def test_tag_search_preserves_candidate_and_result_bounds(self):
+        for index in range(4):
+            document = KnowledgeDocument.objects.create(
+                collection=self.collection,
+                title=f"Tag-only reference {index}",
+                tags=["bounded-finance"],
+                status=KnowledgeDocument.Status.ACTIVE,
+            )
+            KnowledgeDocumentChunk.objects.create(
+                document=document,
+                chunk_index=1,
+                section_title=f"Reference {index}",
+                content="No query term is present in this bounded candidate.",
+            )
+
+        result = search_knowledge(
+            self.agent,
+            query="bounded-finance",
+            limit=1000,
+        )
+
+        self.assertEqual(result["candidates_scanned"], 2)
+        self.assertEqual(result["candidate_limit"], 2)
+        self.assertTrue(result["candidates_truncated"])
+        self.assertEqual(result["total"], 1)
+        self.assertLessEqual(len(result["results"][0]["snippet"]), 500)
 
     @patch(
         "ai_hub.services.knowledge_retrieval.MAX_SEARCH_CANDIDATE_CONTENT_CHARS",
@@ -1446,6 +1550,46 @@ class DeliberateToolRuntimeTests(TestCase):
         tool = ToolDefinition.objects.create(name=name, **defaults)
         self.agent.tools.add(tool)
         return tool
+
+    @patch("ai_hub.services.agent_runtime.execute_tools")
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_inactive_agent_cannot_execute_legacy_runtime_tools_or_provider(
+        self,
+        mocked_call,
+        mocked_execute_tools,
+    ):
+        self.make_prompt_tool(name="inactive-legacy-boundary-tool")
+        self.agent.is_active = False
+        self.agent.save(update_fields=["is_active"])
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "Agent 'deliberate-agent' is inactive",
+        ):
+            execute_agent(self.agent, {"query": "must not execute"})
+
+        mocked_execute_tools.assert_not_called()
+        mocked_call.assert_not_called()
+
+    @patch("ai_hub.services.agent_runtime.execute_tool")
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_inactive_agent_cannot_execute_deliberate_tools_or_provider(
+        self,
+        mocked_call,
+        mocked_execute_tool,
+    ):
+        self.make_prompt_tool(name="inactive-deliberate-boundary-tool")
+        self.agent.is_active = False
+        self.agent.save(update_fields=["is_active"])
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "Agent 'deliberate-agent' is inactive",
+        ):
+            execute_agent_deliberate(self.agent, {"query": "must not execute"})
+
+        mocked_execute_tool.assert_not_called()
+        mocked_call.assert_not_called()
 
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_final_response_does_not_execute_available_tools(self, mocked_call):
@@ -2314,6 +2458,50 @@ class OrchestratorFallbackTests(TestCase):
             "llm": {"status": "ok", "content": content},
             "tools": {},
         }
+
+    @patch("ai_hub.services.agent_runtime.completion_call")
+    def test_primary_deactivated_after_pipeline_activation_fails_before_provider(
+        self,
+        mocked_call,
+    ):
+        pipeline, _step = self._create_pipeline(
+            on_error=PipelineStep.OnError.STOP,
+            global_output_contract={},
+        )
+        self.primary.is_active = False
+        self.primary.save(update_fields=["is_active"])
+        session = self._create_session(pipeline)
+
+        run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertIn("Agent 'fallback-primary' is inactive", step_run.error_detail)
+        mocked_call.assert_not_called()
+
+    @patch(
+        "ai_hub.services.agent_runtime.completion_call",
+        side_effect=Exception("primary provider failed"),
+    )
+    def test_fallback_deactivated_after_activation_fails_before_second_provider_call(
+        self,
+        mocked_call,
+    ):
+        pipeline, _step = self._create_pipeline(global_output_contract={})
+        self.fallback.is_active = False
+        self.fallback.save(update_fields=["is_active"])
+        session = self._create_session(pipeline)
+
+        run_execution_session(session.pk)
+
+        session.refresh_from_db()
+        step_run = session.step_runs.get()
+        self.assertEqual(session.status, ExecutionSession.Status.FAILED)
+        self.assertEqual(step_run.status, ExecutionStepRun.Status.FAILED)
+        self.assertIn("Agent 'fallback-secondary' is inactive", step_run.error_detail)
+        self.assertEqual(mocked_call.call_count, 1)
 
     def test_fallback_A_prepares_fresh_payload_from_logical_step_input(self):
         pipeline, _step = self._create_pipeline()
@@ -3757,11 +3945,12 @@ class HubToolSafetyTests(TestCase):
 
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_writable_configuration_still_executes(self, mocked_request):
-        mocked_request.return_value = SimpleNamespace(
+        response = StreamingHttpResponse(
             status_code=200,
             headers={},
-            text="written",
+            body=b"written",
         )
+        mocked_request.return_value = response
         tool = ToolDefinition(
             name="valid-state-write-post",
             tool_kind=ToolDefinition.ToolKind.HTTP,
@@ -3779,16 +3968,231 @@ class HubToolSafetyTests(TestCase):
 
         self.assertEqual(result, {"status_code": 200, "body": "written"})
         mocked_request.assert_called_once()
+        self.assertTrue(mocked_request.call_args.kwargs["stream"])
+        self.assertEqual(mocked_request.call_args.kwargs["timeout"], 30)
+        self.assertTrue(response.closed)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_content_length_over_byte_limit_fails_before_body_read(
+        self,
+        mocked_request,
+    ):
+        response = StreamingHttpResponse(
+            headers={"Content-Length": "1025"},
+            body=b"x" * 1025,
+        )
+        mocked_request.return_value = response
+        tool = ToolDefinition.objects.create(
+            name="content-length-byte-limit",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/large",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+                "max_response_bytes": 1024,
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "maximum response size"):
+            execute_tool(tool, {})
+
+        self.assertEqual(response.raw.read_sizes, [])
+        self.assertTrue(response.closed)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_unknown_length_stream_stops_at_byte_limit(self, mocked_request):
+        response = StreamingHttpResponse(body=b"x" * 4096)
+        mocked_request.return_value = response
+        tool = ToolDefinition.objects.create(
+            name="unknown-length-byte-limit",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/large",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+                "max_response_bytes": 1024,
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "maximum response size"):
+            execute_tool(tool, {})
+
+        self.assertTrue(response.raw.read_sizes)
+        self.assertLessEqual(max(response.raw.read_sizes), 1025)
+        self.assertTrue(response.closed)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_exact_byte_limit_succeeds(self, mocked_request):
+        response = StreamingHttpResponse(body=b"x" * 1024)
+        mocked_request.return_value = response
+        tool = ToolDefinition.objects.create(
+            name="exact-response-byte-limit",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/exact",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+                "max_response_bytes": 1024,
+            },
+        )
+
+        result = execute_tool(tool, {})
+
+        self.assertEqual(len(result["body"]), 1024)
+        self.assertTrue(response.closed)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_max_bytes_plus_one_fails(self, mocked_request):
+        response = StreamingHttpResponse(body=b"x" * 1025)
+        mocked_request.return_value = response
+        tool = ToolDefinition.objects.create(
+            name="plus-one-response-byte-limit",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/plus-one",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+                "max_response_bytes": 1024,
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "maximum response size"):
+            execute_tool(tool, {})
+
+        self.assertTrue(response.closed)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_redirect_response_closes_before_next_request(self, mocked_request):
+        redirect_response = StreamingHttpResponse(
+            status_code=302,
+            headers={"Location": "/final"},
+            body=b"redirect body must not be read",
+        )
+        final_response = StreamingHttpResponse(body=b"ok")
+        responses = [redirect_response, final_response]
+
+        def next_response(*args, **kwargs):
+            if len(responses) == 1:
+                self.assertTrue(redirect_response.closed)
+            return responses.pop(0)
+
+        mocked_request.side_effect = next_response
+        tool = ToolDefinition.objects.create(
+            name="close-before-redirect",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        result = execute_tool(tool, {})
+
+        self.assertEqual(result["body"], "ok")
+        self.assertEqual(redirect_response.raw.read_sizes, [])
+        self.assertTrue(redirect_response.closed)
+        self.assertTrue(final_response.closed)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_large_error_response_is_bounded(self, mocked_request):
+        response = StreamingHttpResponse(status_code=500, body=b"e" * 4096)
+        mocked_request.return_value = response
+        tool = ToolDefinition.objects.create(
+            name="bounded-http-error",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/error",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+                "max_response_bytes": 1024,
+            },
+        )
+
+        with self.assertRaisesMessage(ValidationError, "maximum response size"):
+            execute_tool(tool, {})
+
+        self.assertLessEqual(max(response.raw.read_sizes), 1025)
+        self.assertTrue(response.closed)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_http_unknown_encoding_uses_safe_fallback(self, mocked_request):
+        mocked_request.return_value = StreamingHttpResponse(
+            body=b"\xffsafe",
+            encoding="not-a-real-codec",
+        )
+        tool = ToolDefinition.objects.create(
+            name="safe-http-decoding",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/encoded",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+            },
+        )
+
+        result = execute_tool(tool, {})
+
+        self.assertIn("safe", result["body"])
+
+    def test_http_response_byte_limit_is_clamped_and_malformed_values_fail(self):
+        from ai_hub.services.http_tool_policy import (
+            MAX_HTTP_RESPONSE_BYTES,
+            MIN_HTTP_RESPONSE_BYTES,
+            build_http_tool_configuration,
+        )
+
+        base_config = {
+            "url": "https://allowed.example/resource",
+            "method": "GET",
+            "allowed_hosts": ["allowed.example"],
+        }
+        too_small = ToolDefinition(
+            name="http-min-byte-clamp",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={**base_config, "max_response_bytes": 0},
+        )
+        too_large = ToolDefinition(
+            name="http-max-byte-clamp",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={**base_config, "max_response_bytes": MAX_HTTP_RESPONSE_BYTES + 1},
+        )
+        malformed = ToolDefinition(
+            name="http-malformed-byte-limit",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={**base_config, "max_response_bytes": "unlimited"},
+        )
+
+        self.assertEqual(
+            build_http_tool_configuration(too_small).max_response_bytes,
+            MIN_HTTP_RESPONSE_BYTES,
+        )
+        self.assertEqual(
+            build_http_tool_configuration(too_large).max_response_bytes,
+            MAX_HTTP_RESPONSE_BYTES,
+        )
+        with self.assertRaisesMessage(ValidationError, "max_response_bytes"):
+            build_http_tool_configuration(malformed)
 
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_redirect_within_allowed_host_succeeds(self, mocked_request):
         mocked_request.side_effect = [
-            SimpleNamespace(
+            StreamingHttpResponse(
                 status_code=302,
                 headers={"Location": "/final"},
-                text="redirect",
+                body=b"redirect",
             ),
-            SimpleNamespace(status_code=200, headers={}, text="ok"),
+            StreamingHttpResponse(status_code=200, headers={}, body=b"ok"),
         ]
         tool = ToolDefinition.objects.create(
             name="same-host-redirect",
@@ -3813,12 +4217,12 @@ class HubToolSafetyTests(TestCase):
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_redirect_to_second_allowed_host_succeeds(self, mocked_request):
         mocked_request.side_effect = [
-            SimpleNamespace(
+            StreamingHttpResponse(
                 status_code=307,
                 headers={"Location": "https://second.example/final"},
-                text="redirect",
+                body=b"redirect",
             ),
-            SimpleNamespace(status_code=200, headers={}, text="ok"),
+            StreamingHttpResponse(status_code=200, headers={}, body=b"ok"),
         ]
         tool = ToolDefinition.objects.create(
             name="second-host-redirect",
@@ -3845,12 +4249,12 @@ class HubToolSafetyTests(TestCase):
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_cross_origin_redirect_drops_sensitive_headers(self, mocked_request):
         mocked_request.side_effect = [
-            SimpleNamespace(
+            StreamingHttpResponse(
                 status_code=302,
                 headers={"Location": "https://second.example/final"},
-                text="redirect",
+                body=b"redirect",
             ),
-            SimpleNamespace(status_code=200, headers={}, text="ok"),
+            StreamingHttpResponse(status_code=200, headers={}, body=b"ok"),
         ]
         tool = ToolDefinition.objects.create(
             name="credential-safe-redirect",
@@ -3875,10 +4279,10 @@ class HubToolSafetyTests(TestCase):
 
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_redirect_to_forbidden_host_stops_before_contact(self, mocked_request):
-        mocked_request.return_value = SimpleNamespace(
+        mocked_request.return_value = StreamingHttpResponse(
             status_code=302,
             headers={"Location": "https://forbidden.example/private"},
-            text="redirect",
+            body=b"redirect",
         )
         tool = ToolDefinition.objects.create(
             name="forbidden-host-redirect",
@@ -3897,10 +4301,10 @@ class HubToolSafetyTests(TestCase):
 
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_redirect_to_loopback_stops_before_contact(self, mocked_request):
-        mocked_request.return_value = SimpleNamespace(
+        mocked_request.return_value = StreamingHttpResponse(
             status_code=302,
             headers={"Location": "http://127.0.0.1:9000/private"},
-            text="redirect",
+            body=b"redirect",
         )
         tool = ToolDefinition.objects.create(
             name="loopback-redirect",
@@ -3920,9 +4324,9 @@ class HubToolSafetyTests(TestCase):
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_redirect_limit_terminates_loop(self, mocked_request):
         mocked_request.side_effect = [
-            SimpleNamespace(status_code=302, headers={"Location": "/two"}, text=""),
-            SimpleNamespace(status_code=302, headers={"Location": "/three"}, text=""),
-            SimpleNamespace(status_code=302, headers={"Location": "/four"}, text=""),
+            StreamingHttpResponse(status_code=302, headers={"Location": "/two"}),
+            StreamingHttpResponse(status_code=302, headers={"Location": "/three"}),
+            StreamingHttpResponse(status_code=302, headers={"Location": "/four"}),
         ]
         tool = ToolDefinition.objects.create(
             name="redirect-loop",
@@ -3959,10 +4363,10 @@ class HubToolSafetyTests(TestCase):
 
     @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_redirect_to_unsupported_scheme_stops_before_contact(self, mocked_request):
-        mocked_request.return_value = SimpleNamespace(
+        mocked_request.return_value = StreamingHttpResponse(
             status_code=302,
             headers={"Location": "file://allowed.example/private"},
-            text="redirect",
+            body=b"redirect",
         )
         tool = ToolDefinition.objects.create(
             name="unsupported-redirect-scheme",
@@ -6422,10 +6826,23 @@ class GamePauseApprovalResumeTests(TestCase):
             input_payload={"final_answer": "pending test"},
             started_at=timezone.now(),
         )
+        from ai_hub.services.game_action_dispatcher import (
+            build_game_action_approval_intent,
+        )
+
+        intent_snapshot, intent_fingerprint = build_game_action_approval_intent(
+            session=self.session,
+            workspace=self.workspace,
+            goal=self.goal,
+            action_definition=action_def,
+            payload=dict(action_run.input_payload),
+        )
         approval_req = GameActionApprovalRequest.objects.create(
             action_run=action_run,
             goal=self.goal,
             requested_payload={"final_answer": "pending test"},
+            execution_intent_snapshot=intent_snapshot,
+            execution_intent_fingerprint=intent_fingerprint,
         )
         return action_run, approval_req
 
@@ -6445,6 +6862,44 @@ class GamePauseApprovalResumeTests(TestCase):
             goal=self.goal,
             reason_code=reason_code,
         )
+
+    def _request_finish_approval(self, *, final_answer="approved answer"):
+        self.finish_def.requires_approval = True
+        self.finish_def.save(update_fields=["requires_approval", "updated_at"])
+        return execute_game_action(
+            session=self.session,
+            action_name=self.finish_def.name,
+            action_input={"final_answer": final_answer},
+        )
+
+    def _request_tool_approval(
+        self,
+        *,
+        name,
+        tool_config=None,
+        action_config=None,
+        action_input=None,
+    ):
+        tool = ToolDefinition.objects.create(
+            name=f"{name}_tool",
+            tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
+            config=tool_config or {"template": "approved result"},
+            requires_approval=True,
+        )
+        self.agent.tools.add(tool)
+        action = GameActionDefinition.objects.create(
+            name=name,
+            label=name,
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+            config=action_config or {},
+        )
+        action_run = execute_game_action(
+            session=self.session,
+            action_name=action.name,
+            action_input=action_input or {"query": "approved input"},
+        )
+        return action_run, action, tool
 
     # ---- Phase 08 spec test names ------------------------------------------
 
@@ -6491,6 +6946,8 @@ class GamePauseApprovalResumeTests(TestCase):
         approval_req = GameActionApprovalRequest.objects.filter(action_run=action_run).first()
         self.assertIsNotNone(approval_req)
         self.assertEqual(approval_req.status, GameActionApprovalRequest.Status.PENDING)
+        self.assertTrue(approval_req.execution_intent_snapshot)
+        self.assertEqual(len(approval_req.execution_intent_fingerprint), 64)
 
     def test_goal_moves_to_waiting_approval(self):
         from ai_hub.services import game_action_dispatcher as dispatcher
@@ -6591,6 +7048,400 @@ class GamePauseApprovalResumeTests(TestCase):
         self.assertEqual(tool_run.status, ToolExecutionRun.Status.SUCCESS)
         self.assertEqual(tool_run.approval_state, ToolExecutionRun.ApprovalState.APPROVED)
         self.assertEqual(tool_run.agent, self.agent)
+
+    def test_approval_rejects_action_configuration_drift_before_dispatch(self):
+        action_run = self._request_finish_approval()
+        self.finish_def.config = {"mode": "changed-after-request"}
+        self.finish_def.save(update_fields=["config", "updated_at"])
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+            return_value={"complete": True},
+        ) as mocked_dispatch:
+            with self.assertRaises(ValidationError):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_dispatch.assert_not_called()
+        action_run.refresh_from_db()
+        approval = action_run.approval_request
+        approval.refresh_from_db()
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    def test_approval_rejects_action_contract_drift_before_dispatch(self):
+        action_run = self._request_finish_approval()
+        self.finish_def.output_contract = {"required": ["new_field"]}
+        self.finish_def.save(update_fields=["output_contract", "updated_at"])
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+            return_value={"complete": True},
+        ) as mocked_dispatch:
+            with self.assertRaises(ValidationError):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_dispatch.assert_not_called()
+        action_run.refresh_from_db()
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_approval_rejects_tool_configuration_drift_before_execution(self):
+        action_run, _, tool = self._request_tool_approval(
+            name="approval_tool_config_drift"
+        )
+        tool.config = {"template": "changed after request"}
+        tool.save(update_fields=["config", "updated_at"])
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.execute_tool",
+            return_value={"macro": "executed"},
+        ) as mocked_execute:
+            with self.assertRaises(ValidationError):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_execute.assert_not_called()
+        approval = action_run.approval_request
+        approval.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_approval_rejects_revoked_tool_permission_before_execution(self):
+        action_run, _, tool = self._request_tool_approval(
+            name="approval_tool_permission_drift"
+        )
+        AgentToolGrant.objects.create(
+            agent=self.agent,
+            tool=tool,
+            is_enabled=False,
+        )
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.execute_tool",
+            return_value={"macro": "executed"},
+        ) as mocked_execute:
+            with self.assertRaises(ValidationError):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_execute.assert_not_called()
+        approval = action_run.approval_request
+        approval.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_approval_rejects_inactive_agent_before_tool_execution(self):
+        action_run, _, _ = self._request_tool_approval(
+            name="approval_inactive_agent"
+        )
+        self.agent.is_active = False
+        self.agent.save(update_fields=["is_active", "updated_at"])
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.execute_tool",
+            return_value={"macro": "executed"},
+        ) as mocked_execute:
+            with self.assertRaises(ValidationError):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_execute.assert_not_called()
+        approval = action_run.approval_request
+        approval.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    def test_approval_rejects_stricter_workspace_policy_before_dispatch(self):
+        action_run = self._request_finish_approval()
+        self.workspace.default_policy = {"allowed_actions": []}
+        self.workspace.save(update_fields=["default_policy", "updated_at"])
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+            return_value={"complete": True},
+        ) as mocked_dispatch:
+            with self.assertRaises(ValidationError):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_dispatch.assert_not_called()
+        approval = action_run.approval_request
+        approval.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_dispatch_reloads_action_changed_after_approval_review(self):
+        from ai_hub.services import game_action_dispatcher as dispatcher
+
+        action_run, action, _ = self._request_tool_approval(
+            name="approval_post_review_action_drift"
+        )
+        original_dispatch = dispatcher.dispatch_game_action
+
+        def mutate_then_dispatch(**kwargs):
+            GameActionDefinition.objects.filter(pk=action.pk).update(
+                config={"mode": "changed-after-review"}
+            )
+            return original_dispatch(**kwargs)
+
+        with (
+            patch(
+                "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+                side_effect=mutate_then_dispatch,
+            ),
+            patch(
+                "ai_hub.services.game_action_dispatcher.execute_tool",
+                return_value={"result": "must not execute"},
+            ) as mocked_execute,
+            self.assertRaisesMessage(
+                ValidationError,
+                "APPROVAL_REAPPROVAL_REQUIRED",
+            ),
+        ):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        mocked_execute.assert_not_called()
+        action_run.refresh_from_db()
+        approval = GameActionApprovalRequest.objects.get(action_run=action_run)
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_dispatch_reloads_workspace_changed_after_approval_review(self):
+        from ai_hub.services import game_action_dispatcher as dispatcher
+
+        action_run, _, _ = self._request_tool_approval(
+            name="approval_post_review_workspace_drift"
+        )
+        original_dispatch = dispatcher.dispatch_game_action
+
+        def mutate_then_dispatch(**kwargs):
+            GameWorkspace.objects.filter(pk=self.workspace.pk).update(
+                default_policy={"allowed_tools": []}
+            )
+            return original_dispatch(**kwargs)
+
+        with (
+            patch(
+                "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+                side_effect=mutate_then_dispatch,
+            ),
+            patch(
+                "ai_hub.services.game_action_dispatcher.execute_tool",
+                return_value={"result": "must not execute"},
+            ) as mocked_execute,
+            self.assertRaisesMessage(
+                ValidationError,
+                "APPROVAL_REAPPROVAL_REQUIRED",
+            ),
+        ):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        mocked_execute.assert_not_called()
+        action_run.refresh_from_db()
+        approval = GameActionApprovalRequest.objects.get(action_run=action_run)
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_dispatch_executes_the_tool_snapshot_used_for_intent_verification(self):
+        from ai_hub.services import game_action_dispatcher as dispatcher
+
+        reviewed_config = {"template": "reviewed tool configuration"}
+        action_run, _, tool = self._request_tool_approval(
+            name="approval_single_tool_resolution",
+            tool_config=reviewed_config,
+        )
+        original_resolver = dispatcher._resolve_unified_tool_authorization
+        dispatch_resolution_count = 0
+        mutated = False
+        executed_configs = []
+        external_execution_atomic_depths = []
+        baseline_atomic_depth = len(connection.atomic_blocks)
+
+        def resolve_then_mutate(**kwargs):
+            nonlocal dispatch_resolution_count, mutated
+            agent, resolved_tool = original_resolver(**kwargs)
+            approval_status = GameActionApprovalRequest.objects.get(
+                action_run_id=action_run.pk
+            ).status
+            if approval_status == GameActionApprovalRequest.Status.APPROVED:
+                dispatch_resolution_count += 1
+                if not mutated:
+                    ToolDefinition.objects.filter(pk=tool.pk).update(
+                        config={"template": "changed-after-linearization"}
+                    )
+                    mutated = True
+            return agent, resolved_tool
+
+        def execute_resolved_tool(executed_tool, payload, *, agent=None):
+            executed_configs.append(dict(executed_tool.config or {}))
+            external_execution_atomic_depths.append(len(connection.atomic_blocks))
+            return {"result": "executed reviewed capability"}
+
+        with (
+            patch(
+                "ai_hub.services.game_action_dispatcher._resolve_unified_tool_authorization",
+                side_effect=resolve_then_mutate,
+            ),
+            patch(
+                "ai_hub.services.game_action_dispatcher.execute_tool",
+                side_effect=execute_resolved_tool,
+            ),
+        ):
+            approved = approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        self.assertEqual(approved.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(dispatch_resolution_count, 1)
+        self.assertEqual(executed_configs, [reviewed_config])
+        self.assertEqual(external_execution_atomic_depths, [baseline_atomic_depth])
+
+    def test_approval_rejects_input_payload_tampering_before_dispatch(self):
+        action_run = self._request_finish_approval(final_answer="reviewed value")
+        action_run.input_payload = {"final_answer": "tampered value"}
+        action_run.save(update_fields=["input_payload"])
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+            return_value={"complete": True},
+        ) as mocked_dispatch:
+            with self.assertRaises(ValidationError):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_dispatch.assert_not_called()
+        approval = action_run.approval_request
+        approval.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    def test_approval_request_metadata_change_does_not_create_false_drift(self):
+        action_run = self._request_finish_approval()
+        approval = action_run.approval_request
+        approval.expires_at = timezone.now() + timedelta(hours=1)
+        approval.review_note = "Reviewer-only draft note"
+        approval.save(update_fields=["expires_at", "review_note"])
+
+        approved = approve_action_run(
+            action_run_id=action_run.pk,
+            reviewed_by=self.approver,
+            review_note="Approved unchanged intent.",
+        )
+
+        approved.refresh_from_db()
+        self.assertEqual(approved.status, GameActionRun.Status.SUCCESS)
+
+    def test_historical_approval_without_fingerprint_requires_fresh_request(self):
+        action_run, approval = self._make_waiting_approval_run()
+        approval.execution_intent_snapshot = {}
+        approval.execution_intent_fingerprint = ""
+        approval.save(
+            update_fields=[
+                "execution_intent_snapshot",
+                "execution_intent_fingerprint",
+            ]
+        )
+
+        with patch(
+            "ai_hub.services.game_action_dispatcher.dispatch_game_action",
+            return_value={"complete": True},
+        ) as mocked_dispatch:
+            with self.assertRaisesMessage(
+                ValidationError,
+                "APPROVAL_REAPPROVAL_REQUIRED",
+            ):
+                approve_action_run(
+                    action_run_id=action_run.pk,
+                    reviewed_by=self.approver,
+                )
+
+        mocked_dispatch.assert_not_called()
+        approval.refresh_from_db()
+        action_run.refresh_from_db()
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+
+    def test_low_level_dispatch_rechecks_approved_intent_fingerprint(self):
+        from ai_hub.services.game_action_dispatcher import dispatch_game_action
+
+        action_run = self._request_finish_approval()
+        approval = action_run.approval_request
+        approval.status = GameActionApprovalRequest.Status.APPROVED
+        approval.save(update_fields=["status"])
+        action_run.status = GameActionRun.Status.RUNNING
+        action_run.save(update_fields=["status"])
+        self.finish_def.config = {"mode": "changed-before-low-level-dispatch"}
+        self.finish_def.save(update_fields=["config", "updated_at"])
+        action_run.refresh_from_db()
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "APPROVAL_REAPPROVAL_REQUIRED",
+        ):
+            dispatch_game_action(
+                action_run=action_run,
+                workspace=self.workspace,
+                goal=self.goal,
+                payload=dict(action_run.input_payload),
+            )
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_approval_audit_snapshot_never_persists_plaintext_credentials(self):
+        action_run, _, _ = self._request_tool_approval(
+            name="approval_secret_redaction",
+            tool_config={
+                "template": "safe result",
+                "api_key": "tool-plaintext-secret",
+                "headers": {"Authorization": "Bearer header-plaintext-secret"},
+            },
+            action_config={"password": "action-plaintext-secret"},
+            action_input={
+                "query": "approved input",
+                "access_token": "payload-plaintext-secret",
+            },
+        )
+
+        approval = action_run.approval_request
+        persisted_approval_audit = json.dumps(
+            {
+                "requested_payload": approval.requested_payload,
+                "execution_intent_snapshot": approval.execution_intent_snapshot,
+                "execution_intent_fingerprint": approval.execution_intent_fingerprint,
+            },
+            sort_keys=True,
+        )
+        for plaintext in (
+            "tool-plaintext-secret",
+            "header-plaintext-secret",
+            "action-plaintext-secret",
+            "payload-plaintext-secret",
+        ):
+            self.assertNotIn(plaintext, persisted_approval_audit)
+        self.assertIn("***REDACTED***", persisted_approval_audit)
+        self.assertEqual(len(approval.execution_intent_fingerprint), 64)
 
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_resume_preserves_historical_step_runs(self, mocked_call):
@@ -8590,15 +9441,14 @@ class GameDelegationBudgetConcurrencyTests(TransactionTestCase):
             close_old_connections()
             try:
                 barrier.wait(timeout=10)
-                with patch("ai_hub.services.agent_runtime.completion_call", return_value=response):
-                    run_delegated_agent(
-                        session=ExecutionSession.objects.get(pk=session.pk),
-                        action_run=GameActionRun.objects.get(pk=action_id),
-                        workspace=GameWorkspace.objects.get(pk=workspace.pk),
-                        goal=GameGoal.objects.get(pk=goal.pk),
-                        target_agent_name=target.name,
-                        task="one slot only",
-                    )
+                run_delegated_agent(
+                    session=ExecutionSession.objects.get(pk=session.pk),
+                    action_run=GameActionRun.objects.get(pk=action_id),
+                    workspace=GameWorkspace.objects.get(pk=workspace.pk),
+                    goal=GameGoal.objects.get(pk=goal.pk),
+                    target_agent_name=target.name,
+                    task="one slot only",
+                )
                 result = "success"
             except Exception as exc:
                 result = type(exc).__name__
@@ -8607,10 +9457,11 @@ class GameDelegationBudgetConcurrencyTests(TransactionTestCase):
             with result_lock:
                 results.append(result)
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(delegate, action_id) for action_id in action_ids]
-            for future in futures:
-                future.result(timeout=30)
+        with patch("ai_hub.services.agent_runtime.completion_call", return_value=response):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(delegate, action_id) for action_id in action_ids]
+                for future in futures:
+                    future.result(timeout=30)
 
         self.assertEqual(GameDelegationRun.objects.count(), 1)
         self.assertEqual(results.count("success"), 1)
@@ -8807,6 +9658,34 @@ class GameOrphanedGoalCleanupTests(TestCase):
         goal.refresh_from_db()
         self.assertEqual(goal.status, GameGoal.Status.RUNNING)
 
+    def test_cleanup_revalidates_candidate_that_gains_active_session(self):
+        goal = self._running_goal("candidate-gains-session")
+        real_find = find_orphaned_running_goals
+
+        def find_then_create_session(*args, **kwargs):
+            candidates = real_find(*args, **kwargs)
+            create_goal_execution_session(goal=goal, entry_agent=self.agent)
+            return candidates
+
+        with patch(
+            "ai_hub.services.game_goals.find_orphaned_running_goals",
+            side_effect=find_then_create_session,
+        ):
+            cancelled = cancel_orphaned_running_goals()
+
+        goal.refresh_from_db()
+        self.assertEqual(cancelled, [])
+        self.assertEqual(goal.status, GameGoal.Status.RUNNING)
+        self.assertTrue(
+            goal.execution_sessions.filter(
+                status__in=(
+                    ExecutionSession.Status.PENDING,
+                    ExecutionSession.Status.RUNNING,
+                    ExecutionSession.Status.WAITING_ASYNC,
+                )
+            ).exists()
+        )
+
     def test_running_goal_with_terminal_session_is_an_orphan(self):
         goal = self._running_goal("terminal-session")
         ExecutionSession.objects.create(
@@ -8872,6 +9751,98 @@ class GameOrphanedGoalCleanupTests(TestCase):
         self.assertIn("Cancelled 1", out.getvalue())
         goal.refresh_from_db()
         self.assertEqual(goal.status, GameGoal.Status.CANCELLED)
+
+
+class GameOrphanedGoalCleanupConcurrencyTests(TransactionTestCase):
+    reset_sequences = True
+
+    def test_session_created_after_candidate_discovery_prevents_cancellation(self):
+        if connection.vendor != "postgresql":
+            self.skipTest(
+                "Orphan cleanup serialization requires PostgreSQL row-lock semantics."
+            )
+
+        from threading import Event
+
+        provider = ProviderConfig.objects.create(
+            name="orphan-race-provider",
+            provider_type="training",
+        )
+        model_cfg = ModelConfig.objects.create(
+            provider=provider,
+            model_name="training",
+        )
+        agent = AgentProfile.objects.create(
+            name="orphan-race-agent",
+            role="orphan race",
+            model_config=model_cfg,
+        )
+        workspace = create_workspace(name="orphan-race-workspace")
+        goal = create_goal(
+            workspace=workspace,
+            title="Orphan serialization",
+            description="Never cancel with an active session.",
+        )
+        goal = transition_goal_status(goal, GameGoal.Status.RUNNING, reason="race setup")
+        candidate_selected = Event()
+        allow_cleanup = Event()
+        real_find = find_orphaned_running_goals
+
+        def delayed_find(*args, **kwargs):
+            candidates = real_find(*args, **kwargs)
+            candidate_selected.set()
+            if not allow_cleanup.wait(timeout=10):
+                raise AssertionError("Timed out waiting for session creation.")
+            return candidates
+
+        def cleanup():
+            close_old_connections()
+            try:
+                with patch(
+                    "ai_hub.services.game_goals.find_orphaned_running_goals",
+                    side_effect=delayed_find,
+                ):
+                    return cancel_orphaned_running_goals()
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            cleanup_future = executor.submit(cleanup)
+            self.assertTrue(
+                candidate_selected.wait(timeout=10),
+                "Cleanup did not discover the candidate.",
+            )
+            try:
+                session = create_goal_execution_session(
+                    goal=goal,
+                    entry_agent=agent,
+                )
+            finally:
+                allow_cleanup.set()
+            cancelled = cleanup_future.result(timeout=20)
+
+        goal.refresh_from_db()
+        session.refresh_from_db()
+        self.assertEqual(cancelled, [])
+        self.assertEqual(goal.status, GameGoal.Status.RUNNING)
+        self.assertIn(
+            session.status,
+            (
+                ExecutionSession.Status.PENDING,
+                ExecutionSession.Status.RUNNING,
+                ExecutionSession.Status.WAITING_ASYNC,
+            ),
+        )
+        self.assertFalse(
+            goal.status == GameGoal.Status.CANCELLED
+            and goal.execution_sessions.filter(
+                status__in=(
+                    ExecutionSession.Status.PENDING,
+                    ExecutionSession.Status.RUNNING,
+                    ExecutionSession.Status.WAITING_ASYNC,
+                )
+            ).exists()
+        )
 
 
 class HubHealthEvaluatorTests(TestCase):

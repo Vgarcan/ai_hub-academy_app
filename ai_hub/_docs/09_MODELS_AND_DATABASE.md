@@ -90,8 +90,10 @@ whether that tool kind is available and safe.
 
 For HTTP Tools, `operation_mode` is validated against the real request method:
 `read` permits only GET or HEAD. The configuration also requires an
-`http`/`https` URL and an explicit hostname allow-list. These are model/runtime
-invariants rather than database constraints, so no schema migration is needed.
+`http`/`https` URL and an explicit hostname allow-list.
+`config.max_response_bytes` bounds streamed response bodies in bytes (default
+1 MiB, clamped to 1 KiB..10 MiB). These are model/runtime invariants rather than
+database constraints, so no schema migration is needed.
 
 ## `Toolbox`, `ToolboxTool`, `AgentToolboxAssignment`, and `AgentToolGrant`
 
@@ -134,7 +136,9 @@ Important fields:
 - `curated_text`: clean source text used to create retrievable chunks; only the
   legacy eager-knowledge mode injects it directly into agent context.
 - `source_file`: optional uploaded source.
-- `tags`: optional classification.
+- `tags`: optional classification; lexical retrieval can match a query that
+  appears only in these tags without leaving the bounded database candidate
+  query.
 - `language`: content language.
 - `status`: draft, active or archived state.
 - `notes`: admin notes.
@@ -180,6 +184,10 @@ Important fields:
 - `output_contract`: expected output shape.
 - `execution_mode`: intended mode or behavior marker.
 - `is_active`: whether the agent can run.
+
+Runtime activity checks remain authoritative after configuration: direct,
+Orchestrator, GAME and fallback calls reject an inactive Agent before Knowledge,
+Tools or Provider access.
 
 Agents are shared across workspaces. The admin should make their usage clear:
 
@@ -263,6 +271,11 @@ Status changes must use `transition_goal_status()` or `reopen_goal()`. Completed
 
 The deterministic scheduler now calculates and persists `calculated_priority` when priorities are refreshed or a goal is claimed. The stored value is explanatory telemetry; eligibility is checked separately and never inferred from score alone.
 
+Orphan cleanup re-locks and revalidates each candidate before cancellation.
+`create_goal_execution_session()` takes the same Goal row lock first, preventing
+the cleanup/session-creation race from committing a cancelled Goal with an
+active session.
+
 ## `GameGoalDependency`
 
 Defines a directed relationship from one goal to a prerequisite goal.
@@ -285,7 +298,12 @@ Deleting a workspace intentionally cascades to its goals and their dependency re
 
 `GameMemoryEntry` stores bounded workspace, goal, session, or action-result memory. The database enforces the basic scope shape; service validation additionally checks relationships that span tables, including workspace and goal ownership. Importance is constrained to `0.00`–`1.00`.
 
-`GameContinuationRequest` records why a session paused and permits only one pending continuation per session. `GameActionApprovalRequest` links an approval decision to exactly one action run and records reviewer, note, expiry, and status.
+`GameContinuationRequest` records why a session paused and permits only one
+pending continuation per session. `GameActionApprovalRequest` links an approval
+decision to exactly one action run and records reviewer, note, expiry, status, a
+redacted execution-intent snapshot and its canonical fingerprint. Migration
+`0020_approval_execution_intent` leaves historical fingerprints blank so legacy
+approvals are never represented as verified.
 
 `GameWorkspaceAction` and `GameWorkspaceAgent` configure per-workspace permissions. Once at least one mapping of a type exists, that mapping set is treated as a closed allow-list. Policy services—not model output—decide permissions, approvals, external-write safety, and budgets.
 

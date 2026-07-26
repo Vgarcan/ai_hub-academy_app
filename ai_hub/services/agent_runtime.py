@@ -398,6 +398,7 @@ def execute_agent_deliberate(
     for tool_round in range(max_rounds + 1):
         response_mode = "tool_protocol"
         last_llm_result = completion_call(
+            provider_type=model_cfg["provider_type"],
             model=model_cfg["model"],
             messages=messages,
             api_key=model_cfg["api_key"],
@@ -626,6 +627,7 @@ def execute_agent(
     user_message = json.dumps(user_content, default=str)
 
     llm_result = completion_call(
+        provider_type=model_cfg["provider_type"],
         model=model_cfg["model"],
         messages=[
             {"role": "system", "content": agent.system_prompt or ""},

@@ -31,7 +31,8 @@ Defines an AI provider, endpoint or local inference server.
 Important fields:
 
 - `name`: friendly admin name.
-- `provider_type`: runtime adapter type.
+- `provider_type`: authoritative runtime adapter type; model names and endpoint
+  ports never override it.
 - `base_url`: endpoint for local or compatible providers.
 - `api_key_env_var`: environment variable name for the secret.
 - `default_timeout`: request timeout in seconds.
@@ -47,9 +48,11 @@ Defines a concrete model available through a provider.
 Important fields:
 
 - `provider`: parent provider.
-- `model_name`: exact provider model identifier. For a `training` (stub)
+- `model_name`: exact model identifier within the selected provider. For an
+  Ollama provider prefer the value reported by `/api/tags`; the adapter retains
+  compatibility with an existing `ollama/` prefix. For a `training` (stub)
   provider it must be `training` or start with `training/`; model/Admin
-  validation and the Build Console enforce this convention.
+  validation and the Build Console enforce this naming convention.
 - `temperature_default`: default generation temperature (defaults to `0.70`).
 - `max_tokens_default`: default output budget.
 - `supports_tools`: whether this model/runtime can work with tools.

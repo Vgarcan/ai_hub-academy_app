@@ -247,8 +247,8 @@ def _seed_tutorial_missions(force_update=False):
                         "Max tokens default and Is active]"
                         "(/static/academy/img/tutorials/model-form.png)\n\n"
                         "### Notes\n\n"
-                        "The model name `training/assistant` is intercepted by the training stub "
-                        "and returns deterministic responses.\n"
+                        "The Training provider selects the deterministic stub. "
+                        "`training/assistant` follows that provider's model naming convention.\n"
                     ),
                 },
             ],

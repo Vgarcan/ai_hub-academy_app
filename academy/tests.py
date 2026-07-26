@@ -538,6 +538,7 @@ class TrainingProviderTest(TestCase):
         from ai_hub.services.litellm_client import completion_call
 
         result = completion_call(
+            provider_type="training",
             model="training/assistant",
             messages=[
                 {"role": "system", "content": "You are a documentation assistant."},

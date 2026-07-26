@@ -62,17 +62,15 @@ class ModelConfig(models.Model):
     def clean(self):
         if self.is_active and not self.provider.is_active:
             raise ValidationError("Cannot activate a model with an inactive provider.")
-        # The training stub router only matches model == "training" or "training/...".
-        # Any other name silently falls through to the real LLM client and fails at
-        # runtime, so enforce the convention at config time with a clear error.
+        # Keep one explicit namespace for deterministic Training models. Provider
+        # routing itself is selected independently from ProviderConfig.provider_type.
         if self.provider.provider_type == ProviderConfig.ProviderType.TRAINING:
             if self.model_name != "training" and not self.model_name.startswith("training/"):
                 raise ValidationError(
                     {
                         "model_name": (
                             "Training-provider models must be named 'training' or start "
-                            "with 'training/' (e.g. 'training/assistant'); otherwise the "
-                            "request is not routed to the deterministic stub."
+                            "with 'training/' (e.g. 'training/assistant')."
                         )
                     }
                 )

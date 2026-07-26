@@ -63,6 +63,11 @@ Common fields:
 - `default_timeout`
 - `is_active`
 
+`provider_type` is the authoritative runtime routing choice. Model names, URL
+substrings and well-known ports do not select an adapter. For example, an
+Ollama provider remains Ollama on a non-standard port, while an OpenAI provider
+does not become Ollama merely because its URL contains `11434`.
+
 Examples:
 
 ```text
@@ -81,7 +86,9 @@ api_key_env_var = OPENAI_API_KEY
 default_timeout = 60
 ```
 
-Use `base_url` for local or custom providers. Leave it blank for standard provider endpoints.
+Use `base_url` for local or custom providers. Ollama requires an explicit base
+URL and never falls back silently to localhost. Leave it blank for providers
+that use their standard endpoint.
 
 ## Model Configuration
 
@@ -99,21 +106,34 @@ Common fields:
 Example for the bundled Ollama adapter:
 
 ```text
-model_name = ollama/qwen3:8b
+model_name = qwen3:8b
 temperature_default = 0.30
 max_tokens_default = 4000
 supports_tools = false
 ```
 
-Use the exact identifier expected by the selected provider adapter; hosted
-provider model catalogs change independently of AI Hub. Use lower temperatures
-for structured extraction and contract-heavy JSON. Use higher temperatures for
-style, rewriting, and reflective text. If you leave `temperature_default` unset
-it defaults to `0.70`.
+Use the exact identifier expected by the selected provider; the model name
+chooses a model within that provider and never chooses the provider itself. The
+Ollama adapter accepts the historical `ollama/` prefix and removes it only at
+its own API boundary, so existing values such as `ollama/qwen3:8b` remain
+compatible. New Ollama records should normally use the identifier reported by
+`GET <base_url>/api/tags`, such as `qwen3:8b`.
+
+Hosted provider model catalogs change independently of AI Hub. Use lower
+temperatures for structured extraction and contract-heavy JSON. Use higher
+temperatures for style, rewriting, and reflective text. If you leave
+`temperature_default` unset it defaults to `0.70`.
 
 ### Training (stub) provider
 
-The built-in `training` provider is a deterministic stub that returns canned responses without calling any external API — useful for local development and tests with no API key. Its router only recognises a model whose `model_name` is exactly `training` or starts with `training/` (for example `training/assistant`). Model/Admin validation and the Build Console reject other names on a training provider, because they would otherwise fall through to the real client and fail at runtime. Direct ORM code must call `full_clean()` before saving configuration records.
+The built-in `training` provider is a deterministic stub that returns canned
+responses without calling any external API — useful for local development and
+tests with no API key. `provider_type=training` selects that adapter. Its model
+naming convention remains deliberately restricted to `training` or
+`training/...` (for example `training/assistant`), and Model/Admin validation
+plus the Build Console enforce it. A model called `training` under any other
+provider does not select the Training adapter. Direct ORM code must call
+`full_clean()` before saving configuration records.
 
 ## Agent Configuration
 

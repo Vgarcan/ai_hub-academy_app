@@ -59,6 +59,8 @@ def evaluate_provider(provider) -> HealthResult:
     is_ollama = provider.provider_type == ProviderConfig.ProviderType.OLLAMA
     if is_ollama:
         creds_label, creds_ok = "Base URL set", bool(provider.base_url)
+    elif provider.provider_type == ProviderConfig.ProviderType.TRAINING:
+        creds_label, creds_ok = "External credentials not required", True
     else:
         creds_label, creds_ok = "Credentials configured", bool(provider.api_key_env_var)
     checks = [

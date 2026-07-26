@@ -72,7 +72,8 @@ For Ollama, confirm:
 GET <base_url>/api/tags
 ```
 
-returns installed models.
+returns installed models. Ollama requires an explicit `base_url`; AI Hub does
+not silently substitute localhost.
 
 ## Configured Model Is Missing
 
@@ -81,19 +82,20 @@ The control center may warn when a configured model is not reported by the provi
 Check:
 
 - model name spelling,
-- provider prefix,
+- the selected `ProviderConfig.provider_type`,
 - local model installation,
 - active/inactive state.
 
-Examples:
+For Ollama, prefer the exact name reported by `/api/tags`:
 
 ```text
-ollama/qwen3:8b
 qwen3:8b
 ```
 
-Hosted-provider identifiers change over time. Use the exact accepted form from
-the provider adapter and its current model catalog.
+Existing `ollama/qwen3:8b` records remain compatible because the Ollama adapter
+removes that historical prefix immediately before its API call. The prefix does
+not select Ollama. Hosted-provider identifiers change over time; use the exact
+accepted form from the selected provider and its current model catalog.
 
 ## Training Provider Model Is Rejected On Save
 
@@ -103,7 +105,26 @@ The `training` provider is a deterministic stub. Its model name must be exactly 
 Training-provider models must be named 'training' or start with 'training/'
 ```
 
-This is intentional: any other name would not be routed to the stub and would fail at runtime against the real client. Rename the model to follow the convention.
+This is an explicit naming convention for the deterministic Training model
+family. Routing is still selected by `provider_type=training`; a model named
+`training` under OpenAI or another provider does not enter the stub. Rename the
+Training-provider model to follow the convention.
+
+## Provider Error Categories
+
+The completion boundary reports stable classes for actionable failures:
+
+- `invalid_provider_configuration`: unsupported type, missing Ollama URL or
+  missing LiteLLM dependency.
+- `provider_unreachable`: connection or timeout before an Ollama response.
+- `model_not_found`: Ollama explicitly reports the requested model missing.
+- `provider_returned_error`: the provider returned an HTTP/client error.
+- `invalid_provider_response`: JSON or response content did not match the
+  adapter contract.
+
+An Ollama failure stays an Ollama failure. AI Hub does not retry it through a
+different provider unless a caller explicitly implements a separate fallback
+policy.
 
 ## Agent Does Not Appear In GAME Workspace
 

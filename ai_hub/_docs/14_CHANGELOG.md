@@ -9,6 +9,21 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Provider routing and live Ollama validation
+
+- Made `ProviderConfig.provider_type` the authoritative completion-routing
+  decision and propagated it through both Agent runtimes.
+- Removed provider detection by `ollama/`, port `11434` and Training model
+  names. The Ollama prefix remains only as adapter-local compatibility
+  normalization.
+- Added categorized provider failures and removed silent localhost/LiteLLM
+  stub fallbacks.
+- Added deterministic routing/error regressions plus explicit environment-gated
+  live Agent and one-step Orchestrator tests. Normal CI never contacts a
+  developer Ollama endpoint.
+- Verified the live vertical slices and a controlled no-fallback failure against
+  the model/endpoint recorded in the private Phase 2 report.
+
 #### Foundation invariant hardening
 
 - Unified GAME wrappers now pause when either the action policy or the Tool's

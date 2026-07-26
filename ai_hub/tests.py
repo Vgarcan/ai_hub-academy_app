@@ -3428,6 +3428,7 @@ class HubOllamaClientTests(TestCase):
         mocked_post.return_value = Response()
 
         result = completion_call(
+            provider_type=ProviderConfig.ProviderType.OLLAMA,
             model="ollama/qwen3:8b",
             messages=[{"role": "user", "content": "hello"}],
             base_url="http://localhost:11434",

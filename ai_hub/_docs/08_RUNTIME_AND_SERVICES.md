@@ -54,6 +54,31 @@ Supported type names:
 
 Validation is deliberately simple. It is meant to catch obvious configuration mistakes before model behavior becomes hard to debug.
 
+## Provider Resolution And Routing
+
+The normal completion path is:
+
+```text
+AgentProfile
+  -> ModelConfig
+  -> ProviderConfig
+  -> resolve_model_config()
+  -> completion_call(provider_type=...)
+  -> selected adapter
+```
+
+`ProviderConfig.provider_type` is the single routing decision. Training and
+Ollama use their dedicated adapters; the supported cloud/compatible provider
+types continue through LiteLLM. The completion boundary does not infer provider
+identity from a model prefix, URL or port.
+
+The Ollama adapter locally removes a historical `ollama/` prefix before sending
+the model identifier to `/api/chat`. This is compatibility normalization, not a
+routing rule. Ollama requires an explicit `base_url`; an unreachable provider,
+missing model, provider HTTP error or invalid response raises a categorized
+provider error and never switches to LiteLLM. A missing LiteLLM dependency also
+fails explicitly rather than returning a fake successful response.
+
 ## Agent Runtime
 
 The Orchestrator and GAME runners select an agent-call runtime from

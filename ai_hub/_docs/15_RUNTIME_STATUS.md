@@ -17,6 +17,34 @@ path changes.
   until the runner and tests prove it.
 - **NOT IMPLEMENTED** — planned or discussed only.
 
+## Provider Routing
+
+### CURRENT
+
+- `resolve_model_config()` carries the selected
+  `ProviderConfig.provider_type` into every normal Agent completion.
+- `completion_call()` uses that value as its only adapter-routing decision:
+  Training selects the deterministic stub, Ollama selects the native chat
+  adapter, and supported cloud/compatible types select LiteLLM.
+- Model prefixes, endpoint text and port `11434` do not establish provider
+  identity.
+- The Ollama adapter accepts existing `ollama/<model>` identifiers by removing
+  the prefix locally before `/api/chat`; new configuration can use the exact
+  unprefixed identifier reported by `/api/tags`.
+- Provider failures are explicit and categorized. Ollama never falls through to
+  LiteLLM, and a missing LiteLLM dependency is not reported as a stub success.
+- Live Ollama Agent and one-step Orchestrator tests are opt-in through
+  `AI_HUB_LIVE_OLLAMA_BASE_URL` plus `AI_HUB_LIVE_OLLAMA_MODEL`; normal CI skips
+  them and has no developer endpoint default.
+- The Phase 2 live validation passed against a real remote Ollama endpoint with
+  `llama3.2:3b`. Endpoint-specific details remain in the private foundation
+  report rather than production defaults.
+
+### TARGET
+
+- Keep provider choice centralized at the completion boundary as more adapters
+  are added.
+
 ## Tools
 
 ### CURRENT

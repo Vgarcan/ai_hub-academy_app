@@ -803,11 +803,11 @@ class ModelConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
             "help_text": _("The provider account or endpoint this model belongs to."),
         },
         "model_name": {
-            "placeholder": "Examples: gpt-4.1-mini, ollama/qwen3:8b, deepseek-chat",
+            "placeholder": "Examples: gpt-4.1-mini, qwen3:8b, deepseek-chat",
             "help_text": _(
-                "Use the exact model identifier expected by the provider or LiteLLM adapter. "
+                "Use the exact model identifier expected by the selected provider. "
                 "For the Training (stub) provider the name must be 'training' or start with "
-                "'training/' (e.g. 'training/assistant') so it routes to the deterministic stub."
+                "'training/' (e.g. 'training/assistant') as its model naming convention."
             ),
         },
         "temperature_default": {

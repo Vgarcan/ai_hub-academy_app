@@ -394,6 +394,29 @@ Admin mutation-bypass and payload-redaction regressions are green.
 - Use factories or fixtures for provider/model/agent setup.
 - Keep host-specific fixtures outside AI Hub.
 
+### Optional live Ollama validation
+
+Normal CI uses mocks and never contacts a developer endpoint. The live
+Provider → Model → Agent and one-step Orchestrator tests run only when both
+variables are explicitly present:
+
+```text
+AI_HUB_LIVE_OLLAMA_BASE_URL
+AI_HUB_LIVE_OLLAMA_MODEL
+```
+
+PowerShell example:
+
+```powershell
+$env:AI_HUB_LIVE_OLLAMA_BASE_URL = "http://ollama-host:11434"
+$env:AI_HUB_LIVE_OLLAMA_MODEL = "qwen3:8b"
+python manage.py test ai_hub.test_live_ollama --verbosity 2
+```
+
+The test module skips cleanly when either value is absent. It has no localhost
+or LAN default. Discover an installed model with `GET <base_url>/api/tags`
+before running it; do not assume or download a model as part of the test.
+
 The bundled CI runs the full SQLite suite against both the minimum Django 5.2
 LTS line and the current supported Django line. A separate PostgreSQL 16 job
 runs the complete suite, including concurrent scheduler claim, approval review

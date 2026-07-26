@@ -218,7 +218,6 @@ def approve_action_run(*, action_run_id: int, reviewed_by, review_note: str = ""
 
         action_run.action = (
             GameActionDefinition.objects.select_for_update()
-            .select_related("tool")
             .get(pk=action_run.action_id)
         )
         approval_req = GameActionApprovalRequest.objects.select_for_update().get(

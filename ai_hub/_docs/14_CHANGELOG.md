@@ -11,6 +11,13 @@ Host-project features should be documented in the host project, not here.
 
 #### Foundation boundary closure
 
+- HTTP Tool redirects and protected approval/audit representations now share
+  one case/separator-normalized credential-name classifier. Cross-origin hops
+  strip Authorization, Cookie, API-key, token, secret and related credential
+  variants without removing ordinary request metadata; same-origin headers are
+  preserved and multi-hop redirects never restore stripped credentials.
+  Approval snapshots redact nested credential values while raw-intent
+  fingerprints remain sensitive to credential drift and force reapproval.
 - Expired GAME approvals now close their ActionRun and continuation atomically,
   record one `approval_expired` parent observation, and resume through the
   existing GAME runner without dispatching the expired action. Approve, reject

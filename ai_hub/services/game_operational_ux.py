@@ -5,20 +5,15 @@ import re
 from django.db.models import Exists, OuterRef
 
 from ai_hub.models import GameGoal
+from ai_hub.services.credential_safety import is_sensitive_credential_name
 from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 
 
-_SENSITIVE_KEYS = frozenset({
-    "api_key",
-    "secret",
-    "password",
-    "token",
-    "access_token",
-    "refresh_token",
-    "authorization",
-    "credentials",
-    "private_key",
-})
+_ASSIGNMENT_RE = re.compile(
+    r"(?P<key_quote>[\"']?)(?P<key>[A-Za-z0-9_.-]+)(?P=key_quote)"
+    r"(?P<separator>\s*[:=]\s*)"
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^,;\r\n}\]]+)"
+)
 
 
 def redact_payload(payload):
@@ -29,8 +24,7 @@ def redact_payload(payload):
         return payload
     result = {}
     for k, v in payload.items():
-        k_lower = k.lower()
-        if any(s == k_lower or s in k_lower for s in _SENSITIVE_KEYS):
+        if is_sensitive_credential_name(k):
             result[k] = "***REDACTED***"
         else:
             result[k] = redact_payload(v)
@@ -40,12 +34,27 @@ def redact_payload(payload):
 def redact_text(value):
     """Best-effort masking for common secret forms embedded in text/error strings."""
     text = str(value or "")
-    text = re.sub(
-        r"(?i)(api[_-]?key|password|secret|access[_-]?token|refresh[_-]?token|authorization)"
-        r"(\s*[:=]\s*)([^\s,;]+)",
-        r"\1\2***REDACTED***",
-        text,
-    )
+
+    def redact_assignment(match):
+        if not is_sensitive_credential_name(match.group("key")):
+            return match.group(0)
+        raw_value = match.group("value")
+        stripped_value = raw_value.strip()
+        quote = (
+            stripped_value[0]
+            if len(stripped_value) >= 2
+            and stripped_value[0] in {'"', "'"}
+            and stripped_value[-1] == stripped_value[0]
+            else ""
+        )
+        redacted_value = f"{quote}***REDACTED***{quote}"
+        return (
+            f"{match.group('key_quote')}{match.group('key')}"
+            f"{match.group('key_quote')}{match.group('separator')}"
+            f"{redacted_value}"
+        )
+
+    text = _ASSIGNMENT_RE.sub(redact_assignment, text)
     return re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer ***REDACTED***", text)
 
 

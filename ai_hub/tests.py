@@ -4278,6 +4278,258 @@ class HubToolSafetyTests(TestCase):
         self.assertEqual(second_headers, {"X-Public": "kept"})
 
     @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_hdr_01_to_08_cross_origin_strips_credential_name_variants(
+        self,
+        mocked_request,
+    ):
+        mocked_request.side_effect = [
+            StreamingHttpResponse(
+                status_code=302,
+                headers={"Location": "https://second.example/final"},
+            ),
+            StreamingHttpResponse(status_code=200, body=b"ok"),
+        ]
+        credential_headers = {
+            "Authorization": "Bearer auth-secret",
+            "Cookie": "session=cookie-secret",
+            "Proxy-Authorization": "Basic proxy-secret",
+            "X-API-Key": "x-api-key-secret",
+            "x-api-key": "lower-hyphen-api-key-secret",
+            "X-Api-Key": "mixed-case-api-key-secret",
+            "X_API_KEY": "upper-underscore-api-key-secret",
+            "x_api_key": "underscore-api-key-secret",
+            "ApiKey": "camel-api-key-secret",
+            "X-Auth-Token": "auth-token-secret",
+            "X-Access-Token": "access-token-secret",
+            "X-Refresh-Token": "refresh-token-secret",
+            "X-Client-Secret": "client-secret",
+            "Password": "password-secret",
+            "Credentials": "credentials-secret",
+            "Private-Key": "private-key-secret",
+        }
+        safe_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "ai-hub-test",
+            "X-Request-ID": "request-123",
+            "X-Correlation-ID": "correlation-123",
+        }
+        tool = ToolDefinition.objects.create(
+            name="credential-variant-cross-origin",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example", "second.example"],
+                "headers": {**credential_headers, **safe_headers},
+            },
+        )
+
+        execute_tool(tool, {})
+
+        second_headers = mocked_request.call_args_list[1].kwargs["headers"]
+        self.assertEqual(second_headers, safe_headers)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_hdr_09_same_origin_preserves_credential_headers(self, mocked_request):
+        mocked_request.side_effect = [
+            StreamingHttpResponse(
+                status_code=302,
+                headers={"Location": "/final"},
+            ),
+            StreamingHttpResponse(status_code=200, body=b"ok"),
+        ]
+        headers = {
+            "Authorization": "Bearer same-origin",
+            "X-API-Key": "same-origin-api-key",
+            "X-Request-ID": "request-123",
+        }
+        tool = ToolDefinition.objects.create(
+            name="same-origin-credential-redirect",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/start",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example"],
+                "headers": headers,
+            },
+        )
+
+        execute_tool(tool, {})
+
+        self.assertEqual(
+            mocked_request.call_args_list[1].kwargs["headers"],
+            headers,
+        )
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_hdr_10_cross_origin_multihop_never_restores_credentials(
+        self,
+        mocked_request,
+    ):
+        mocked_request.side_effect = [
+            StreamingHttpResponse(
+                status_code=302,
+                headers={"Location": "https://second.example/two"},
+            ),
+            StreamingHttpResponse(
+                status_code=302,
+                headers={"Location": "https://third.example/three"},
+            ),
+            StreamingHttpResponse(status_code=200, body=b"ok"),
+        ]
+        tool = ToolDefinition.objects.create(
+            name="cross-origin-multihop-credentials",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/one",
+                "method": "GET",
+                "allowed_hosts": [
+                    "allowed.example",
+                    "second.example",
+                    "third.example",
+                ],
+                "headers": {
+                    "X-API-Key": "multihop-secret",
+                    "X-Request-ID": "request-123",
+                },
+            },
+        )
+
+        execute_tool(tool, {})
+
+        for call in mocked_request.call_args_list[1:]:
+            self.assertEqual(
+                call.kwargs["headers"],
+                {"X-Request-ID": "request-123"},
+            )
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_hdr_11_return_to_origin_does_not_restore_credentials(
+        self,
+        mocked_request,
+    ):
+        mocked_request.side_effect = [
+            StreamingHttpResponse(
+                status_code=302,
+                headers={"Location": "https://second.example/two"},
+            ),
+            StreamingHttpResponse(
+                status_code=302,
+                headers={"Location": "https://allowed.example/three"},
+            ),
+            StreamingHttpResponse(status_code=200, body=b"ok"),
+        ]
+        tool = ToolDefinition.objects.create(
+            name="return-origin-multihop-credentials",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            config={
+                "url": "https://allowed.example/one",
+                "method": "GET",
+                "allowed_hosts": ["allowed.example", "second.example"],
+                "headers": {
+                    "X-API-Key": "return-origin-secret",
+                    "X-Request-ID": "request-123",
+                },
+            },
+        )
+
+        execute_tool(tool, {})
+
+        for call in mocked_request.call_args_list[1:]:
+            self.assertEqual(
+                call.kwargs["headers"],
+                {"X-Request-ID": "request-123"},
+            )
+
+    def test_red_01_to_09_credential_names_are_redacted_recursively(self):
+        from ai_hub.services.credential_safety import (
+            is_sensitive_credential_name,
+            normalize_credential_name,
+        )
+        from ai_hub.services.game_operational_ux import redact_payload, redact_text
+
+        self.assertEqual(
+            {
+                normalize_credential_name(name)
+                for name in ("API_KEY", "api-key", "api_key", "ApiKey")
+            },
+            {"apikey"},
+        )
+        for credential_name in (
+            "X-API-Key",
+            "x-api-key",
+            "X-Api-Key",
+            "X_API_KEY",
+            "x_api_key",
+        ):
+            self.assertTrue(is_sensitive_credential_name(credential_name))
+        for safe_name in (
+            "Accept",
+            "Content-Type",
+            "User-Agent",
+            "X-Request-ID",
+            "X-Correlation-ID",
+        ):
+            self.assertFalse(is_sensitive_credential_name(safe_name))
+
+        secret_values = {
+            "api_key": "secret-api-underscore",
+            "api-key": "secret-api-hyphen",
+            "ApiKey": "secret-api-camel",
+            "X-API-Key": "secret-api-x-header",
+            "x-api-key": "secret-api-x-lower",
+            "X-Api-Key": "secret-api-x-mixed",
+            "X_API_KEY": "secret-api-x-underscore",
+            "x_api_key": "secret-api-x-lower-underscore",
+            "X-Auth-Token": "secret-auth-token",
+            "X-Access-Token": "secret-access-token",
+            "X-Refresh-Token": "secret-refresh-token",
+            "X-Client-Secret": "secret-client",
+            "Password": "secret-password",
+            "Credentials": "secret-credentials",
+            "Private-Key": "secret-private-key",
+        }
+        payload = {
+            "headers": {
+                **secret_values,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "ai-hub-test",
+                "X-Request-ID": "request-123",
+                "X-Correlation-ID": "correlation-123",
+            },
+            "nested": [
+                {"X-API-Key": "secret-nested-list"},
+                {"config": {"x_auth_token": "secret-nested-dict"}},
+            ],
+        }
+
+        redacted = redact_payload(payload)
+        serialized = json.dumps(redacted, sort_keys=True)
+
+        for secret in [*secret_values.values(), "secret-nested-list", "secret-nested-dict"]:
+            self.assertNotIn(secret, serialized)
+        for key in secret_values:
+            self.assertEqual(redacted["headers"][key], "***REDACTED***")
+        self.assertEqual(redacted["headers"]["X-Request-ID"], "request-123")
+        self.assertEqual(redacted["headers"]["X-Correlation-ID"], "correlation-123")
+        self.assertEqual(redacted["headers"]["Accept"], "application/json")
+
+        redacted_text = redact_text(
+            "X-API-Key=secret-text-api; "
+            "X-Auth-Token:secret-text-token; "
+            "X-Request-ID=request-123"
+        )
+        self.assertNotIn("secret-text-api", redacted_text)
+        self.assertNotIn("secret-text-token", redacted_text)
+        self.assertIn("X-Request-ID=request-123", redacted_text)
+
+    @patch("ai_hub.services.tools_runtime.requests.request")
     def test_http_redirect_to_forbidden_host_stops_before_contact(self, mocked_request):
         mocked_request.return_value = StreamingHttpResponse(
             status_code=302,
@@ -6902,6 +7154,46 @@ class GamePauseApprovalResumeTests(TestCase):
         )
         return action_run, action, tool
 
+    def _request_http_tool_approval(
+        self,
+        *,
+        name,
+        api_key,
+        authorization="Bearer synthetic-authorization",
+        cookie="session=synthetic-cookie",
+        request_id="request-123",
+    ):
+        tool = ToolDefinition.objects.create(
+            name=f"{name}_tool",
+            tool_kind=ToolDefinition.ToolKind.HTTP,
+            operation_mode=ToolDefinition.OperationMode.READ,
+            requires_approval=True,
+            config={
+                "url": "https://origin.example/start",
+                "method": "GET",
+                "allowed_hosts": ["origin.example", "redirect.example"],
+                "headers": {
+                    "Authorization": authorization,
+                    "Cookie": cookie,
+                    "X-API-Key": api_key,
+                    "X-Request-ID": request_id,
+                },
+            },
+        )
+        self.agent.tools.add(tool)
+        action = GameActionDefinition.objects.create(
+            name=name,
+            label=name,
+            action_type=GameActionDefinition.ActionType.TOOL,
+            tool=tool,
+        )
+        action_run = execute_game_action(
+            session=self.session,
+            action_name=action.name,
+            action_input={},
+        )
+        return action_run, action, tool
+
     def _request_expiring_finish_approval(self, *, final_answer="expired answer"):
         action_run = self._request_finish_approval(final_answer=final_answer)
         approval = action_run.approval_request
@@ -7427,7 +7719,12 @@ class GamePauseApprovalResumeTests(TestCase):
             tool_config={
                 "template": "safe result",
                 "api_key": "tool-plaintext-secret",
-                "headers": {"Authorization": "Bearer header-plaintext-secret"},
+                "headers": {
+                    "Authorization": "Bearer header-plaintext-secret",
+                    "Cookie": "session=cookie-plaintext-secret",
+                    "X-API-Key": "x-api-key-plaintext-secret",
+                    "X-Request-ID": "visible-request-id",
+                },
             },
             action_config={"password": "action-plaintext-secret"},
             action_input={
@@ -7448,12 +7745,147 @@ class GamePauseApprovalResumeTests(TestCase):
         for plaintext in (
             "tool-plaintext-secret",
             "header-plaintext-secret",
+            "cookie-plaintext-secret",
+            "x-api-key-plaintext-secret",
             "action-plaintext-secret",
             "payload-plaintext-secret",
         ):
             self.assertNotIn(plaintext, persisted_approval_audit)
         self.assertIn("***REDACTED***", persisted_approval_audit)
+        self.assertIn("X-API-Key", persisted_approval_audit)
+        self.assertIn("visible-request-id", persisted_approval_audit)
         self.assertEqual(len(approval.execution_intent_fingerprint), 64)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    def test_red_10_snapshots_hide_secrets_while_fingerprints_detect_drift(self):
+        from ai_hub.services.game_action_dispatcher import (
+            build_game_action_approval_intent,
+        )
+
+        secret_a = "synthetic-fingerprint-secret-a"
+        secret_b = "synthetic-fingerprint-secret-b"
+        action_run, action, tool = self._request_http_tool_approval(
+            name="approval_http_secret_fingerprint",
+            api_key=secret_a,
+        )
+        approval = action_run.approval_request
+        snapshot_a = approval.execution_intent_snapshot
+        fingerprint_a = approval.execution_intent_fingerprint
+
+        updated_headers = {
+            **tool.config["headers"],
+            "X-API-Key": secret_b,
+        }
+        tool.config = {
+            **tool.config,
+            "headers": updated_headers,
+        }
+        tool.save(update_fields=["config", "updated_at"])
+        action.refresh_from_db()
+        snapshot_b, fingerprint_b = build_game_action_approval_intent(
+            session=self.session,
+            workspace=self.workspace,
+            goal=self.goal,
+            action_definition=action,
+            payload=dict(action_run.input_payload),
+        )
+
+        snapshot_a_text = json.dumps(snapshot_a, sort_keys=True)
+        snapshot_b_text = json.dumps(snapshot_b, sort_keys=True)
+        self.assertNotIn(secret_a, snapshot_a_text)
+        self.assertNotIn(secret_b, snapshot_b_text)
+        self.assertIn("***REDACTED***", snapshot_a_text)
+        self.assertIn("***REDACTED***", snapshot_b_text)
+        self.assertNotEqual(fingerprint_a, fingerprint_b)
+
+        with (
+            patch(
+                "ai_hub.services.game_action_dispatcher.execute_tool",
+                return_value={"status_code": 200, "body": "must not execute"},
+            ) as mocked_execute,
+            self.assertRaisesMessage(
+                ValidationError,
+                "APPROVAL_REAPPROVAL_REQUIRED",
+            ),
+        ):
+            approve_action_run(
+                action_run_id=action_run.pk,
+                reviewed_by=self.approver,
+            )
+
+        mocked_execute.assert_not_called()
+        action_run.refresh_from_db()
+        approval.refresh_from_db()
+        self.assertEqual(action_run.status, GameActionRun.Status.REJECTED)
+        self.assertEqual(approval.status, GameActionApprovalRequest.Status.REJECTED)
+
+    @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
+    @patch("ai_hub.services.tools_runtime.requests.request")
+    def test_ffpr_001_snapshot_and_cross_origin_execution_are_credential_safe(
+        self,
+        mocked_request,
+    ):
+        api_key = "synthetic-combined-api-key"
+        authorization = "Bearer synthetic-combined-authorization"
+        cookie = "session=synthetic-combined-cookie"
+        action_run, _, _ = self._request_http_tool_approval(
+            name="approval_http_combined_credential_safety",
+            api_key=api_key,
+            authorization=authorization,
+            cookie=cookie,
+            request_id="visible-combined-request-id",
+        )
+        approval = action_run.approval_request
+        snapshot_text = json.dumps(
+            approval.execution_intent_snapshot,
+            sort_keys=True,
+        )
+        for secret in (api_key, authorization, cookie):
+            self.assertNotIn(secret, snapshot_text)
+        self.assertIn("X-API-Key", snapshot_text)
+        self.assertIn("visible-combined-request-id", snapshot_text)
+
+        mocked_request.side_effect = [
+            StreamingHttpResponse(
+                status_code=302,
+                headers={"Location": "https://redirect.example/final"},
+            ),
+            StreamingHttpResponse(status_code=200, body=b"ok"),
+        ]
+
+        approved_run = approve_action_run(
+            action_run_id=action_run.pk,
+            reviewed_by=self.approver,
+        )
+
+        self.assertEqual(approved_run.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(
+            mocked_request.call_args_list[1].kwargs["headers"],
+            {"X-Request-ID": "visible-combined-request-id"},
+        )
+        tool_run = ToolExecutionRun.objects.get()
+        self.session.refresh_from_db()
+        audit_text = json.dumps(
+            {
+                "approval_snapshot": approval.execution_intent_snapshot,
+                "action_input": approved_run.input_payload,
+                "action_output": approved_run.output_payload,
+                "action_observation": approved_run.observation_payload,
+                "action_error": approved_run.error_detail,
+                "tool_input": tool_run.input_payload,
+                "tool_output": tool_run.output_payload,
+                "tool_error": tool_run.error_detail,
+                "session_context": self.session.final_context,
+            },
+            sort_keys=True,
+        )
+        for secret in (api_key, authorization, cookie):
+            self.assertNotIn(secret, audit_text)
+        self.assertEqual(tool_run.status, ToolExecutionRun.Status.SUCCESS)
+        self.assertEqual(
+            tool_run.approval_state,
+            ToolExecutionRun.ApprovalState.APPROVED,
+        )
 
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_resume_preserves_historical_step_runs(self, mocked_call):

@@ -105,7 +105,13 @@ Test:
   resolution, Knowledge, workspace policy, delegation and audit views,
 - rejection of HTTP `read` Tools configured with write-capable methods,
 - per-hop HTTP redirect allow-list/scheme enforcement, bounded loops and
-  cross-origin credential stripping without real network access,
+  cross-origin credential stripping without real network access; case and
+  separator variants of API-key/token/secret headers are stripped, safe headers
+  survive, same-origin credentials remain, and multi-hop redirects never
+  restore removed credentials,
+- recursive approval-snapshot redaction using the same credential-name
+  classifier, while credential drift still changes the raw-intent fingerprint,
+  requires reapproval and produces no Tool side effect,
 - streamed HTTP response-byte limits for success/error bodies, early
   `Content-Length` rejection, exact/+1 boundaries and response closure,
 - default retrieval-only knowledge context with automatic

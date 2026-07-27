@@ -125,6 +125,12 @@ path changes.
 - HTTP Tools reject `operation_mode=read` with write-capable methods. Their
   `http`/`https` scheme and hostname allow-list are checked before the initial
   request and before every bounded redirect; automatic redirects are disabled.
+- Cross-origin redirects remove all headers classified as credential-bearing
+  by the shared case/separator-normalized redaction classifier. Same-origin
+  headers remain available, ordinary request/correlation headers are preserved,
+  and sanitized multi-hop state never restores credentials. The same classifier
+  redacts nested approval snapshots and protected Admin/audit views, while the
+  approval fingerprint continues to cover raw credential intent.
 - HTTP responses are streamed and always closed. `config.max_response_bytes`
   defaults to 1 MiB (clamped to 1 KiB..10 MiB), applies to success/error bodies
   and is distinct from the 4,000-character model-facing preview.

@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError
 
 from ai_hub.models import ToolDefinition
 from ai_hub.services.contracts import validate_payload
+from ai_hub.services.credential_safety import is_sensitive_credential_name
 from ai_hub.services.knowledge_tooling import (
     BIND_AGENT_CONTEXT_CONFIG_KEY,
     is_bound_knowledge_tool,
@@ -190,11 +191,10 @@ def _redirect_headers(headers: dict, source_url: str, target_url: str) -> dict:
     if source_origin == target_origin:
         return headers
 
-    sensitive_headers = {"authorization", "cookie", "proxy-authorization"}
     return {
         name: value
         for name, value in headers.items()
-        if str(name).lower() not in sensitive_headers
+        if not is_sensitive_credential_name(name)
     }
 
 

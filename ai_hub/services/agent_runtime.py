@@ -608,6 +608,7 @@ def execute_agent(
 ) -> dict:
     require_active_agent(agent)
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
+    model_cfg = resolve_model_config(agent.model_config)
     direct_tool_ids = set(
         agent.tools.filter(is_active=True).values_list("pk", flat=True)
     )
@@ -623,7 +624,6 @@ def execute_agent(
         policy=tool_policy,
         agent=agent,
     )
-    model_cfg = resolve_model_config(agent.model_config)
 
     # Include tool results in the same LLM call so the agent can reason about them immediately.
     # Without this, tool output only appears in previous_response on the *next* iteration.

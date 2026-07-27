@@ -384,7 +384,7 @@ database status or migration.
 
 ## `ToolExecutionRun`
 
-Stores one deliberate tool execution through the unified runtime.
+Stores one audited reusable Tool execution.
 
 Important fields:
 
@@ -400,8 +400,19 @@ Important fields:
 - `latency_ms`: measured execution time.
 
 GAME action runs remain the durable audit record for selected GAME actions.
-`ToolExecutionRun` records reusable tool runtime calls so non-GAME and GAME
-adapter usage share the same execution trail.
+`ToolExecutionRun` is currently used by the resolved/deliberate runtime,
+session-backed `legacy_preexecute`, and applicable unified GAME Tool execution,
+so non-GAME and GAME adapter usage can share the same execution trail.
+`session` and `step_run` identify the owning execution when runtime context
+exists.
+
+`success` and `failed` describe the Tool attempt itself. A later Provider or
+Session failure does not rewrite an already successful Tool outcome. Multiple
+Tools in one legacy call retain independent results, while filtered or
+never-attempted Tools receive no execution record. Direct calls to the
+low-level `execute_tool()` service do not automatically create audit.
+
+This documentation alignment requires no schema or migration change.
 
 ## Host Adapter Models
 

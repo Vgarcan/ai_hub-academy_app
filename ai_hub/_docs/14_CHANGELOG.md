@@ -9,6 +9,35 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### Final Core Foundation closure
+
+- FFPR-002 makes `legacy_preexecute` validate current Model/Provider
+  configuration before Tool resolution or execution. Inactive or invalid state
+  cannot permit a Tool side effect before the runtime fails.
+- FFPR-003 gives session-backed `legacy_preexecute` one durable
+  `ToolExecutionRun` lifecycle for each Tool actually attempted. Tool success
+  remains success when the later Provider call fails and the Step/Session
+  becomes failed; Tool failure is persisted as failed before the error
+  propagates. Filtered or unattempted Tools create no misleading Tool audit.
+- Final Foundation Proof Restart 4 completed with no reproducible Core P0/P1:
+
+  ```text
+  Foundation baseline:
+  67f139140f846693af015a4f97643df819373d2a
+
+  Final Foundation Proof Restart 4:
+  PASS
+
+  Reproducible Core P0/P1:
+  NONE FOUND
+
+  AI Hub Core Foundations:
+  GREEN / CLOSED
+  ```
+
+  This records satisfaction of the agreed closure criteria on that baseline;
+  it does not claim that AI Hub can never contain another bug.
+
 #### Foundation boundary closure
 
 - HTTP Tool redirects and protected approval/audit representations now share

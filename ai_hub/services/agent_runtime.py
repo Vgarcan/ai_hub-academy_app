@@ -599,12 +599,89 @@ def execute_agent_deliberate(
     return output_payload
 
 
+def _execute_legacy_tools(
+    resolved_tools,
+    payload: dict,
+    *,
+    tool_policy: str,
+    agent: AgentProfile,
+    execution_context=None,
+) -> dict:
+    if execution_context is None:
+        return execute_tools(
+            [resolved.tool for resolved in resolved_tools],
+            payload,
+            policy=tool_policy,
+            agent=agent,
+        )
+    if tool_policy not in {TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY}:
+        raise ValidationError(f"Unknown tool execution policy '{tool_policy}'.")
+
+    output = {}
+    for resolved_tool in resolved_tools:
+        tool = resolved_tool.tool
+        if (
+            tool_policy == TOOL_POLICY_GAME_CONTEXT_ONLY
+            and get_game_tool_category(tool) != GAME_CONTEXT_TOOL
+        ):
+            continue
+
+        effective_payload = bind_tool_runtime_context(
+            tool,
+            payload,
+            agent=agent,
+        )
+        tool_run = _create_tool_run(
+            execution_context=execution_context,
+            agent=agent,
+            resolved_tool=resolved_tool,
+            input_payload=effective_payload,
+            status=ToolExecutionRun.Status.RUNNING,
+            approval_state=ToolExecutionRun.ApprovalState.NOT_REQUIRED,
+        )
+        tool_run.started_at = timezone.now()
+        tool_run.save(update_fields=["started_at"])
+        start = time.perf_counter()
+        try:
+            tool_result = execute_tool(tool, effective_payload, agent=agent)
+        except Exception as exc:
+            tool_run.status = ToolExecutionRun.Status.FAILED
+            tool_run.error_detail = str(exc)
+            tool_run.finished_at = timezone.now()
+            tool_run.latency_ms = int((time.perf_counter() - start) * 1000)
+            tool_run.save(
+                update_fields=[
+                    "status",
+                    "error_detail",
+                    "finished_at",
+                    "latency_ms",
+                ]
+            )
+            raise
+
+        tool_run.status = ToolExecutionRun.Status.SUCCESS
+        tool_run.output_payload = tool_result
+        tool_run.finished_at = timezone.now()
+        tool_run.latency_ms = int((time.perf_counter() - start) * 1000)
+        tool_run.save(
+            update_fields=[
+                "status",
+                "output_payload",
+                "finished_at",
+                "latency_ms",
+            ]
+        )
+        output[tool.name] = tool_result
+    return output
+
+
 def execute_agent(
     agent: AgentProfile,
     payload: dict,
     *,
     tool_policy: str = TOOL_POLICY_ALL,
     workspace=None,
+    execution_context=None,
 ) -> dict:
     require_active_agent(agent)
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
@@ -614,15 +691,16 @@ def execute_agent(
     )
     resolution = resolve_agent_tools(agent, workspace=workspace)
     executable_direct_tools = [
-        resolved.tool
+        resolved
         for resolved in resolution.tools
         if resolved.tool.pk in direct_tool_ids and not resolved.requires_approval
     ]
-    tools_data = execute_tools(
+    tools_data = _execute_legacy_tools(
         executable_direct_tools,
         payload,
-        policy=tool_policy,
+        tool_policy=tool_policy,
         agent=agent,
+        execution_context=execution_context,
     )
 
     # Include tool results in the same LLM call so the agent can reason about them immediately.

@@ -206,6 +206,22 @@ approval rows created before migration `0020` also have no verified
 fingerprint. The old run is rejected without execution; resume the parent flow
 and submit a fresh action request. Do not edit the stored fingerprint.
 
+## HTTP Tool Credential Header Is Missing After Redirect
+
+AI Hub preserves configured headers on a same-origin redirect. When scheme,
+hostname or port changes, it intentionally removes credential-bearing header
+names such as Authorization, Cookie, API-key, token, secret, password,
+credentials and private-key variants before contacting the permitted target.
+Allowing the destination host does not authorize it to receive another origin's
+credentials. The stripped state persists across later redirects, including a
+return to the original origin. If the destination needs its own credential,
+use a separate Tool configuration whose initial URL and credential belong to
+that origin; do not weaken redirect isolation.
+
+Approval snapshots likewise show the credential name with a
+`***REDACTED***` value. This is expected and does not weaken drift detection:
+the immutable fingerprint still covers the authoritative raw configuration.
+
 ## HTTP Tool Response Is Too Large
 
 An HTTP Tool can fail with `maximum response size` before reading the body when

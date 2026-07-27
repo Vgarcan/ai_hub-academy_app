@@ -165,12 +165,19 @@ matching grant. URLs require an explicit hostname allow-list and an `http` or
 `https` scheme. Redirects are followed explicitly rather than by the HTTP
 client: every hop is checked against the same allow-list before contact and the
 redirect count is bounded by `config.max_redirects` (default 5, maximum 10).
-Sensitive authentication/cookie headers are removed when a permitted redirect
-changes origin. Requests use streaming and every response is closed. A final
-body is bounded by `config.max_response_bytes` (default 1 MiB, clamped to
-1 KiB..10 MiB): an oversized `Content-Length` fails before body access and an
-unknown-length success or error body stops at `max_bytes + 1`. Bounded bytes are
-then decoded safely and retain the separate 4,000-character model-facing cap.
+When a permitted redirect changes scheme, hostname or port, a shared
+case/separator-normalized classifier removes credential-bearing headers,
+including Authorization, Cookie, API-key, token, secret, password,
+credentials and private-key variants. Same-origin redirects preserve configured
+headers. The runtime carries the current sanitized headers through later hops,
+so credentials removed by A -> B cannot reappear in A -> B -> C or A -> B -> A.
+Ordinary headers such as Accept, Content-Type, User-Agent, X-Request-ID and
+X-Correlation-ID remain available. Requests use streaming and every response is
+closed. A final body is bounded by `config.max_response_bytes` (default 1 MiB,
+clamped to 1 KiB..10 MiB): an oversized `Content-Length` fails before body
+access and an unknown-length success or error body stops at `max_bytes + 1`.
+Bounded bytes are then decoded safely and retain the separate 4,000-character
+model-facing cap.
 
 ## Knowledge Retrieval
 
@@ -311,6 +318,11 @@ fingerprint and continuation.
 Each approval persists a redacted execution-intent snapshot plus a canonical
 fingerprint covering the payload, Action config/contracts/risk, linked Tool and
 effective permission, effective Agent, and relevant workspace policy decision.
+Nested credential values use the same normalized classification as HTTP
+redirect isolation: reviewers can see that a credential header/configuration
+exists without seeing its plaintext. The fingerprint is deliberately computed
+from the authoritative unredacted intent, so credential changes still require
+reapproval even when both durable snapshots display `***REDACTED***`.
 Approval recomputes that fingerprint under the review locks. After that review
 transaction commits, the dispatcher discards its retained model instances,
 re-reads the authoritative run/session/Action/Goal/Workspace state, resolves

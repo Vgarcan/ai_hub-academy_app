@@ -94,6 +94,7 @@ def _execute_session_agent(
             payload,
             tool_policy=tool_policy,
             workspace=_session_workspace(session),
+            execution_context={"session": session, "step_run": step_run},
         )
     else:
         workspace = _session_workspace(session)

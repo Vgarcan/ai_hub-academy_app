@@ -1316,4 +1316,192 @@ class GameDelegationRun(models.Model):
             raise ValidationError("Terminal delegation runs require finished_at.")
 
 
+class KnowledgeLifecycleEvent(models.Model):
+    """Durable, append-only record of a COMMITTED Knowledge lifecycle change.
+
+    WHAT THIS IS
+    ------------
+    Corpus history, not execution history. One row means: a governed Knowledge
+    mutation **committed**. It is written inside the same transaction as the
+    mutation it describes, so the pair is atomic in both directions - there is
+    no committed governed mutation without its event, and no event claiming a
+    mutation that rolled back.
+
+    It is deliberately NOT an execution-attempt model. Rejected validation,
+    stale-review conflicts and exceptions produce no row: nothing changed, so
+    there is no state change to record. Durable auditing of *attempts* is a
+    separate concern and is not built here.
+
+    WHY NOT AN EXISTING AUDIT MODEL
+    -------------------------------
+    `ToolExecutionRun`, `GameActionRun`, `ExecutionSession` and
+    `ExecutionStepRun` are all execution-scoped: each requires a session, step,
+    tool or action to exist. A corpus mutation may have none of those - an
+    operator adjudicating a legacy document acts outside any AI execution
+    entirely - so reusing them would force a fabricated execution context and
+    couple corpus history to AI runtime lifetimes.
+
+    Numbered `1.12` rather than `4.x` on purpose: it belongs with the Knowledge
+    corpus models (1.3-1.5), not with the execution audit family.
+
+    REFERENCE-FIRST
+    ---------------
+    This model records facts and references. It never stores `curated_text`,
+    chunk content, `source_file` bytes, retrieval snippets, or any other
+    Knowledge body - not directly and not inside a generic payload. Every field
+    is a bounded scalar, which is enforced by test rather than left to habit.
+
+    WHAT IT DOES *NOT* AUDIT
+    ------------------------
+    This schema describes lifecycle facts: authority mode, status, generation
+    inputs, chunk set, generator identity/version and chunk count. It does NOT
+    carry before/after values for `collection`, so it cannot explain a
+    collection move - which is an authorization-boundary change and a separate,
+    security-sensitive future operation. The mutation foundation therefore
+    REFUSES a mutation that changes the collection, rather than committing a
+    change it cannot describe. Extend this schema first if that operation is
+    ever built.
+
+    Title and `curated_text` are likewise not copied here, but a change to
+    either moves the observed `i1` fingerprint, so the event still states
+    truthfully that the generation inputs moved.
+
+    APPEND-ONLY
+    -----------
+    Conceptually immutable once written. Core exposes no update or delete API
+    for these rows and does not register them in the Admin. Raw ORM can of
+    course still reach them; the contract is about supported Core behavior, not
+    about pretending the ORM can be locked out.
+    """
+
+    class PrincipalKind(models.TextChoices):
+        """WHO initiated the mutation.
+
+        Deliberately tiny and closed. This is an operator/system axis, not an
+        Agent identity axis: an `AgentProfile` is never a lifecycle principal,
+        and a model must never be able to declare one. Unlike `operation`, this
+        vocabulary is not expected to grow, so `choices` costs no migration
+        churn and buys validation.
+        """
+
+        HUMAN = "human", "Human operator"
+        SYSTEM = "system", "System or service"
+
+    # SET_NULL, never CASCADE: deleting a document must not erase the history of
+    # what was done to it. `document_id_snapshot` keeps the row intelligible
+    # after the FK is nulled.
+    document = models.ForeignKey(
+        KnowledgeDocument,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lifecycle_events",
+    )
+    # PositiveBigIntegerField, not PositiveIntegerField: DEFAULT_AUTO_FIELD is
+    # BigAutoField, so these ids are 64-bit. A durable snapshot must never have
+    # a narrower numeric domain than the identifier it copies - the whole point
+    # of the snapshot is that it stays valid after the FK is gone, and a 32-bit
+    # column would start failing on a long-lived corpus exactly when the history
+    # matters most.
+    document_id_snapshot = models.PositiveBigIntegerField()
+    # Bounded collection context: which collection owned the document when the
+    # mutation committed. An id only - names and collection bodies are not
+    # duplicated here. Collection MOVES are an authorization concern, are NOT a
+    # governed operation in this slice, and are refused by the mutation
+    # foundation precisely because this schema cannot describe one truthfully.
+    collection_id_snapshot = models.PositiveBigIntegerField()
+
+    # No `choices` on purpose. The operation vocabulary is known to grow as
+    # later slices add adjudication, explicit authoring, derived generation,
+    # regeneration and repair, and Django emits an AlterField migration for
+    # every `choices` change - schema churn for a column whose storage never
+    # changes. The service layer validates the slug shape instead, which keeps
+    # the column queryable without inventing speculative operations now.
+    operation = models.CharField(max_length=64)
+    # Optional bounded machine code explaining WHY. Never free-form prose, and
+    # never a place to smuggle content.
+    reason_code = models.CharField(max_length=64, blank=True)
+
+    # Principal snapshot, not a foreign key: the record must stay intelligible
+    # after a host deletes the user, and Core must not depend on a host's user
+    # model. `principal_identifier` is a stable opaque handle (a primary key or
+    # username). Do not put an email address or any other personal contact
+    # detail here.
+    #
+    # There is deliberately NO display-label column. A human-readable name is
+    # convenience data, and audit rows are kept indefinitely, so a label column
+    # is a standing invitation to persist personal data forever for no
+    # correctness benefit. A host that wants to show a name can resolve it from
+    # the identifier at display time. Data minimization wins absent a proven
+    # requirement, and no requirement was found.
+    principal_kind = models.CharField(max_length=20, choices=PrincipalKind.choices)
+    principal_identifier = models.CharField(max_length=150)
+
+    # --- Lifecycle facts BEFORE and AFTER, mirroring KnowledgeDocument -------
+    previous_authority_mode = models.CharField(max_length=20)
+    new_authority_mode = models.CharField(max_length=20)
+    # Status is recorded because it gates retrievability (D-L3). Without it a
+    # governed ACTIVE/ARCHIVED transition would commit unexplained.
+    previous_status = models.CharField(max_length=20)
+    new_status = models.CharField(max_length=20)
+    previous_generation_input_fingerprint = models.CharField(max_length=80, blank=True)
+    new_generation_input_fingerprint = models.CharField(max_length=80, blank=True)
+    previous_generation_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    new_generation_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    previous_generator_identity = models.CharField(max_length=64, blank=True)
+    new_generator_identity = models.CharField(max_length=64, blank=True)
+    previous_generator_version = models.PositiveIntegerField(null=True, blank=True)
+    new_generator_version = models.PositiveIntegerField(null=True, blank=True)
+    previous_chunk_count = models.PositiveIntegerField()
+    new_chunk_count = models.PositiveIntegerField()
+    # Observed fingerprints, which are NOT the same as the recorded generation
+    # fingerprints above: these are what the rows actually hashed to inside the
+    # mutation transaction. Together the two pairs are the tamper evidence a
+    # later reader needs - a recorded/observed divergence is exactly what
+    # Preflight V2 reports as DERIVED_CHUNKS_MODIFIED.
+    #
+    # The observed INPUT pair is also what makes a title or curated_text edit
+    # explicable from the audit alone: neither field is copied here, but a change
+    # to either moves `i1`, so the event still says truthfully that the
+    # generation inputs moved.
+    previous_observed_input_fingerprint = models.CharField(max_length=80, blank=True)
+    new_observed_input_fingerprint = models.CharField(max_length=80, blank=True)
+    previous_observed_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    new_observed_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        verbose_name = "1.12 Knowledge lifecycle event"
+        verbose_name_plural = "1.12 Knowledge lifecycle events - corpus mutation history"
+        # Two indexes, deliberately not a speculative set.
+        #
+        # `document_id_snapshot` first, because it - not the FK - is the DURABLE
+        # history key: once the document is deleted the FK is NULL and the
+        # snapshot is the only way to ask "what happened to document 42?".
+        # Leaving that unindexed would make the one query the SET_NULL design
+        # exists to support a full-table scan. Django already indexes the FK
+        # itself, so no separate index for it is added.
+        #
+        # `operation` is indexed because the column is explicitly intended to be
+        # queryable; both are paired with `created_at` since lifecycle history is
+        # always read in time order.
+        indexes = [
+            models.Index(
+                fields=["document_id_snapshot", "created_at"],
+                name="aihub_klc_evt_docsnap_idx",
+            ),
+            models.Index(
+                fields=["operation", "created_at"], name="aihub_klc_evt_op_time_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.operation} on document #{self.document_id_snapshot}: "
+            f"{self.previous_authority_mode} -> {self.new_authority_mode}"
+        )
+
+
 # === END REUSABLE AI PIPELINE CORE =========================================

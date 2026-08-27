@@ -1125,6 +1125,23 @@ class GovernedMutationConcurrencyTests(TransactionTestCase):
 
     reset_sequences = True
 
+    def test_the_lifecycle_event_schema_is_present_for_this_test_process(self):
+        """Runs on EVERY backend, unlike the locking test below.
+
+        `TransactionTestCase`s share one un-rolled-back database, so a migration
+        regression test earlier in the suite can hand this class a schema that no
+        longer matches the ORM. That is exactly what happened on PostgreSQL CI at
+        `42a071f`: the event table had been dropped and the racing test failed
+        with `relation "ai_hub_knowledgelifecycleevent" does not exist`.
+
+        The locking test skips on SQLite, so without this guard the leak was
+        invisible to two of the three CI jobs. This one never skips.
+        """
+        self.assertIn(
+            KnowledgeLifecycleEvent._meta.db_table,
+            set(connection.introspection.table_names()),
+        )
+
     def test_racing_governed_mutations_produce_one_commit_and_one_conflict(self):
         if not connection.features.has_select_for_update:
             self.skipTest(

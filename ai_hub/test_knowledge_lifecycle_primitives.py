@@ -20,9 +20,43 @@ from ai_hub.models import (
     KnowledgeCollection,
     KnowledgeDocument,
     KnowledgeDocumentChunk,
+    KnowledgeLifecycleEvent,
     ModelConfig,
     ProviderConfig,
 )
+
+
+def current_migration_targets():
+    """The CURRENT leaves of the migration graph, for every app.
+
+    Read from the graph rather than hard-coded. A migration regression test
+    necessarily names a HISTORICAL migration as its subject, but the database it
+    leaves behind is shared with every test that runs afterwards, so the
+    restoration target must be "wherever the project is now" - not the migration
+    under test, which stops being the leaf the moment the next one ships.
+
+    All apps, not just `ai_hub`: migrating `ai_hub` backwards also unapplies any
+    migration in another app that depends on it, and those must come back too.
+    """
+    executor = MigrationExecutor(connection)
+    executor.loader.build_graph()
+    return executor.loader.graph.leaf_nodes()
+
+
+def restore_migration_state():
+    """Return the test database to the current migration graph leaves."""
+    executor = MigrationExecutor(connection)
+    executor.loader.build_graph()
+    targets = executor.loader.graph.leaf_nodes()
+    executor.migrate(targets)
+    executor.loader.build_graph()
+    return targets
+
+
+def applied_ai_hub_migrations():
+    executor = MigrationExecutor(connection)
+    executor.loader.build_graph()
+    return {node for node in executor.loader.applied_migrations if node[0] == "ai_hub"}
 from ai_hub.services.knowledge_lifecycle import (
     CHUNK_SET_FINGERPRINT_CONTRACT,
     GENERATION_INPUT_FINGERPRINT_CONTRACT,
@@ -564,14 +598,153 @@ class LifecycleFieldsDoNotAffectRetrievalTests(TestCase):
                     self.assertNotIn(field, source)
 
 
+class MigrationStateIsolationTests(TransactionTestCase):
+    """A migration test must not corrupt the schema the next test expects.
+
+    Order-independent by construction: each test performs the backwards move
+    itself and then invokes the same restoration used in teardown, so the proof
+    does not depend on running after `LifecycleMigrationTests`. The final test
+    additionally asserts the state a following test would actually observe.
+    """
+
+    def tearDown(self):
+        restore_migration_state()
+
+    def test_restore_returns_the_database_to_the_graph_leaves(self):
+        MigrationExecutor(connection).migrate([("ai_hub", "0020_approval_execution_intent")])
+        self.assertNotIn(
+            ("ai_hub", "0022_knowledge_lifecycle_event"), applied_ai_hub_migrations()
+        )
+
+        targets = restore_migration_state()
+
+        self.assertEqual(set(targets), set(current_migration_targets()))
+        applied = applied_ai_hub_migrations()
+        for node in current_migration_targets():
+            if node[0] == "ai_hub":
+                with self.subTest(node=node):
+                    self.assertIn(node, applied)
+
+    def test_every_current_model_has_its_table_after_restoration(self):
+        """Graph-based, so a future migration is covered without editing this."""
+        MigrationExecutor(connection).migrate([("ai_hub", "0020_approval_execution_intent")])
+        restore_migration_state()
+
+        tables = set(connection.introspection.table_names())
+        from django.apps import apps
+
+        missing = [
+            model._meta.db_table
+            for model in apps.get_app_config("ai_hub").get_models()
+            if model._meta.managed and model._meta.db_table not in tables
+        ]
+        self.assertEqual(missing, [])
+
+    def test_the_lifecycle_event_table_survives_a_migration_test(self):
+        """The exact table whose absence broke PostgreSQL CI on 42a071f."""
+        MigrationExecutor(connection).migrate([("ai_hub", "0020_approval_execution_intent")])
+        self.assertNotIn(
+            KnowledgeLifecycleEvent._meta.db_table,
+            set(connection.introspection.table_names()),
+        )
+
+        restore_migration_state()
+
+        self.assertIn(
+            KnowledgeLifecycleEvent._meta.db_table,
+            set(connection.introspection.table_names()),
+        )
+
+    def test_a_following_test_can_actually_write_a_lifecycle_event(self):
+        """Introspection is not enough - prove the ORM can use the restored
+        schema, which is what the next test in the suite will do."""
+        MigrationExecutor(connection).migrate([("ai_hub", "0020_approval_execution_intent")])
+        restore_migration_state()
+
+        collection = KnowledgeCollection.objects.create(name="Post-restore Collection")
+        document = KnowledgeDocument.objects.create(
+            collection=collection, title="Post-restore Document",
+        )
+        event = KnowledgeLifecycleEvent.objects.create(
+            document=document,
+            document_id_snapshot=document.pk,
+            collection_id_snapshot=collection.pk,
+            operation="isolation_probe",
+            principal_kind=KnowledgeLifecycleEvent.PrincipalKind.SYSTEM,
+            principal_identifier="isolation-test",
+            previous_authority_mode="unknown",
+            new_authority_mode="unknown",
+            previous_status=document.status,
+            new_status=document.status,
+            previous_chunk_count=0,
+            new_chunk_count=0,
+        )
+        self.assertEqual(KnowledgeLifecycleEvent.objects.get(pk=event.pk).operation, "isolation_probe")
+
+    def test_the_restore_target_is_not_hard_coded_to_the_migration_under_test(self):
+        """The bug in one assertion.
+
+        `LifecycleMigrationTests.MIGRATE_TO` names a historical migration, and
+        the graph has moved past it. Restoring to `MIGRATE_TO` would therefore
+        leave the database behind - which is precisely what broke CI.
+        """
+        self.assertNotEqual(
+            set(LifecycleMigrationTests.MIGRATE_TO), set(current_migration_targets())
+        )
+        self.assertNotIn(
+            LifecycleMigrationTests.MIGRATE_TO[0], set(current_migration_targets())
+        )
+
+
 class LifecycleMigrationTests(TransactionTestCase):
-    """Migration 0021 regression: additive, and every legacy row becomes UNKNOWN."""
+    """Migration 0021 regression: additive, and every legacy row becomes UNKNOWN.
+
+    RESTORATION CONTRACT
+    --------------------
+    This test deliberately moves the shared test database backwards to a
+    historical migration. Whatever it does in between, it MUST hand the database
+    back at the CURRENT migration graph leaves, because every test that runs
+    afterwards has model state at HEAD and will find the ORM and the schema
+    disagreeing otherwise.
+
+    The restore target is therefore read from the graph, never hard-coded.
+    `MIGRATE_TO` names the migration UNDER TEST (`0021`) and is only used to
+    drive the assertions; it is deliberately NOT the teardown target. An earlier
+    version of this class restored to `MIGRATE_TO`, which was correct exactly
+    until `0022` shipped - after that it silently left the database one
+    migration behind and dropped `ai_hub_knowledgelifecycleevent` for the rest
+    of the suite.
+    """
 
     MIGRATE_FROM = [("ai_hub", "0020_approval_execution_intent")]
     MIGRATE_TO = [("ai_hub", "0021_knowledge_lifecycle_facts")]
 
+    def setUp(self):
+        # Runs AFTER tearDown (unittest cleanups precede Django's _post_teardown)
+        # and inside THIS test, so a broken restoration fails here rather than
+        # silently corrupting whatever runs next. Deliberately not a separate
+        # test class: another class's own teardown would heal the leak first and
+        # hide it, which is how this survived two of three CI jobs.
+        self.addCleanup(self._assert_migration_state_restored)
+
     def tearDown(self):
-        MigrationExecutor(connection).migrate(self.MIGRATE_TO)
+        # Graph leaves, NOT self.MIGRATE_TO. See the restoration contract above.
+        restore_migration_state()
+
+    def _assert_migration_state_restored(self):
+        applied = applied_ai_hub_migrations()
+        for node in current_migration_targets():
+            if node[0] == "ai_hub":
+                self.assertIn(
+                    node, applied,
+                    f"{type(self).__name__} left the database behind the migration "
+                    f"graph at {node}; the next test would see the ORM and the "
+                    "schema disagree.",
+                )
+        self.assertIn(
+            KnowledgeLifecycleEvent._meta.db_table,
+            set(connection.introspection.table_names()),
+        )
 
     def test_existing_documents_migrate_to_unknown_and_are_otherwise_untouched(self):
         executor = MigrationExecutor(connection)

@@ -188,6 +188,34 @@ class KnowledgeDocument(models.Model):
         ACTIVE = "active", "Active"
         ARCHIVED = "archived", "Archived"
 
+    class ChunkAuthorityMode(models.TextChoices):
+        """Who is authoritative for this document's retrieval chunk set.
+
+        Authority is a property of the chunk SET, not of an individual chunk,
+        so it lives on the document that owns the set. A per-chunk mode would
+        permit an incoherent half-derived document with no defined
+        regeneration semantics.
+
+        UNKNOWN  - legacy or ungoverned. Generation provenance may be absent
+                   and must not be trusted. Never auto-repaired, never
+                   silently reclassified. This is the safe default for every
+                   pre-existing row and for any raw ORM write, until a future
+                   governed write explicitly declares authority.
+        DERIVED  - the set was generated from a source representation.
+                   NOTE: this alone NEVER authorizes overwrite. Safe
+                   regeneration also requires the current generation inputs to
+                   match `generation_input_fingerprint` AND the current chunks
+                   to match `generation_chunk_set_fingerprint`.
+        EXPLICIT - the chunk set itself was deliberately authored and is
+                   authoritative for retrieval. Generation provenance is
+                   normally blank, and `curated_text` changing does not make
+                   it stale.
+        """
+
+        UNKNOWN = "unknown", "Unknown (legacy or ungoverned)"
+        DERIVED = "derived", "Derived from a source"
+        EXPLICIT = "explicit", "Explicitly authored"
+
     collection = models.ForeignKey(KnowledgeCollection, on_delete=models.CASCADE, related_name="documents")
     title = models.CharField(max_length=180)
     curated_text = models.TextField(blank=True)
@@ -196,6 +224,29 @@ class KnowledgeDocument(models.Model):
     language = models.CharField(max_length=20, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     notes = models.TextField(blank=True)
+    # --- Lifecycle facts. Persisted only; no runtime code reads them yet. ----
+    # Deliberately unconstrained beyond types and defaults: the governed
+    # mutation boundary does not exist, raw ORM stays an intentional escape
+    # hatch, and a future preflight must be able to REPORT inconsistent
+    # combinations rather than be prevented from observing them.
+    chunk_authority_mode = models.CharField(
+        max_length=20,
+        choices=ChunkAuthorityMode.choices,
+        default=ChunkAuthorityMode.UNKNOWN,
+    )
+    # Versioned fingerprints ("i1:<sha256>" / "c1:<sha256>"); see
+    # ai_hub.services.knowledge_lifecycle. Blank unless mode is DERIVED.
+    #
+    # generation_input_fingerprint covers the COMPLETE mutable input set the
+    # recorded generator reads - for curated_text_single_chunk that is BOTH
+    # `title` (which becomes section_title) and `curated_text` (which becomes
+    # content). A curated_text-only fingerprint could not detect a title change.
+    generation_input_fingerprint = models.CharField(max_length=80, blank=True)
+    generation_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    generator_identity = models.CharField(max_length=64, blank=True)
+    # Null - not zero - when no generator applies. A fake version would be a
+    # provenance claim about a generator that never ran.
+    generator_version = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

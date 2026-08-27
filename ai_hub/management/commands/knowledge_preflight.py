@@ -1,8 +1,9 @@
 """
-Report structural retrieval readiness of the Knowledge corpus.
+Report structural retrieval readiness and lifecycle state of the Knowledge corpus.
 
 READ-ONLY. This command inspects and reports. It never repairs, backfills,
-chunks, or writes anything, and it has no --fix or --write mode by design.
+chunks, adjudicates, regenerates or writes anything, and it has no --fix,
+--write, --repair, --backfill, --regenerate or --adjudicate mode by design.
 
 Usage:
     python manage.py knowledge_preflight
@@ -27,8 +28,8 @@ from ai_hub.services.knowledge_preflight import (
 
 class Command(BaseCommand):
     help = (
-        "Report structural retrieval readiness of the Knowledge corpus. "
-        "Read-only: this command never modifies Knowledge data."
+        "Report structural retrieval readiness and lifecycle state of the "
+        "Knowledge corpus. Read-only: this command never modifies Knowledge data."
     )
 
     def add_arguments(self, parser):
@@ -96,13 +97,14 @@ class Command(BaseCommand):
         if blockers:
             self.stdout.write(
                 self.style.WARNING(
-                    f"{blockers} actionable issue(s) found. Nothing was changed: "
-                    "this command is read-only."
+                    f"{blockers} actionable issue(s) found — structural and/or "
+                    "lifecycle. Nothing was changed: this command is read-only."
                 )
             )
         else:
             self.stdout.write(
                 self.style.SUCCESS(
-                    "No actionable structural issues found. Nothing was changed."
+                    "No actionable structural or lifecycle issues found. "
+                    "Nothing was changed: this command is read-only."
                 )
             )

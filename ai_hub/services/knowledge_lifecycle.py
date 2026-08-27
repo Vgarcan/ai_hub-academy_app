@@ -243,6 +243,72 @@ def generation_input_fingerprint(identity: str, *, title, curated_text) -> str:
     return builder(title=title, curated_text=curated_text)
 
 
+# --------------------------------------------------------------------------
+# Generator output projection
+# --------------------------------------------------------------------------
+# What a supported generator WOULD produce from a document's current inputs,
+# computed without writing anything. Added in Slice 10 so an operator decision
+# can ask "is this chunk set already exactly what the generator produces?"
+# without running the generator, and therefore without touching the chunks.
+#
+# This lives beside the input contract on purpose: "what generator X reads" and
+# "what generator X emits" are the same piece of knowledge, and splitting them
+# across modules is how they drift apart.
+#
+# CRITICAL: this is a MODEL of `ai_hub.services.knowledge_ingestion.
+# ensure_initial_knowledge_chunk`, not the generator itself. The real writer is
+# deliberately untouched (it remains an UNKNOWN-producing compatibility path).
+# The two are bound by test, not by hope - see
+# `test_knowledge_adjudication.ProjectionMatchesRealGeneratorTests`, which runs
+# the real writer and compares.
+
+
+def curated_text_single_chunk_projection(document) -> list[dict]:
+    """Chunk set `curated_text_single_chunk` v1 would produce. Pure; no I/O.
+
+    Mirrors the real writer: one chunk at index 1, `section_title` = the title
+    verbatim, `content` = `curated_text` stripped. Returns ``[]`` when the
+    generator would produce nothing, which is what the writer does for empty
+    curated text.
+
+    Only the fields the `c1` chunk-set contract covers are projected.
+    `token_estimate` and `metadata` are deliberately absent: `c1` excludes them,
+    so including them here would impose a stricter notion of chunk-set identity
+    than the lifecycle contract itself uses.
+    """
+    content = str(getattr(document, "curated_text", "") or "").strip()
+    if not content:
+        return []
+    return [
+        {
+            "chunk_index": 1,
+            "section_title": document.title,
+            "content": content,
+        }
+    ]
+
+
+_OUTPUT_PROJECTIONS = {
+    GENERATOR_CURATED_TEXT_SINGLE_CHUNK: curated_text_single_chunk_projection,
+}
+
+
+def generator_output_projection(identity: str, document) -> list[dict]:
+    """Projected chunk set for a named generator identity.
+
+    Raises `UnsupportedGeneratorError` for an unknown identity rather than
+    guessing, for the same reason the input contract does: a fabricated match is
+    worse than an honest "cannot compute".
+    """
+    projection = _OUTPUT_PROJECTIONS.get(identity)
+    if projection is None:
+        raise UnsupportedGeneratorError(
+            f"No output projection for generator identity {identity!r}. "
+            f"Supported: {sorted(_OUTPUT_PROJECTIONS)}."
+        )
+    return projection(document)
+
+
 def document_generation_input_fingerprint(document, identity: str) -> str:
     """Current input fingerprint for a document under a named generator."""
     return generation_input_fingerprint(

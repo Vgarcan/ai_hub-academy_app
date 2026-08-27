@@ -939,9 +939,23 @@ class MutationSecurityBoundaryTests(TestCase):
         self.assertEqual(before, _snapshot_database())
         self.assertEqual(KnowledgeLifecycleEvent.objects.count(), 0)
 
-    def test_no_production_module_imports_the_internal_mutator(self):
-        """Nothing calls it yet; the first consumer arrives in an authorized
-        slice."""
+    # The only production modules permitted to use the internal mutator: in-Core,
+    # operation-specific services, which is exactly what Slice 9 said its callers
+    # would be. Slice 10 added the first one. This list must stay short and must
+    # never include a host adapter, an Admin view, a tool handler or anything
+    # reachable from a model.
+    SANCTIONED_INTERNAL_MUTATOR_CALLERS = {
+        "services/knowledge_adjudication.py",
+    }
+
+    def test_only_sanctioned_operation_services_import_the_internal_mutator(self):
+        """The boundary is an allowlist, not an absence.
+
+        Slice 9 asserted nothing imported it, which was true only while it had
+        no consumers. Weakening that to "anything may" would have thrown the
+        guarantee away, so it is scoped instead: an unlisted importer still
+        fails.
+        """
         import pathlib
 
         base = pathlib.Path(__file__).resolve().parent
@@ -951,10 +965,26 @@ class MutationSecurityBoundaryTests(TestCase):
                 continue
             if path.name == "knowledge_mutation.py":
                 continue
+            relative = path.relative_to(base).as_posix()
+            if relative in self.SANCTIONED_INTERNAL_MUTATOR_CALLERS:
+                continue
             source = path.read_text(encoding="utf-8")
             if "_governed_knowledge_mutation" in source or "_GovernedMutation" in source:
-                offenders.append(str(path.relative_to(base)))
+                offenders.append(relative)
         self.assertEqual(offenders, [])
+
+    def test_every_sanctioned_caller_actually_exists_and_uses_it(self):
+        """A stale allowlist entry would silently widen the boundary."""
+        import pathlib
+
+        base = pathlib.Path(__file__).resolve().parent
+        for relative in self.SANCTIONED_INTERNAL_MUTATOR_CALLERS:
+            with self.subTest(module=relative):
+                path = base / relative
+                self.assertTrue(path.exists(), f"{relative} no longer exists")
+                self.assertIn(
+                    "_governed_knowledge_mutation", path.read_text(encoding="utf-8")
+                )
 
     def test_foundation_exposes_no_domain_operation(self):
         """3d/3e must not be implemented under 3c's name."""

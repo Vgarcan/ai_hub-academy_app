@@ -946,6 +946,7 @@ class MutationSecurityBoundaryTests(TestCase):
     # reachable from a model.
     SANCTIONED_INTERNAL_MUTATOR_CALLERS = {
         "services/knowledge_adjudication.py",
+        "services/knowledge_regeneration.py",
     }
 
     def test_only_sanctioned_operation_services_import_the_internal_mutator(self):

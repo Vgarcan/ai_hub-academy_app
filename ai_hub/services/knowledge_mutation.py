@@ -300,17 +300,23 @@ class _GovernedMutation:
     principal: KnowledgeMutationPrincipal
 
 
-def build_snapshot(document):
-    """Measure `document` as it currently is. Pure read; writes nothing.
+def _snapshot_from_chunk_rows(document, chunks):
+    """Build the snapshot from chunk rows the CALLER already holds.
 
-    Reads chunk bodies to hash them and discards them immediately - the digest
-    is kept, the text is not.
+    Deterministic and pure: given the same document instance and the same rows,
+    it always produces the same snapshot. It performs no query of its own.
+
+    Extracted so an operator-review surface can read the chunk rows ONCE, retain
+    them to show a human, and derive the snapshot from those exact values. If the
+    displayed bytes and the hashed bytes came from two separate reads, a document
+    that changed and changed back between them would let an operator review one
+    chunk set while the compare-and-swap bound another - the review would be of
+    content that never commits. One read closes that.
+
+    `chunks` may be mappings (`.values()` rows) or objects exposing
+    `chunk_index` / `section_title` / `content`; the chunk-set contract accepts
+    both.
     """
-    chunks = list(
-        document.chunks.order_by("chunk_index").values(
-            "chunk_index", "section_title", "content"
-        )
-    )
     return KnowledgeMutationSnapshot(
         document_id=document.pk,
         collection_id=document.collection_id,
@@ -327,6 +333,23 @@ def build_snapshot(document):
         generator_identity=document.generator_identity or "",
         generator_version=document.generator_version,
     )
+
+
+def build_snapshot(document):
+    """Measure `document` as it currently is. Pure read; writes nothing.
+
+    Reads chunk bodies to hash them and discards them immediately - the digest
+    is kept, the text is not. Behaviour is unchanged: this is exactly the same
+    query it always issued, with the deterministic construction delegated to
+    `_snapshot_from_chunk_rows` so a review surface can reuse it with rows it
+    already holds.
+    """
+    chunks = list(
+        document.chunks.order_by("chunk_index").values(
+            "chunk_index", "section_title", "content"
+        )
+    )
+    return _snapshot_from_chunk_rows(document, chunks)
 
 
 def verify_expected_state(snapshot, expected):

@@ -884,16 +884,50 @@ class RegenerationSecurityBoundaryTests(TestCase):
                 for forbidden in ("regenerat", "rechunk", "knowledge_regeneration"):
                     self.assertNotIn(forbidden, blob)
 
-    def test_no_management_command_invokes_regeneration(self):
-        """No operator surface in this slice, deliberately."""
+    # The ONE management command sanctioned to invoke governed lifecycle
+    # operations: the Slice 13 operator surface. Every other command, and every
+    # Agent-facing module, stays forbidden.
+    #
+    # Slice 11/12 asserted that NO command invoked these, which was true only
+    # while no operator surface existed. Deleting the assertion would have
+    # thrown the guarantee away; scoping it keeps an unlisted command failing.
+    SANCTIONED_OPERATOR_COMMANDS = {"knowledge_lifecycle_action.py"}
+
+    def _command_paths(self):
         import pathlib
 
         commands = pathlib.Path(__file__).resolve().parent / "management" / "commands"
-        for path in sorted(commands.glob("*.py")):
+        self.assertTrue(commands.is_dir(), "management/commands is missing")
+        return sorted(p for p in commands.glob("*.py") if p.name != "__init__.py")
+
+    def test_every_sanctioned_operator_command_exists(self):
+        """A stale allowlist entry would silently widen the boundary."""
+        names = {p.name for p in self._command_paths()}
+        for sanctioned in self.SANCTIONED_OPERATOR_COMMANDS:
+            with self.subTest(command=sanctioned):
+                self.assertIn(sanctioned, names)
+
+    def test_only_the_sanctioned_operator_command_invokes_regeneration(self):
+        for path in self._command_paths():
+            if path.name in self.SANCTIONED_OPERATOR_COMMANDS:
+                continue
             with self.subTest(command=path.name):
                 source = path.read_text(encoding="utf-8")
                 for symbol in self.REGENERATION_SYMBOLS:
                     self.assertNotIn(symbol, source)
+
+    def test_knowledge_preflight_never_invokes_regeneration(self):
+        """The diagnostic surface stays read-only, allowlist or not."""
+        import pathlib
+
+        preflight = (
+            pathlib.Path(__file__).resolve().parent
+            / "management" / "commands" / "knowledge_preflight.py"
+        )
+        self.assertTrue(preflight.exists())
+        source = preflight.read_text(encoding="utf-8")
+        for symbol in self.REGENERATION_SYMBOLS:
+            self.assertNotIn(symbol, source)
 
     def test_the_public_surface_is_exactly_one_operation(self):
         import inspect

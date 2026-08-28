@@ -192,11 +192,26 @@ def _validate_candidate(document_id, candidate):
     return candidate
 
 
-def _require_regenerable(document):
-    """The four-part safety proof, evaluated against the LOCKED document.
+def _require_derived_with_usable_generator(document):
+    """The first three parts of the safety proof, against the LOCKED document.
+
+    Shared with Slice 12's `discard_modified_chunks_and_regenerate`, because the
+    two operations agree on everything EXCEPT the chunk-set condition, which they
+    require in opposite directions:
+
+        this helper   DERIVED + complete provenance + supported generator
+                      + recorded version <= this Core's
+        Slice 11      ... and observed c1 == recorded c1   (chunks untouched)
+        Slice 12      ... and observed c1 != recorded c1   (chunks modified)
+
+    Extracted rather than copied so the shared rules cannot drift into two
+    divergent statements of the same contract. It deliberately does NOT read the
+    chunk set: deciding what the observed fingerprint must equal is each
+    operation's own business.
 
     Returns the generator identity the document is regenerated under - its own
-    recorded one, never a substituted default.
+    recorded one, never a substituted default - and the version this Core
+    implements for it.
     """
     modes = KnowledgeDocument.ChunkAuthorityMode
 
@@ -247,6 +262,20 @@ def _require_regenerable(document):
             f"{current_version} this Core implements. Regenerating would "
             "downgrade the chunk set; upgrade Core instead."
         )
+
+    return identity, current_version
+
+
+def _require_regenerable(document):
+    """The FULL four-part safety proof for ordinary regeneration.
+
+    The shared prefix plus the condition that makes ordinary regeneration safe:
+    the chunks must still be exactly what Core recorded generating. This is the
+    refusal Slice 12 exists because of, and it is NOT relaxed here - a document
+    whose chunks were modified outside governance still gets
+    `ChunkSetModifiedError` from this path, always.
+    """
+    identity, current_version = _require_derived_with_usable_generator(document)
 
     observed = document_chunk_set_fingerprint(document)
     if observed != document.generation_chunk_set_fingerprint:

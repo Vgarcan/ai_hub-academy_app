@@ -830,6 +830,247 @@ class CandidateGeneratorVersionTests(TestCase):
                 )
 
 
+class CandidateVersionDirectionTests(TestCase):
+    """The rendered DIRECTION between recorded and candidate must be true.
+
+    There are four relationships, not three. An earlier revision collapsed
+    every unequal pair into "advance", which stated the direction falsely
+    whenever the document recorded a version this Core has not reached:
+    `recorded v2 -> candidate v1` is not an advance.
+
+    Nothing about eligibility is tested here - these are display facts. The
+    service remains the only thing that decides whether an operation is
+    permitted, and the later tests in this class pin that it still refuses the
+    version-ahead relationship exactly as before.
+    """
+
+    CURRENT = GENERATOR_CURATED_TEXT_SINGLE_CHUNK_VERSION
+    AHEAD = GENERATOR_CURATED_TEXT_SINGLE_CHUNK_VERSION + 1
+    BEHIND = GENERATOR_CURATED_TEXT_SINGLE_CHUNK_VERSION - 1
+
+    ADVANCE = "Generator version advance"
+    LOWER = "Candidate generator version is LOWER than recorded"
+    ESTABLISHING = "Generator version: establishing"
+    UNCHANGED = "unchanged from the recorded version"
+
+    def setUp(self):
+        self.collection = KnowledgeCollection.objects.create(name="Version Direction")
+
+    def _rendered(self, document, action):
+        """Render the review, then abort. No service call, no writes."""
+        out = StringIO()
+        with mock.patch("builtins.input", return_value="abort"):
+            try:
+                call_command(
+                    COMMAND, document=document.pk, action=action,
+                    principal_kind="human", principal_id="op",
+                    reason_code="operator_reviewed", stdout=out,
+                )
+            except CommandError:
+                pass
+        return out.getvalue()
+
+    def _at_version(self, document, version):
+        KnowledgeDocument.objects.filter(pk=document.pk).update(
+            generator_version=version
+        )
+        document.refresh_from_db()
+        return document
+
+    def _facts(self, document_id):
+        return KnowledgeDocument.objects.filter(pk=document_id).values(
+            "chunk_authority_mode", "status", "generator_identity",
+            "generator_version", "generation_input_fingerprint",
+            "generation_chunk_set_fingerprint",
+        ).first()
+
+    # -- 1. no recorded version --------------------------------------------
+
+    def test_no_recorded_version_establishes_and_claims_no_direction(self):
+        document = make_unknown(self.collection, "Direction None")
+        self.assertIsNone(document.generator_version)
+
+        output = self._rendered(document, "adopt_unknown_as_derived")
+
+        self.assertIn(f"{self.ESTABLISHING} v{self.CURRENT}", output)
+        self.assertIn("the document records none", output)
+        # A first version is neither an advance nor a reduction.
+        self.assertNotIn(self.ADVANCE, output)
+        self.assertNotIn(self.LOWER, output)
+
+    # -- 2. recorded older than candidate ----------------------------------
+
+    def test_older_recorded_version_renders_an_advance(self):
+        document = make_derived(self.collection, "Direction Older", version=self.BEHIND)
+
+        output = self._rendered(document, "regenerate_derived_chunk_set")
+
+        self.assertIn(
+            f"{self.ADVANCE}: recorded v{self.BEHIND} -> candidate v{self.CURRENT}",
+            output,
+        )
+        self.assertNotIn(self.LOWER, output)
+
+    # -- 3. equal ----------------------------------------------------------
+
+    def test_equal_versions_render_unchanged_and_no_direction(self):
+        document = make_derived(self.collection, "Direction Equal")
+        self.assertEqual(document.generator_version, self.CURRENT)
+
+        output = self._rendered(document, "regenerate_derived_chunk_set")
+
+        self.assertIn(f"Generator version: v{self.CURRENT}, {self.UNCHANGED}", output)
+        self.assertNotIn(self.ADVANCE, output)
+        self.assertNotIn(self.LOWER, output)
+
+    # -- 4. recorded ahead of candidate ------------------------------------
+    #
+    # Pinned for BOTH regenerating verbs: each renders candidate evidence
+    # before the service subsequently refuses the version-ahead relationship.
+
+    def _ahead_documents(self):
+        clean = self._at_version(
+            make_derived(self.collection, "Direction Ahead Clean"), self.AHEAD
+        )
+        modified = self._at_version(
+            make_modified(self.collection, "Direction Ahead Modified"), self.AHEAD
+        )
+        return (
+            ("regenerate_derived_chunk_set", clean),
+            ("discard_modified_chunks_and_regenerate", modified),
+        )
+
+    def test_ahead_recorded_version_is_never_called_an_advance(self):
+        for action, document in self._ahead_documents():
+            with self.subTest(action=action):
+                output = self._rendered(document, action)
+                self.assertNotIn(self.ADVANCE, output)
+                # Not merely the exact phrase: the WORD must not appear at all
+                # on this branch, in any casing.
+                self.assertNotIn("advance", output.lower())
+
+    def test_ahead_recorded_version_shows_both_versions_and_the_direction(self):
+        for action, document in self._ahead_documents():
+            with self.subTest(action=action):
+                output = self._rendered(document, action)
+                self.assertIn(
+                    f"{self.LOWER}: recorded v{self.AHEAD} -> candidate "
+                    f"v{self.CURRENT}",
+                    output,
+                )
+                # Both versions are legible on their own, not only inside the
+                # combined sentence.
+                self.assertIn(f"v{self.AHEAD}", output)
+                self.assertIn(f"v{self.CURRENT}", output)
+
+    def test_ahead_render_says_the_preview_is_not_the_decision(self):
+        for action, document in self._ahead_documents():
+            with self.subTest(action=action):
+                output = self._rendered(document, action)
+                self.assertIn(
+                    "the selected Core service determines whether the operation "
+                    "is permitted",
+                    output,
+                )
+                self.assertIn(
+                    "this preview is review evidence, not committed output",
+                    output,
+                )
+                # The command must not present itself as having decided or
+                # performed anything.
+                for overclaim in (
+                    "downgrading", "core has downgraded", "will downgrade the",
+                ):
+                    self.assertNotIn(overclaim, output.lower())
+
+    # -- the display change did not touch eligibility ----------------------
+
+    def test_version_ahead_is_still_refused_by_the_service_for_both_verbs(self):
+        for action, document in self._ahead_documents():
+            with self.subTest(action=action):
+                before = self._facts(document.pk)
+                events = KnowledgeLifecycleEvent.objects.count()
+
+                with self.assertRaises(CommandError) as raised:
+                    run_command(document=document.pk, action=action)
+
+                self.assertIn("newer than the version", str(raised.exception))
+                self.assertEqual(KnowledgeLifecycleEvent.objects.count(), events)
+                self.assertEqual(self._facts(document.pk), before)
+
+    def test_modified_chunks_survive_the_refused_discard(self):
+        """Version-ahead refusal must not destroy the human edit it previewed."""
+        document = self._at_version(
+            make_modified(
+                self.collection, "Ahead Modified Survives",
+                edit="a human edit that must survive the refusal",
+            ),
+            self.AHEAD,
+        )
+        chunk = document.chunks.get()
+
+        with self.assertRaises(CommandError):
+            run_command(
+                document=document.pk,
+                action="discard_modified_chunks_and_regenerate",
+            )
+
+        chunk.refresh_from_db()
+        self.assertEqual(chunk.content, "a human edit that must survive the refusal")
+
+    def test_accept_as_explicit_still_ignores_the_direction_rendering(self):
+        """Chunk-modification dominance for `accept` is untouched.
+
+        `accept_current_chunks_as_explicit` never executes the generator, so a
+        version-ahead document with MODIFIED chunks remains acceptable. That is
+        the Slice 12 dominance rule, and a display correction must not disturb
+        it. The verb also renders no candidate at all, so no direction line can
+        appear on its path.
+        """
+        document = self._at_version(
+            make_modified(self.collection, "Ahead Modified Accept"), self.AHEAD
+        )
+
+        output = self._rendered(document, "accept_current_chunks_as_explicit")
+        self.assertNotIn("CANDIDATE", output)
+        self.assertNotIn(self.ADVANCE, output)
+        self.assertNotIn(self.LOWER, output)
+
+        run_command(
+            document=document.pk, action="accept_current_chunks_as_explicit"
+        )
+        document.refresh_from_db()
+        self.assertEqual(
+            document.chunk_authority_mode,
+            KnowledgeDocument.ChunkAuthorityMode.EXPLICIT,
+        )
+
+    # -- every branch is exercised, and exactly one fires ------------------
+
+    def test_exactly_one_direction_line_is_rendered_per_review(self):
+        cases = (
+            ("adopt_unknown_as_derived",
+             make_unknown(self.collection, "One Line None")),
+            ("regenerate_derived_chunk_set",
+             make_derived(self.collection, "One Line Older", version=self.BEHIND)),
+            ("regenerate_derived_chunk_set",
+             make_derived(self.collection, "One Line Equal")),
+            ("regenerate_derived_chunk_set",
+             self._at_version(
+                 make_derived(self.collection, "One Line Ahead"), self.AHEAD)),
+        )
+        for action, document in cases:
+            with self.subTest(document=document.title):
+                output = self._rendered(document, action)
+                fired = [
+                    marker for marker in (
+                        self.ESTABLISHING, self.ADVANCE, self.LOWER, self.UNCHANGED,
+                    )
+                    if marker in output
+                ]
+                self.assertEqual(len(fired), 1, fired)
+
+
 # ---------------------------------------------------------------------------
 # Warnings
 # ---------------------------------------------------------------------------

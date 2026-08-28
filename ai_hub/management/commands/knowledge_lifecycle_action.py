@@ -290,22 +290,41 @@ class Command(BaseCommand):
                 "this preview is review evidence, not committed output."
             )
             # The recorded version and the version that will produce the
-            # candidate are different facts. Show both whenever they differ, so
-            # the operator can see they are authorising a version advance -
+            # candidate are different facts. Show both whenever they differ,
             # never presented as an automatic migration or a correction of
             # history, only as the contract the candidate is generated under.
+            #
+            # There are FOUR truthful relationships, not three. Collapsing
+            # "differs" into a single "advance" branch stated the direction
+            # falsely whenever the document records a version this Core has not
+            # reached: v2 -> v1 is not an advance. The candidate version itself
+            # was always correct; only the direction label was wrong.
             if review.generator_version is None:
                 out.write(
                     f"  Generator version: establishing "
                     f"v{review.candidate_generator_version} "
                     "(the document records none)."
                 )
-            elif review.generator_version != review.candidate_generator_version:
+            elif review.generator_version < review.candidate_generator_version:
                 out.write(
                     f"  Generator version advance: recorded "
                     f"v{review.generator_version} -> candidate "
                     f"v{review.candidate_generator_version}. The candidate is "
                     "generated under the version this Core currently supports."
+                )
+            elif review.generator_version > review.candidate_generator_version:
+                # Deliberately states the DIRECTION as an observed fact and
+                # nothing more. The command has neither decided nor performed
+                # anything here: the selected Core service is what determines
+                # whether the operation is permitted, and for the regenerating
+                # verbs it refuses this relationship outright.
+                out.write(
+                    f"  Candidate generator version is LOWER than recorded: "
+                    f"recorded v{review.generator_version} -> candidate "
+                    f"v{review.candidate_generator_version}. The preview "
+                    "reflects the generator version implemented by this Core. "
+                    "This is review evidence only; the selected Core service "
+                    "determines whether the operation is permitted."
                 )
             else:
                 out.write(

@@ -20,6 +20,7 @@ from .admin_json import (
 )
 from .models import (
     ApplicationScope,
+    EmbeddingModelConfig,
     ProviderGrant,
     AgentProfile,
     AgentToolGrant,
@@ -746,6 +747,70 @@ class ApplicationScopeAdmin(AIHubListPageMixin, admin.ModelAdmin):
             ),
         },
     }
+
+
+@admin.register(EmbeddingModelConfig)
+class EmbeddingModelConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    """Operator surface for the embedding/vector-space contract.
+
+    Configuring a model here grants nothing: permission to send an application's
+    data to the provider is a separate decision (see Provider grants), and
+    Knowledge access is a third one again.
+    """
+
+    ai_hub_section_title = _("Embedding models")
+    ai_hub_section_description = _(
+        "What an embedding model means to AI Hub: its vector dimension, distance "
+        "metric and normalization contract. These describe the vector space, not "
+        "permission to use it."
+    )
+    ai_hub_section_note = _(
+        "Change the model revision whenever the backing model may produce an "
+        "incompatible vector space - the contract fingerprint depends on it, and "
+        "the provider endpoint deliberately does not."
+    )
+    ai_hub_section_accent = "provider"
+    ai_hub_section_actions = (
+        {"label": _("Add embedding model"), "url": lambda self: reverse("admin:ai_hub_embeddingmodelconfig_add"), "default": True},
+        {"label": _("View provider grants"), "url": lambda self: reverse("admin:ai_hub_providergrant_changelist")},
+    )
+    list_display = (
+        "name", "provider", "provider_locality", "model_name", "model_revision",
+        "vector_dimension", "distance_metric", "normalization",
+        "max_input_chars", "request_timeout_seconds", "is_active",
+    )
+    list_filter = ("is_active", "distance_metric", "normalization", "provider")
+    search_fields = ("name", "model_name", "model_revision", "provider__name")
+    list_select_related = ("provider",)
+    readonly_fields = ("embedding_contract_fingerprint",)
+    fields = (
+        "name", "provider", "model_name", "model_revision",
+        "vector_dimension", "distance_metric", "normalization",
+        "max_input_chars", "request_timeout_seconds", "is_active",
+        "embedding_contract_fingerprint",
+    )
+
+    @admin.display(description=_("Provider locality"), ordering="provider__declared_locality")
+    def provider_locality(self, obj):
+        return obj.provider.get_declared_locality_display()
+
+    @admin.display(description=_("Contract fingerprint (e1)"))
+    def embedding_contract_fingerprint(self, obj):
+        """Delegates to the canonical implementation - never reimplemented here."""
+        if obj is None or obj.pk is None:
+            return _("Saved configurations show their contract fingerprint here.")
+        from .services.embedding_contract import (
+            embedding_contract_fingerprint as compute_e1,
+        )
+
+        return compute_e1(
+            provider_type=obj.provider.provider_type,
+            model_name=obj.model_name,
+            model_revision=obj.model_revision,
+            vector_dimension=obj.vector_dimension,
+            distance_metric=obj.distance_metric,
+            normalization=obj.normalization,
+        )
 
 
 @admin.register(ProviderGrant)

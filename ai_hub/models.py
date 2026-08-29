@@ -241,6 +241,117 @@ class ModelConfig(models.Model):
                 )
 
 
+class EmbeddingModelConfig(models.Model):
+    """What an embedding model MEANS to AI Hub - its vector-space contract.
+
+    Deliberately NOT an extension of `ModelConfig`. A completion model is
+    described by temperature, max tokens and tool support; an embedding model is
+    described by dimension, distance metric and normalization. Neither set is
+    meaningful for the other, so sharing one table would give every row a
+    handful of misleading fields and still lack the ones that matter.
+
+    A GLOBAL reusable definition. There is deliberately no `application_scope`,
+    `knowledge_collection`, `agent` or `workspace` FK here: permission to use a
+    provider already exists as `ProviderGrant` plus the ApplicationScope egress
+    policy (S-17), and a second permission system would be one more thing that
+    can disagree with the first.
+
+    Configuring an embedding model grants nothing. Future embedding execution
+    will require BOTH a resolved contract (this model) AND an allowed
+    `EmbeddingAccessDecision`.
+    """
+
+    class DistanceMetric(models.TextChoices):
+        """Core semantics, not backend operator names.
+
+        A future vector backend maps these to its own implementation. There are
+        deliberately no `pgvector_cosine` / `l2_ops` / `vector_ip_ops` members -
+        binding the contract to one backend's vocabulary would make the contract
+        unportable and would leak a storage decision into a semantic one.
+        """
+
+        COSINE = "cosine", "Cosine"
+        DOT_PRODUCT = "dot_product", "Dot product"
+        EUCLIDEAN = "euclidean", "Euclidean"
+
+    class Normalization(models.TextChoices):
+        """What a future execution pipeline must do before a vector is valid."""
+
+        NONE = "none", "None (no additional transform)"
+        L2 = "l2", "L2 normalize"
+
+    # An operator-facing administrative label. Deliberately NOT part of `e1`:
+    # renaming a configuration must never invalidate vectors produced under it.
+    name = models.CharField(max_length=140, unique=True)
+    # PROTECT, stricter than the legacy completion `ModelConfig` relationship
+    # and intentionally so: an embedding contract must not silently disappear
+    # because someone tried to delete a provider definition. Vectors produced
+    # under a contract outlive attempts to tidy up configuration.
+    provider = models.ForeignKey(
+        ProviderConfig,
+        on_delete=models.PROTECT,
+        related_name="embedding_models",
+    )
+    model_name = models.CharField(max_length=140)
+    # Operator-declared stable identity for the model REVISION, and therefore
+    # for the vector space. Load-bearing, because the provider endpoint is not
+    # part of `e1`: if the backing model may produce an incompatible vector
+    # space, the operator MUST change this even when `model_name` is unchanged.
+    # Core never contacts the provider to verify it, and never invents a
+    # floating "latest" / "current" / provider-default revision.
+    model_revision = models.CharField(max_length=140)
+    vector_dimension = models.PositiveIntegerField()
+    # No default on purpose: the operator decides the contract explicitly.
+    distance_metric = models.CharField(max_length=20, choices=DistanceMetric.choices)
+    normalization = models.CharField(max_length=20, choices=Normalization.choices)
+    # A Core safety ceiling in CHARACTERS, not tokens. AI Hub has no embedding
+    # tokenizer contract, and claiming a token count would be false precision.
+    #
+    # Future rule, recorded here because the enforcement point does not exist
+    # yet: input over this limit must be REJECTED, never silently truncated.
+    # Truncating would change the text being embedded without saying so.
+    max_input_chars = models.PositiveIntegerField(default=8000)
+    # Operational only, independent of completion behaviour. Not part of `e1`.
+    request_timeout_seconds = models.PositiveIntegerField(default=60)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "1.2c Embedding model config"
+        verbose_name_plural = "1.2c Embedding model configs - vector-space contracts"
+
+    def __str__(self):
+        return f"{self.name} ({self.model_name} @ {self.model_revision})"
+
+    def clean(self):
+        # Two rows may legitimately share every `e1` field while differing
+        # operationally - a short-timeout and a long-timeout variant of the same
+        # vector space. That is CORRECT, so there is deliberately no uniqueness
+        # constraint over the semantic fields.
+        errors = {}
+        for field in ("name", "model_name", "model_revision"):
+            if not str(getattr(self, field, "") or "").strip():
+                errors[field] = f"{field.replace('_', ' ').capitalize()} is required."
+        for field in ("vector_dimension", "max_input_chars", "request_timeout_seconds"):
+            value = getattr(self, field, None)
+            if value is not None and value <= 0:
+                errors[field] = (
+                    f"{field.replace('_', ' ').capitalize()} must be greater than zero."
+                )
+        if self.distance_metric not in self.DistanceMetric.values:
+            errors["distance_metric"] = "Select a supported distance metric."
+        if self.normalization not in self.Normalization.values:
+            errors["normalization"] = "Select a supported normalization contract."
+        if self.is_active and self.provider_id and not self.provider.is_active:
+            errors["is_active"] = (
+                "Cannot activate an embedding model whose provider is inactive."
+            )
+        if errors:
+            raise ValidationError(errors)
+
+
 class ToolDefinition(models.Model):
     class ToolKind(models.TextChoices):
         HTTP = "http", "HTTP"

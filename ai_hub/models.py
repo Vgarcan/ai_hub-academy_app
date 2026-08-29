@@ -604,6 +604,119 @@ class KnowledgeDocumentChunk(models.Model):
             raise ValidationError({"metadata": "Chunk metadata must be a JSON object."})
 
 
+class KnowledgeChunkEmbedding(models.Model):
+    """One persisted vector for one Knowledge chunk under one vector-space contract.
+
+    DERIVED INDEX STATE, never Knowledge authority. A vector is downstream of the
+    chunk that produced it and can always be rebuilt from it; it never becomes
+    source-of-truth Knowledge, and nothing here touches `chunk_authority_mode`,
+    `i1`, `c1` or `KnowledgeLifecycleEvent`.
+
+    A row is CURRENT only when its stored `k1` still matches the chunk's canonical
+    embedding input AND its stored `e1` still matches its recorded configuration's
+    vector-space contract. A stale row is allowed to EXIST - staleness is
+    observable state to be reported and later replaced, not corruption to be
+    auto-deleted. Nothing in this model reacts to a signal.
+
+    The direct `application_scope` and `collection` columns are deliberate
+    denormalization for storage NAMESPACE and pre-ranking narrowing, not an
+    exception to the S-14 "do not spray scope FKs" rule: this is a new,
+    security-sensitive index resource whose physical namespace must be explicit,
+    and a future semantic search must be able to narrow by authorized collection
+    BEFORE candidate generation rather than rediscovering that predicate through
+    document joins. They ACCELERATE the boundary; they never define it. Canonical
+    ownership remains `chunk -> document -> collection -> application_scope`, and
+    the loader re-derives and compares it on every read.
+    """
+
+    class VectorFormat(models.TextChoices):
+        """Physical encoding of `vector_bytes`. Closed set; no fallback decoder.
+
+        Deliberately NOT part of `e1`: the same mathematical vector stored under
+        a different byte encoding is the same vector space. Changing the encoding
+        may require a re-ENCODE migration; it must never require re-EMBEDDING.
+        """
+
+        F32LE1 = "f32le1", "IEEE-754 float32, little endian, v1"
+
+    # Storage namespace. CASCADE: vectors are subordinate derived state and go
+    # when the owning Knowledge hierarchy is deliberately removed. (An
+    # ApplicationScope that still owns collections is already PROTECT-ed by S-14,
+    # so this cannot become an accidental mass deletion.)
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.CASCADE,
+        related_name="chunk_embeddings",
+    )
+    collection = models.ForeignKey(
+        KnowledgeCollection,
+        on_delete=models.CASCADE,
+        related_name="chunk_embeddings",
+    )
+    # A vector without its canonical retrieval chunk has no purpose.
+    chunk = models.ForeignKey(
+        KnowledgeDocumentChunk,
+        on_delete=models.CASCADE,
+        related_name="embeddings",
+    )
+    # PROTECT: a stored vector must never silently lose the configuration that
+    # produced it. Provenance outlives configuration tidying.
+    embedding_model_config = models.ForeignKey(
+        EmbeddingModelConfig,
+        on_delete=models.PROTECT,
+        related_name="chunk_embeddings",
+    )
+
+    # Self-describing fingerprints, never naked digests.
+    k1 = models.CharField(max_length=80)
+    e1 = models.CharField(max_length=80)
+
+    # The shape of the stored bytes. Recorded rather than inferred from byte
+    # length, so a decode can be checked against the CONFIGURED dimension.
+    vector_dimension = models.PositiveIntegerField()
+    vector_format = models.CharField(
+        max_length=20,
+        choices=VectorFormat.choices,
+        default=VectorFormat.F32LE1,
+    )
+    # Derived numeric bytes only. No Knowledge text, no credential.
+    vector_bytes = models.BinaryField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["application_scope__name", "collection__name", "chunk_id"]
+        verbose_name = "1.5b Knowledge chunk embedding"
+        verbose_name_plural = "1.5b Knowledge chunk embeddings - derived index state"
+        constraints = [
+            # (chunk, e1) - NOT (chunk, embedding_model_config). Two operational
+            # configurations may deliberately share one `e1`; those vectors are
+            # the same vector-space contract, so storing both would duplicate a
+            # vector purely because a timeout or a label differs.
+            models.UniqueConstraint(
+                fields=["chunk", "e1"], name="ai_hub_unique_chunk_e1_vector"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(vector_dimension__gte=1),
+                name="ai_hub_chunk_embedding_dimension_positive",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["application_scope", "e1"], name="aihub_cemb_scope_e1_idx"
+            ),
+            models.Index(
+                fields=["application_scope", "collection", "e1"],
+                name="aihub_cemb_scope_coll_e1_idx",
+            ),
+        ]
+
+    def __str__(self):
+        # Bounded identifiers only: never vector values, never Knowledge text.
+        return f"chunk {self.chunk_id} @ {self.e1[:19]}... ({self.vector_dimension}d)"
+
+
 class AgentProfile(models.Model):
     class ExecutionMode(models.TextChoices):
         SYNC = "sync", "Sync"

@@ -34,7 +34,11 @@ from ai_hub.models import (
     ProviderConfig,
     ProviderGrant,
 )
-from ai_hub.services import embedding_client, embedding_execution
+from ai_hub.services import (
+    embedding_client,
+    embedding_execution,
+    embedding_vector,
+)
 from ai_hub.services.chunk_embedding_identity import (
     canonical_chunk_embedding_text,
     chunk_embedding_fingerprint,
@@ -689,14 +693,45 @@ class NormalizationTests(ExecutionFixtureMixin, TestCase):
                 self.assertEqual(KnowledgeChunkEmbedding.objects.count(), 0)
 
     def test_normalization_is_never_inferred(self):
-        source = inspect.getsource(embedding_execution._normalize_vector)
-        referenced = {
-            node.attr
-            for node in ast.walk(ast.parse(source.lstrip()))
-            if isinstance(node, ast.Attribute)
-        }
-        for forbidden in ("distance_metric", "provider_type", "model_name"):
-            self.assertNotIn(forbidden, referenced)
+        """Scan the real implementation, not only the S-20 entry point.
+
+        `_normalize_vector` is now a thin wrapper, so scanning it alone would
+        pass no matter what the shared module did - a guard that inspects a
+        delegating shim has quietly stopped guarding.
+        """
+        for target in (
+            embedding_execution._normalize_vector,
+            embedding_vector.normalize_embedding_vector,
+        ):
+            with self.subTest(target=target.__name__):
+                source = inspect.getsource(target)
+                referenced = {
+                    node.attr
+                    for node in ast.walk(ast.parse(source.lstrip()))
+                    if isinstance(node, ast.Attribute)
+                }
+                for forbidden in ("distance_metric", "provider_type", "model_name"):
+                    self.assertNotIn(forbidden, referenced)
+
+    def test_the_s20_helpers_delegate_to_the_shared_implementation(self):
+        """The extraction must be real, not a copy that happens to agree.
+
+        Two independent implementations of normalization would let the corpus
+        path and the query path drift apart, and every similarity score computed
+        between them would then be quietly meaningless.
+        """
+        for wrapper, shared in (
+            ("_normalize_vector", "normalize_embedding_vector"),
+            ("_validate_raw_vector", "validate_embedding_vector"),
+        ):
+            with self.subTest(wrapper=wrapper):
+                source = inspect.getsource(getattr(embedding_execution, wrapper))
+                called = {
+                    node.func.id
+                    for node in ast.walk(ast.parse(source.lstrip()))
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                }
+                self.assertIn(shared, called)
 
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,6 @@ NOT re-run S-17 afterwards to decide vector identity - authorization decides
 whether to send, `k1`/`e1` decide what the result means.
 """
 
-import math
 from dataclasses import dataclass
 
 from django.db import transaction
@@ -58,6 +57,11 @@ from ai_hub.services.embedding_egress import (
     PAYLOAD_CORPUS,
     ReasonCode,
     resolve_embedding_access,
+)
+from ai_hub.services.embedding_vector import (
+    EmbeddingVectorError,
+    normalize_embedding_vector,
+    validate_embedding_vector,
 )
 from ai_hub.services.vector_store import (
     inspect_vector_record,
@@ -113,61 +117,40 @@ class ChunkEmbeddingExecutionResult:
     vector_dimension: int
 
 
-def _normalize_vector(values, *, normalization) -> tuple:
-    """Apply the S-18 normalization contract. Never infer it.
+def _translate_vector_error(exc: EmbeddingVectorError) -> EmbeddingExecutionError:
+    """Re-raise a shared vector refusal in this module's vocabulary.
 
-    Deliberately does not look at the distance metric, the provider, the model
-    or the vector's own norm: metric and normalization are two independent
-    contract facts, and normalizing "because the metric is cosine" would make a
-    stored vector disagree with the contract that describes it.
+    An identity mapping by construction: `VectorErrorCategory` deliberately uses
+    the same strings `FailureCategory` already used, so extraction moved code
+    without renaming a single failure an operator might be alerting on.
     """
-    if normalization == EmbeddingModelConfig.Normalization.NONE:
-        return tuple(values)
+    return EmbeddingExecutionError(exc.category, str(exc))
 
-    magnitude = math.sqrt(sum(value * value for value in values))
-    if not math.isfinite(magnitude) or magnitude <= 0.0:
-        # A zero vector has no direction, so it cannot be L2-normalized. Refuse
-        # rather than leaving it unchanged, substituting an epsilon or inventing
-        # a unit vector - each of those stores a vector that lies about what the
-        # contract says it is.
-        raise EmbeddingExecutionError(
-            FailureCategory.ZERO_VECTOR_CANNOT_L2_NORMALIZE,
-            "A zero-magnitude vector cannot be L2-normalized.",
-        )
-    normalized = tuple(value / magnitude for value in values)
-    if not all(math.isfinite(value) for value in normalized):
-        raise EmbeddingExecutionError(
-            FailureCategory.VECTOR_NON_FINITE,
-            "Normalization produced a non-finite component.",
-        )
-    return normalized
+
+def _normalize_vector(values, *, normalization) -> tuple:
+    """Thin wrapper over the shared normalizer. Kept as the S-20 entry point.
+
+    The implementation now lives in `embedding_vector` so that the corpus path
+    here and the S-21 query path normalize through the *same* code. Two vectors
+    scored against each other must have been produced identically; separate
+    implementations that merely agree today are a silent correctness trap.
+    """
+    try:
+        return normalize_embedding_vector(values, normalization=normalization)
+    except EmbeddingVectorError as exc:
+        raise _translate_vector_error(exc) from exc
 
 
 def _validate_raw_vector(values, *, expected_dimension: int) -> tuple:
-    """Re-check the provider result here, before normalization.
+    """Thin wrapper over the shared validator. Kept as the S-20 entry point.
 
-    S-19's encoder validates too, but normalization happens in between - a
-    non-finite component would become a non-finite magnitude and the failure
-    would surface as something less specific and further from its cause.
+    Runs before normalization, as before: a non-finite component would otherwise
+    become a non-finite magnitude and surface further from its cause.
     """
-    if len(values) != expected_dimension:
-        raise EmbeddingExecutionError(
-            FailureCategory.VECTOR_DIMENSION_MISMATCH,
-            f"Provider returned {len(values)} components; "
-            f"the contract requires {expected_dimension}.",
-        )
-    for index, raw in enumerate(values):
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-            raise EmbeddingExecutionError(
-                FailureCategory.VECTOR_NON_FINITE,
-                f"Vector component {index} is not a number.",
-            )
-        if not math.isfinite(float(raw)):
-            raise EmbeddingExecutionError(
-                FailureCategory.VECTOR_NON_FINITE,
-                f"Vector component {index} is not finite.",
-            )
-    return tuple(float(value) for value in values)
+    try:
+        return validate_embedding_vector(values, expected_dimension=expected_dimension)
+    except EmbeddingVectorError as exc:
+        raise _translate_vector_error(exc) from exc
 
 
 def index_chunk_embedding_local(

@@ -387,11 +387,16 @@ class GlobalUniquenessRetainedTests(TestCase):
 # ---------------------------------------------------------------------------
 
 class CrossScopeCharacterizationTests(TestCase):
-    """EXPECTED S-14 LIMITATION - blocked by S-15, not by S-14.
+    """S-14 recorded the gap; S-15 CLOSED it. These are the inverted tests.
 
-    Ownership is now a fact. Enforcement is not. This test exists so the gap is
-    recorded as a deliberate, measured limitation rather than discovered later
-    as a surprise, and so S-15 has a test to invert.
+    The S-14 version of this class asserted that a cross-scope assignment was
+    still reachable, and labelled it an expected limitation "blocked by S-15,
+    not by S-14". S-15 delivered that boundary, so the assertions below now
+    state the opposite - deliberately kept in the same class so the history of
+    the limitation and its closure stay together.
+
+    The M2M row is still permitted to EXIST. S-15 does not repair, delete or
+    rewrite configuration; it simply refuses to treat such a row as permission.
     """
 
     def setUp(self):
@@ -424,24 +429,27 @@ class CrossScopeCharacterizationTests(TestCase):
         )
         self.agent_a.knowledge_collections.add(self.collection_a)
 
-    def test_cross_scope_m2m_assignment_is_still_possible_in_S14(self):
+    def test_the_cross_scope_m2m_row_may_still_physically_exist(self):
+        """S-15 does not repair configuration - it refuses to obey it."""
         self.agent_a.knowledge_collections.add(self.collection_b)
-        self.agent_a.full_clean()   # no validation objects to it, by design
+        self.agent_a.full_clean()   # still no validation error, by design
         self.assertIn(
             self.collection_b,
             self.agent_a.knowledge_collections.all(),
         )
 
-    def test_cross_scope_retrieval_is_still_reachable_in_S14(self):
+    def test_the_cross_scope_row_grants_ZERO_retrieval_authorization(self):
+        """The S-14 limitation, now closed."""
         self.agent_a.knowledge_collections.add(self.collection_b)
         result = knowledge_retrieval.search_knowledge(
             self.agent_a, query="widgets", limit=10
         )
         collections = {row["collection"] for row in result["results"]}
-        self.assertIn("B Knowledge", collections)
+        self.assertNotIn("B Knowledge", collections)
+        self.assertEqual(collections, {"A Knowledge"})
 
-    def test_ownership_facts_are_nonetheless_unambiguous(self):
-        """S-14's actual deliverable: S-15 has something to enforce."""
+    def test_ownership_facts_remain_unambiguous(self):
+        """S-14's deliverable, and what S-15 enforces against."""
         self.agent_a.knowledge_collections.add(self.collection_b)
         self.assertEqual(self.agent_a.application_scope, self.scope_a)
         self.assertEqual(self.collection_b.application_scope, self.scope_b)

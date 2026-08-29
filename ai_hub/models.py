@@ -477,6 +477,20 @@ class PipelineDefinition(models.Model):
             steps = list(self.steps.order_by("order"))
             if not steps:
                 raise ValidationError("Cannot activate pipeline without steps.")
+            # An executable pipeline must belong to ONE application scope, or it
+            # becomes a bridge between them: step 1 retrieves Scope A Knowledge
+            # and the output mapping hands it to a Scope B agent. Configuration
+            # time only - `execution_runner` re-checks before running, and that
+            # runtime check is the authoritative one.
+            from ai_hub.services.knowledge_authorization import (
+                PipelineScopeError,
+                require_coherent_pipeline_scope,
+            )
+
+            try:
+                require_coherent_pipeline_scope(self)
+            except PipelineScopeError as exc:
+                raise ValidationError(str(exc)) from exc
             expected = list(range(1, len(steps) + 1))
             got = [s.order for s in steps]
             if got != expected:
@@ -549,6 +563,20 @@ class PipelineStep(models.Model):
             raise ValidationError("Fallback agent is required when on_error is fallback_agent.")
         if self.fallback_agent_id and not self.fallback_agent.is_active:
             raise ValidationError("Fallback agent must be active.")
+        # Fallback agents are part of the security boundary: an error path that
+        # switches to an agent in another application is still a bridge between
+        # applications.
+        if self.agent_id:
+            scope_ids = {self.agent.application_scope_id}
+            if self.fallback_agent_id:
+                scope_ids.add(self.fallback_agent.application_scope_id)
+            if self.pipeline_id and self.pipeline.entry_agent_id:
+                scope_ids.add(self.pipeline.entry_agent.application_scope_id)
+            if len(scope_ids) > 1:
+                raise ValidationError(
+                    "All agents in a pipeline must belong to the same "
+                    "application scope."
+                )
 
 
 class GameWorkspace(models.Model):

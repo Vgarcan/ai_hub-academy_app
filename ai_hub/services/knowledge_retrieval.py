@@ -5,6 +5,11 @@ from django.db.models import Q
 from django.db.models.functions import Length, Substr
 
 from ai_hub.models import AgentProfile, KnowledgeDocument, KnowledgeDocumentChunk
+from ai_hub.services.knowledge_authorization import (
+    authorized_chunks,
+    authorized_collections,
+    resolve_effective_knowledge_scope,
+)
 
 
 MAX_COLLECTION_RESULTS = 100
@@ -20,21 +25,31 @@ MAX_DOCUMENT_TAGS = 20
 MAX_DOCUMENT_TAG_CHARS = 100
 
 
+# Every public read path below derives its authorization from ONE resolver.
+# `agent.knowledge_collections` is no longer consulted as a boundary anywhere in
+# this module: it is an assignment mechanism, and a cross-scope assignment row
+# must grant zero authorization. See services/knowledge_authorization.py.
+
+
+def _scope(agent: AgentProfile, *, workspace=None):
+    """Resolve the effective scope once, at the top of a retrieval operation."""
+    return resolve_effective_knowledge_scope(agent, workspace=workspace)
+
+
 def _agent_collection_ids(agent: AgentProfile) -> set[int]:
-    return set(agent.knowledge_collections.filter(is_active=True).values_list("id", flat=True))
+    """Authorized collection ids. Retained as the module's narrowing check."""
+    return set(_scope(agent).collection_ids)
 
 
 def _accessible_chunks(agent: AgentProfile):
-    collection_ids = _agent_collection_ids(agent)
-    return (
-        KnowledgeDocumentChunk.objects.filter(
-            document__collection_id__in=collection_ids,
-            document__collection__is_active=True,
-            document__status=KnowledgeDocument.Status.ACTIVE,
-        )
-        .select_related("document", "document__collection")
-        .order_by("document__collection__name", "document__title", "chunk_index")
-    )
+    """The only chunk queryset in this module.
+
+    Authorization is resolved BEFORE candidate generation and reaches SQL as
+    part of the same query, so an unauthorized chunk is never a candidate -
+    not scored, not counted, not truncated into. A future semantic retriever
+    must inherit this shape rather than filter after ranking.
+    """
+    return authorized_chunks(_scope(agent))
 
 
 def _bounded_tags(tags) -> list[str]:
@@ -55,7 +70,7 @@ def _bounded_integer(value, *, name: str, minimum: int, maximum: int) -> int:
 
 
 def list_knowledge_libraries(agent: AgentProfile, *, limit: int = 50) -> dict:
-    collections = agent.knowledge_collections.filter(is_active=True).order_by("name")
+    collections = authorized_collections(_scope(agent))
     total = collections.count()
     bounded_limit = _bounded_integer(
         limit,
@@ -90,8 +105,11 @@ def browse_knowledge_index(
     limit: int = 50,
     chunk_limit: int = 25,
 ) -> dict:
-    collections = agent.knowledge_collections.filter(is_active=True).order_by("name")
+    scope = _scope(agent)
+    collections = authorized_collections(scope)
     if collection_id is not None:
+        # Narrowing only: an unauthorized id yields an empty index, exactly as a
+        # nonexistent one does. Never an error that confirms existence.
         collections = collections.filter(pk=collection_id)
     collection_count = collections.count()
     collections = list(collections[:MAX_COLLECTION_RESULTS])

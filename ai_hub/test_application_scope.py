@@ -37,8 +37,14 @@ from ai_hub.services.application_scope import require_single_active_scope
 from ai_hub.test_application_scope_helpers import test_scope
 
 
+# The application-scope rollout is THREE migrations, not one. See the module
+# docstring of 0023 for why: a single atomic migration interleaving
+# DDL -> RunPython -> DDL is rejected by PostgreSQL with "pending trigger
+# events", and SQLite never noticed.
 MIGRATION_BEFORE = ("ai_hub", "0022_knowledge_lifecycle_event")
-MIGRATION_AFTER = ("ai_hub", "0023_application_scope")
+MIGRATION_SCHEMA = ("ai_hub", "0023_application_scope")
+MIGRATION_DATA = ("ai_hub", "0024_application_scope_legacy_adoption")
+MIGRATION_AFTER = ("ai_hub", "0025_application_scope_required")
 LEGACY_SLUG = "legacy-default"
 
 
@@ -521,10 +527,144 @@ class SingleScopeBehaviourUnchangedTests(TestCase):
 # Migration 0023
 # ---------------------------------------------------------------------------
 
-class ApplicationScopeMigrationTests(TransactionTestCase):
-    """Forward and reverse behaviour of the staged 0023 migration.
+class MigrationStructureTests(TestCase):
+    """The three stages must STAY three stages.
 
-    TransactionTestCase because a real schema migration runs here.
+    These assertions inspect operation CLASSES, not filenames or prose, so
+    collapsing the stages back into one migration fails here rather than in
+    PostgreSQL CI three commits later. That is the whole point: the defect this
+    guards against was invisible on SQLite.
+    """
+
+    @staticmethod
+    def _operations(migration_name):
+        from django.db.migrations.loader import MigrationLoader
+
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        return loader.disk_migrations[("ai_hub", migration_name)].operations
+
+    @staticmethod
+    def _class_names(operations):
+        return [type(operation).__name__ for operation in operations]
+
+    def test_0023_is_schema_only(self):
+        names = self._class_names(self._operations(MIGRATION_SCHEMA[1]))
+        self.assertIn("CreateModel", names)
+        self.assertEqual(names.count("AddField"), 3)
+        self.assertNotIn("RunPython", names)
+        self.assertNotIn("RunSQL", names)
+        self.assertNotIn("AlterField", names)
+
+    def test_0023_adds_the_three_fks_as_NULLABLE(self):
+        """Nullable here is what lets existing rows survive the column."""
+        for operation in self._operations(MIGRATION_SCHEMA[1]):
+            if type(operation).__name__ != "AddField":
+                continue
+            with self.subTest(model=operation.model_name):
+                self.assertEqual(operation.name, "application_scope")
+                self.assertTrue(operation.field.null)
+
+    def test_0024_is_data_only(self):
+        operations = self._operations(MIGRATION_DATA[1])
+        names = self._class_names(operations)
+        self.assertEqual(names, ["RunPython"])
+        # Reversible: a data stage that cannot be undone would make the whole
+        # rollout one-way.
+        self.assertIsNotNone(operations[0].reverse_code)
+
+    def test_0025_is_schema_only_and_makes_ownership_required(self):
+        operations = self._operations(MIGRATION_AFTER[1])
+        names = self._class_names(operations)
+        self.assertEqual(names, ["AlterField", "AlterField", "AlterField"])
+        self.assertNotIn("RunPython", names)
+        for operation in operations:
+            with self.subTest(model=operation.model_name):
+                self.assertEqual(operation.name, "application_scope")
+                self.assertFalse(operation.field.null)
+
+    def test_no_migration_mixes_schema_and_data_operations(self):
+        """The rule, stated once, for all three stages."""
+        schema_operations = {
+            "CreateModel", "DeleteModel", "AddField", "RemoveField",
+            "AlterField", "RenameField", "AlterModelTable", "AddConstraint",
+            "RemoveConstraint", "AddIndex", "RemoveIndex",
+        }
+        data_operations = {"RunPython", "RunSQL"}
+        for _app, name in (MIGRATION_SCHEMA, MIGRATION_DATA, MIGRATION_AFTER):
+            with self.subTest(migration=name):
+                names = set(self._class_names(self._operations(name)))
+                self.assertFalse(
+                    names & schema_operations and names & data_operations,
+                    f"{name} mixes schema and data operations: {sorted(names)}",
+                )
+
+    def test_the_stages_depend_on_each_other_in_order(self):
+        from django.db.migrations.loader import MigrationLoader
+
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        for name, expected in (
+            (MIGRATION_SCHEMA[1], MIGRATION_BEFORE),
+            (MIGRATION_DATA[1], MIGRATION_SCHEMA),
+            (MIGRATION_AFTER[1], MIGRATION_DATA),
+        ):
+            with self.subTest(migration=name):
+                dependencies = loader.disk_migrations[("ai_hub", name)].dependencies
+                self.assertIn(expected, dependencies)
+
+    def test_the_data_stage_does_not_import_from_another_migration(self):
+        """Migration-time logic must not be shared between migration files."""
+        import ast
+        import pathlib as _pathlib
+
+        path = (
+            _pathlib.Path(__file__).resolve().parent
+            / "migrations" / f"{MIGRATION_DATA[1]}.py"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                self.assertNotIn("migrations.0", node.module)
+                self.assertFalse(node.module.startswith("ai_hub.migrations"))
+
+    def test_the_data_stage_never_assumes_the_default_alias(self):
+        """Every historical-model query must run on the alias being migrated."""
+        import ast
+        import pathlib as _pathlib
+
+        path = (
+            _pathlib.Path(__file__).resolve().parent
+            / "migrations" / f"{MIGRATION_DATA[1]}.py"
+        )
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        # The alias must be taken from the schema editor, never hard-coded.
+        self.assertIn("schema_editor.connection.alias", source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and node.value == "default":
+                self.fail("the data migration hard-codes the 'default' alias")
+
+        # Every ORM chain that reaches a queryset does so through .using(...)
+        # or passes using= explicitly.
+        terminal = {"count", "update", "get_or_create", "exists", "first", "delete"}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr not in terminal:
+                continue
+            rendered = ast.unparse(node)
+            with self.subTest(call=rendered[:70]):
+                self.assertTrue(
+                    ".using(" in rendered or "using=" in rendered,
+                    f"query not pinned to the migration alias: {rendered}",
+                )
+
+
+class ApplicationScopeMigrationTests(TransactionTestCase):
+    """Forward and reverse behaviour across the three staged migrations.
+
+    TransactionTestCase because real schema migrations run here.
     """
 
     available_apps = None
@@ -545,11 +685,6 @@ class ApplicationScopeMigrationTests(TransactionTestCase):
         """Create rows through the HISTORICAL 0022 model state."""
         ProviderConfigHistorical = apps_state.get_model("ai_hub", "ProviderConfig")
         ModelConfigHistorical = apps_state.get_model("ai_hub", "ModelConfig")
-        KnowledgeCollectionHistorical = apps_state.get_model(
-            "ai_hub", "KnowledgeCollection"
-        )
-        AgentProfileHistorical = apps_state.get_model("ai_hub", "AgentProfile")
-        GameWorkspaceHistorical = apps_state.get_model("ai_hub", "GameWorkspace")
 
         provider = ProviderConfigHistorical.objects.create(
             name="Legacy Provider", provider_type="training"
@@ -558,67 +693,132 @@ class ApplicationScopeMigrationTests(TransactionTestCase):
             provider=provider, model_name="training"
         )
         for index in range(3):
-            KnowledgeCollectionHistorical.objects.create(name=f"Legacy Coll {index}")
+            apps_state.get_model("ai_hub", "KnowledgeCollection").objects.create(
+                name=f"Legacy Coll {index}"
+            )
         for index in range(2):
-            AgentProfileHistorical.objects.create(
+            apps_state.get_model("ai_hub", "AgentProfile").objects.create(
                 name=f"Legacy Agent {index}", role="r", model_config=model_config
             )
-        GameWorkspaceHistorical.objects.create(name="Legacy Workspace")
+        apps_state.get_model("ai_hub", "GameWorkspace").objects.create(
+            name="Legacy Workspace"
+        )
 
-    def test_forward_migration_adopts_every_pre_existing_row(self):
+    EXPECTED = (("KnowledgeCollection", 3), ("AgentProfile", 2), ("GameWorkspace", 1))
+
+    def _assert_corpus_intact(self, state, *, owned):
+        for name, expected in self.EXPECTED:
+            model = state.get_model("ai_hub", name)
+            self.assertEqual(model.objects.count(), expected, f"{name} rows preserved")
+            if owned:
+                self.assertEqual(
+                    model.objects.filter(application_scope__isnull=True).count(), 0,
+                    f"every {name} has an owner",
+                )
+
+    # -- step by step -------------------------------------------------------
+
+    def test_forward_one_stage_at_a_time(self):
+        executor = self._migrate(MIGRATION_BEFORE)
+        self._seed_pre_s14_corpus(executor.loader.project_state(MIGRATION_BEFORE).apps)
+
+        # 0022 -> 0023: schema exists, nothing adopted yet.
+        executor = self._migrate(MIGRATION_SCHEMA)
+        state = executor.loader.project_state(MIGRATION_SCHEMA).apps
+        self.assertEqual(state.get_model("ai_hub", "ApplicationScope").objects.count(), 0)
+        self._assert_corpus_intact(state, owned=False)
+        self.assertEqual(
+            state.get_model("ai_hub", "KnowledgeCollection")
+            .objects.filter(application_scope__isnull=True).count(),
+            3,
+            "after the schema stage the rows are deliberately unowned",
+        )
+
+        # 0023 -> 0024: exactly one legacy scope adopts everything.
+        executor = self._migrate(MIGRATION_DATA)
+        state = executor.loader.project_state(MIGRATION_DATA).apps
+        scopes = list(state.get_model("ai_hub", "ApplicationScope").objects.all())
+        self.assertEqual(len(scopes), 1)
+        self.assertEqual(scopes[0].slug, LEGACY_SLUG)
+        self._assert_corpus_intact(state, owned=True)
+
+        # 0024 -> 0025: ownership becomes mandatory, data unchanged.
+        executor = self._migrate(MIGRATION_AFTER)
+        state = executor.loader.project_state(MIGRATION_AFTER).apps
+        self.assertEqual(state.get_model("ai_hub", "ApplicationScope").objects.count(), 1)
+        self._assert_corpus_intact(state, owned=True)
+
+    def test_reverse_one_stage_at_a_time(self):
+        executor = self._migrate(MIGRATION_BEFORE)
+        self._seed_pre_s14_corpus(executor.loader.project_state(MIGRATION_BEFORE).apps)
+        self._migrate(MIGRATION_AFTER)
+
+        # 0025 -> 0024: ownership nullable again, still populated.
+        executor = self._migrate(MIGRATION_DATA)
+        state = executor.loader.project_state(MIGRATION_DATA).apps
+        self._assert_corpus_intact(state, owned=True)
+
+        # 0024 -> 0023: rows detached, legacy scope removed.
+        executor = self._migrate(MIGRATION_SCHEMA)
+        state = executor.loader.project_state(MIGRATION_SCHEMA).apps
+        self.assertEqual(state.get_model("ai_hub", "ApplicationScope").objects.count(), 0)
+        self._assert_corpus_intact(state, owned=False)
+
+        # 0023 -> 0022: the column and the table are gone.
+        executor = self._migrate(MIGRATION_BEFORE)
+        state = executor.loader.project_state(MIGRATION_BEFORE).apps
+        self._assert_corpus_intact(state, owned=False)
+        self.assertNotIn(
+            "ai_hub_applicationscope", connection.introspection.table_names()
+        )
+
+    # -- direct, end to end -------------------------------------------------
+
+    def test_forward_directly_from_0022_to_0025(self):
         executor = self._migrate(MIGRATION_BEFORE)
         self._seed_pre_s14_corpus(executor.loader.project_state(MIGRATION_BEFORE).apps)
 
         executor = self._migrate(MIGRATION_AFTER)
         state = executor.loader.project_state(MIGRATION_AFTER).apps
 
-        Scope = state.get_model("ai_hub", "ApplicationScope")
-        scopes = list(Scope.objects.all())
+        scopes = list(state.get_model("ai_hub", "ApplicationScope").objects.all())
         self.assertEqual(len(scopes), 1, "exactly one deterministic legacy scope")
         self.assertEqual(scopes[0].slug, LEGACY_SLUG)
-
-        counts = {}
-        for name, expected in (
-            ("KnowledgeCollection", 3),
-            ("AgentProfile", 2),
-            ("GameWorkspace", 1),
-        ):
+        self._assert_corpus_intact(state, owned=True)
+        for name, expected in self.EXPECTED:
             model = state.get_model("ai_hub", name)
-            counts[name] = model.objects.count()
-            self.assertEqual(counts[name], expected, f"{name} rows preserved")
-            self.assertEqual(
-                model.objects.filter(application_scope__isnull=True).count(), 0,
-                f"every {name} has an owner",
-            )
             self.assertEqual(
                 model.objects.filter(application_scope=scopes[0]).count(), expected
             )
 
-    def test_a_fresh_database_gets_no_legacy_scope(self):
-        """A new install should not inherit a compatibility artifact."""
-        self._migrate(MIGRATION_BEFORE)
-        executor = self._migrate(MIGRATION_AFTER)
-        state = executor.loader.project_state(MIGRATION_AFTER).apps
-        Scope = state.get_model("ai_hub", "ApplicationScope")
-        self.assertEqual(Scope.objects.count(), 0)
-
-    def test_reverse_migration_restores_the_pre_s14_state_without_data_loss(self):
+    def test_reverse_directly_from_0025_to_0022_without_data_loss(self):
         executor = self._migrate(MIGRATION_BEFORE)
         self._seed_pre_s14_corpus(executor.loader.project_state(MIGRATION_BEFORE).apps)
         self._migrate(MIGRATION_AFTER)
 
         executor = self._migrate(MIGRATION_BEFORE)
         state = executor.loader.project_state(MIGRATION_BEFORE).apps
-        for name, expected in (
-            ("KnowledgeCollection", 3),
-            ("AgentProfile", 2),
-            ("GameWorkspace", 1),
-        ):
-            model = state.get_model("ai_hub", name)
-            self.assertEqual(model.objects.count(), expected, f"{name} survived")
-        self.assertFalse(
-            any(
-                table.endswith("applicationscope")
-                for table in connection.introspection.table_names()
-            )
+        self._assert_corpus_intact(state, owned=False)
+        self.assertNotIn(
+            "ai_hub_applicationscope", connection.introspection.table_names()
         )
+
+    def test_a_fresh_database_gets_no_legacy_scope(self):
+        """A new install should not inherit a compatibility artifact."""
+        self._migrate(MIGRATION_BEFORE)
+        executor = self._migrate(MIGRATION_AFTER)
+        state = executor.loader.project_state(MIGRATION_AFTER).apps
+        self.assertEqual(state.get_model("ai_hub", "ApplicationScope").objects.count(), 0)
+
+    def test_the_round_trip_is_repeatable(self):
+        """Forward, back, forward again - the stages are not one-shot."""
+        executor = self._migrate(MIGRATION_BEFORE)
+        self._seed_pre_s14_corpus(executor.loader.project_state(MIGRATION_BEFORE).apps)
+
+        self._migrate(MIGRATION_AFTER)
+        self._migrate(MIGRATION_BEFORE)
+        executor = self._migrate(MIGRATION_AFTER)
+
+        state = executor.loader.project_state(MIGRATION_AFTER).apps
+        self.assertEqual(state.get_model("ai_hub", "ApplicationScope").objects.count(), 1)
+        self._assert_corpus_intact(state, owned=True)

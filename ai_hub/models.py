@@ -37,6 +37,20 @@ class ApplicationScope(models.Model):
     slug = models.SlugField(max_length=140, unique=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    # --- External embedding egress policy (S-17) ---------------------------
+    # The scope OWNS this decision. A collection may narrow it; nothing may
+    # widen it. Both default to DENY, so a fresh install and every migrated
+    # legacy scope authorize no external embedding egress at all until an
+    # operator explicitly decides otherwise.
+    #
+    # These govern the FUTURE embedding capability only. Existing chat and
+    # completion execution is deliberately untouched by them.
+    allow_external_embedding_corpus_egress = models.BooleanField(default=False)
+    # Query text is not curated: it may carry a user message, a client name or
+    # a pasted document, and no review step exists. So it needs its own
+    # permission AND can never be broader than the corpus permission - see the
+    # constraint below, which is enforced in the database, not just in `clean`.
+    allow_external_embedding_query_egress = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -44,6 +58,15 @@ class ApplicationScope(models.Model):
         ordering = ["name"]
         verbose_name = "1.0 Application scope"
         verbose_name_plural = "1.0 Application scopes - isolation boundaries"
+        constraints = [
+            # query egress ⊆ corpus egress. Expressed as: NOT (query AND NOT
+            # corpus). A raw ORM write cannot produce the invalid combination.
+            models.CheckConstraint(
+                condition=models.Q(allow_external_embedding_query_egress=False)
+                | models.Q(allow_external_embedding_corpus_egress=True),
+                name="ai_hub_query_egress_subset_of_corpus",
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -53,9 +76,47 @@ class ApplicationScope(models.Model):
             raise ValidationError({"name": "Application scope name is required."})
         if not str(self.slug or "").strip():
             raise ValidationError({"slug": "Application scope slug is required."})
+        if (
+            self.allow_external_embedding_query_egress
+            and not self.allow_external_embedding_corpus_egress
+        ):
+            raise ValidationError(
+                {
+                    "allow_external_embedding_query_egress": (
+                        "External query egress cannot be broader than external "
+                        "corpus egress. Enable corpus egress first, or leave "
+                        "both disabled."
+                    )
+                }
+            )
 
 
 class ProviderConfig(models.Model):
+    class DeclaredLocality(models.TextChoices):
+        """Where this provider sits relative to the deployment's trust boundary.
+
+        An OPERATOR DECLARATION, and the only authoritative source for it. Core
+        must never infer locality from `provider_type`, `base_url`, hostname, IP
+        address, scheme, provider name or model name - all of them are wrong in
+        realistic deployments:
+
+            provider_type=ollama, declared_locality=external   (hosted Ollama)
+            provider_type=openai, declared_locality=local      (internal gateway)
+
+        There is deliberately no DNS lookup, no RFC1918 check and no localhost
+        detection anywhere in this codebase.
+        """
+
+        # Not yet classified. Embedding use FAILS CLOSED - this is the default
+        # for every existing and new row, and it is never auto-upgraded.
+        UNKNOWN = "unknown", "Unknown (not classified - embeddings denied)"
+        # Inside the approved internal trust boundary. NOT necessarily the same
+        # machine, localhost or a particular vendor; it may be another server
+        # the operator controls.
+        LOCAL = "local", "Local (inside the declared trust boundary)"
+        # Sending text here crosses the trust boundary.
+        EXTERNAL = "external", "External (crosses the trust boundary)"
+
     class ProviderType(models.TextChoices):
         OPENAI = "openai", "OpenAI"
         OLLAMA = "ollama", "Ollama"
@@ -69,6 +130,14 @@ class ProviderConfig(models.Model):
     provider_type = models.CharField(max_length=30, choices=ProviderType.choices)
     base_url = models.URLField(blank=True)
     api_key_env_var = models.CharField(max_length=100, blank=True)
+    # S-17. Governs the FUTURE embedding capability only; existing completion
+    # execution does not consult it, so an unclassified provider keeps working
+    # for chat exactly as before while being refused for embeddings.
+    declared_locality = models.CharField(
+        max_length=20,
+        choices=DeclaredLocality.choices,
+        default=DeclaredLocality.UNKNOWN,
+    )
     default_timeout = models.PositiveIntegerField(default=60)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -81,6 +150,59 @@ class ProviderConfig(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class ProviderGrant(models.Model):
+    """Permission for ONE application scope to use ONE provider for embeddings.
+
+    **Provider definition is not provider permission.** A `ProviderConfig` row
+    describes an endpoint the deployment has configured; it never implies that
+    any particular application may send that provider its data. This model is
+    the explicit, per-scope grant that does.
+
+    A row with `allow_embeddings=False` grants nothing - it exists so an
+    operator can record a considered "no" rather than leaving an absence that
+    reads the same as "never asked".
+
+    Scope: FUTURE embedding use (S-17/S-18). Existing chat and completion
+    execution is deliberately NOT routed through grants; doing so would be a
+    much wider authorization redesign.
+    """
+
+    # A grant is subordinate configuration owned by its scope: deleting the
+    # application removes its authorization records with it.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.CASCADE,
+        related_name="provider_grants",
+    )
+    # PROTECT the other way round: a globally configured provider that scopes
+    # still explicitly reference should require intentional cleanup, not have
+    # its authorization records silently erased underneath it.
+    provider = models.ForeignKey(
+        ProviderConfig,
+        on_delete=models.PROTECT,
+        related_name="scope_grants",
+    )
+    allow_embeddings = models.BooleanField(default=False)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["application_scope__name", "provider__name"]
+        verbose_name = "1.2b Provider grant"
+        verbose_name_plural = "1.2b Provider grants - scope embedding permission"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["application_scope", "provider"],
+                name="ai_hub_unique_scope_provider_grant",
+            ),
+        ]
+
+    def __str__(self):
+        state = "embeddings allowed" if self.allow_embeddings else "no embedding use"
+        return f"{self.application_scope.name} -> {self.provider.name} ({state})"
 
 
 class ModelConfig(models.Model):
@@ -210,6 +332,18 @@ class ToolboxTool(models.Model):
 
 
 class KnowledgeCollection(models.Model):
+    class ExternalEmbeddingEgressPolicy(models.TextChoices):
+        """A collection may only NARROW its scope's external egress decision.
+
+        There is deliberately no `allow` / `force_allow` / `override_allow`
+        member. A collection can accept the scope's decision or refuse external
+        egress outright; it can never turn a scope-level DENY into an ALLOW.
+        The security root stays the ApplicationScope.
+        """
+
+        INHERIT = "inherit", "Inherit the application scope decision"
+        DENY = "deny", "Deny external embedding egress for this collection"
+
     # Root-owned: a collection belongs to exactly one application scope.
     # PROTECT, because a scope that still owns Knowledge must not vanish
     # through an accidental cascade - deleting a security boundary is a
@@ -228,6 +362,13 @@ class KnowledgeCollection(models.Model):
     name = models.CharField(max_length=140, unique=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    # S-17. `inherit` grants nothing by itself: every scope migrates with both
+    # external egress flags FALSE, so inheriting a DENY is still a DENY.
+    external_embedding_egress_policy = models.CharField(
+        max_length=20,
+        choices=ExternalEmbeddingEgressPolicy.choices,
+        default=ExternalEmbeddingEgressPolicy.INHERIT,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

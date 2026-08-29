@@ -19,6 +19,7 @@ from .admin_json import (
     expected_json_container,
 )
 from .models import (
+    ApplicationScope,
     AgentProfile,
     AgentToolGrant,
     AgentToolboxAssignment,
@@ -49,6 +50,7 @@ from .models import (
     ToolboxTool,
     ToolExecutionRun,
 )
+from .services.application_scope import require_single_active_scope
 from .services.admin_control_center import (
     build_ai_hub_home_context,
     build_control_center_context,
@@ -333,7 +335,12 @@ def _wizard_build_game(request, data):
         }
         workspace, _created = GameWorkspace.objects.get_or_create(
             name=ws_name,
-            defaults={"default_policy": policy},
+            defaults={
+                "default_policy": policy,
+                # No scope selector on this quick-start form yet; resolve the
+                # single active scope and refuse when that is ambiguous.
+                "application_scope": require_single_active_scope(),
+            },
         )
         goal = GameGoal.objects.create(
             workspace=workspace,
@@ -677,6 +684,44 @@ class KnowledgeDocumentChunkInline(AIHubFormHelpMixin, admin.TabularInline):
     show_change_link = True
     verbose_name = "Knowledge chunk"
     verbose_name_plural = "1.2 Knowledge chunks - retrievable sections"
+
+
+@admin.register(ApplicationScope)
+class ApplicationScopeAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    """The operator path for creating the FIRST application scope.
+
+    This registration is load-bearing on a fresh installation. Every root-owned
+    resource requires a scope, Core never creates one implicitly, and there is
+    no bootstrap. Without an admin page an operator would be unable to create
+    anything at all - so this is the entry point, not a convenience.
+    """
+
+    ai_hub_section_title = _("Application scopes")
+    ai_hub_section_description = _(
+        "One scope per application this AI Hub installation serves. A scope owns its own "
+        "knowledge collections, agents and GAME workspaces, and is the boundary that keeps "
+        "one application's data apart from another's."
+    )
+    ai_hub_section_note = _(
+        "Create a scope first. Knowledge collections, agents and workspaces each require one, "
+        "and AI Hub will not choose a scope on your behalf."
+    )
+    ai_hub_section_accent = "provider"
+    ai_hub_section_actions = (
+        {"label": _("Add scope"), "url": lambda self: reverse("admin:ai_hub_applicationscope_add"), "default": True},
+    )
+    list_display = ("name", "slug", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("name", "slug", "description")
+    prepopulated_fields = {"slug": ("name",)}
+    ai_hub_field_guidance = {
+        "name": {
+            "placeholder": "Example: Internal Support, Customer Portal",
+        },
+        "slug": {
+            "placeholder": "Example: internal-support",
+        },
+    }
 
 
 @admin.register(ProviderConfig)

@@ -69,6 +69,7 @@ from ai_hub.services.knowledge_preflight import (
     run_knowledge_preflight,
     summarize_preflight,
 )
+from ai_hub.test_application_scope_helpers import test_scope
 
 MODES = KnowledgeDocument.ChunkAuthorityMode
 
@@ -128,7 +129,7 @@ class PreflightStructuralStateTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Preflight Structural")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Preflight Structural")
         cls.ready = make_document(cls.collection, "Ready", chunks=((1, "canonical body"),))
         cls.with_source = make_document(
             cls.collection, "Ready With Source",
@@ -230,7 +231,7 @@ class PreflightAuthorityAndLifecycleTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Preflight Lifecycle")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Preflight Lifecycle")
 
     # -- UNKNOWN ----------------------------------------------------------
 
@@ -382,7 +383,7 @@ class PreflightTitleChangeRegressionTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Title Change")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Title Change")
 
     def test_changing_only_the_title_is_detected_as_input_change(self):
         """`title` becomes `section_title`, so it IS a generation input.
@@ -438,7 +439,7 @@ class PreflightChunkTamperRegressionTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Chunk Tamper")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Chunk Tamper")
 
     def test_raw_orm_content_edit_is_detected(self):
         document = make_derived_document(
@@ -497,7 +498,7 @@ class PreflightGeneratorOutdatedRegressionTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Generator Outdated")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Generator Outdated")
 
     def test_older_generator_version_is_outdated_not_stale(self):
         document = make_derived_document(
@@ -545,7 +546,7 @@ class PreflightGeneratorVersionDirectionTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Version Direction")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Version Direction")
 
     def _document(self, title, version):
         return make_derived_document(
@@ -653,7 +654,7 @@ class PreflightLifecycleNamingContractTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Lifecycle Naming")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Lifecycle Naming")
 
     def test_no_lifecycle_state_name_claims_readiness(self):
         for name in LIFECYCLE_STATES:
@@ -749,7 +750,7 @@ class PreflightIssueCodeContractTests(TestCase):
                 self.assertEqual(ISSUE_CODES[code]["retrieval_impact"], "none")
 
     def test_every_emitted_issue_carries_both_impact_dimensions(self):
-        collection = KnowledgeCollection.objects.create(name="Emitted Codes")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Emitted Codes")
         make_document(collection, "Src", curated_text="body")
         make_document(collection, "Chunks", chunks=((1, "body"),))
         report = run_knowledge_preflight()
@@ -769,7 +770,7 @@ class PreflightIssueCodeContractTests(TestCase):
 class PreflightSummaryCensusTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Census")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Census")
         make_document(cls.collection, "Unknown", chunks=((1, "body"),))
         make_document(
             cls.collection, "Explicit", chunks=((1, "body"),),
@@ -843,10 +844,11 @@ class PreflightSummaryCensusTests(TestCase):
 class PreflightScopeAndBoundsTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.first = KnowledgeCollection.objects.create(name="Alpha Collection")
-        cls.second = KnowledgeCollection.objects.create(name="Beta Collection")
+        cls.first = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Alpha Collection")
+        cls.second = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Beta Collection")
         cls.inactive = KnowledgeCollection.objects.create(
-            name="Gamma Collection", is_active=False
+            application_scope=test_scope(),
+            name="Gamma Collection", is_active=False,
         )
         make_document(cls.first, "Alpha Doc", curated_text="a")
         make_document(cls.second, "Beta Doc", curated_text="b")
@@ -895,7 +897,7 @@ class PreflightScopeAndBoundsTests(TestCase):
 
     def test_report_contains_no_chunk_bodies(self):
         """Bounded output survives lifecycle awareness."""
-        collection = KnowledgeCollection.objects.create(name="Bodies")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Bodies")
         make_derived_document(
             collection, "Long", curated_text="x",
             chunks=((1, "unmistakable-chunk-body-marker " * 200),),
@@ -916,7 +918,7 @@ class PreflightReadOnlyInvariantTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="ReadOnly V2")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="ReadOnly V2")
         make_document(cls.collection, "Unknown", chunks=((1, "body"),))
         make_document(
             cls.collection, "Explicit", chunks=((1, "body"),),
@@ -1059,7 +1061,8 @@ class PreflightQueryEfficiencyTests(TestCase):
 
     def _build(self, document_count, *, derived=False):
         collection = KnowledgeCollection.objects.create(
-            name=f"Scale {document_count} {derived}"
+            application_scope=test_scope(),
+            name=f"Scale {document_count} {derived}",
         )
         for index in range(document_count):
             document = make_document(
@@ -1127,9 +1130,10 @@ class PreflightSecurityBoundaryTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         agent = AgentProfile.objects.create(
-            name="preflight-agent", role="Boundary", model_config=model
+            application_scope=test_scope(),
+            name="preflight-agent", role="Boundary", model_config=model,
         )
-        collection = KnowledgeCollection.objects.create(name="Preflight Boundary")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Preflight Boundary")
         agent.knowledge_collections.add(collection)
 
         names = resolve_agent_tools(agent).tool_names()
@@ -1148,7 +1152,7 @@ class PreflightSecurityBoundaryTests(TestCase):
 class PreflightCommandTests(TestCase):
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Command V2")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Command V2")
         make_document(cls.collection, "Unknown", chunks=((1, "body"),))
         make_derived_document(cls.collection, "Healthy", curated_text="b", chunks=((1, "b"),))
 
@@ -1212,7 +1216,7 @@ class PreflightCommandTests(TestCase):
 
 class PreflightSummaryRenderingTests(TestCase):
     def test_summary_lists_every_axis(self):
-        collection = KnowledgeCollection.objects.create(name="Render V2")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Render V2")
         make_document(collection, "Ready", chunks=((1, "body"),))
         rendered = "\n".join(summarize_preflight(run_knowledge_preflight()))
         for name in STRUCTURAL_STATES:

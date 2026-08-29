@@ -27,6 +27,7 @@ from ai_hub.models import (
     Toolbox,
 )
 from ai_hub.services.knowledge_ingestion import ensure_initial_knowledge_chunk
+from ai_hub.services.application_scope import require_single_active_scope
 
 
 def parse_json_field(
@@ -197,6 +198,9 @@ def resolve_agent(data, model_config, errors, *, with_contracts):
         )
         if errors:
             return None
+    # Explicit ownership. The Build Console has no scope selector yet, so it
+    # resolves the single active scope and refuses when that is ambiguous.
+    fields["application_scope"] = require_single_active_scope()
     return AgentProfile.objects.create(**fields)
 
 
@@ -245,7 +249,11 @@ def attach_knowledge(agent, data, errors):
             )
         if errors:
             return
-        coll = KnowledgeCollection.objects.create(name=coll_name, is_active=True)
+        coll = KnowledgeCollection.objects.create(
+            name=coll_name,
+            is_active=True,
+            application_scope=require_single_active_scope(),
+        )
         document = KnowledgeDocument.objects.create(
             collection=coll,
             title=doc_title,

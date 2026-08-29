@@ -38,6 +38,7 @@ from ai_hub.services.knowledge_mutation import (
 )
 from ai_hub.services.knowledge_preflight import run_knowledge_preflight
 from ai_hub.services.starter_toolboxes import seed_starter_toolboxes
+from ai_hub.test_application_scope_helpers import test_scope
 
 MODES = KnowledgeDocument.ChunkAuthorityMode
 
@@ -240,7 +241,7 @@ class LifecycleEventDurabilityTests(TestCase):
     """History must not vanish because the document later did."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Durability")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Durability")
         self.document = make_document(self.collection)
 
     def test_event_survives_document_deletion_and_stays_intelligible(self):
@@ -277,7 +278,7 @@ class MutationSnapshotTests(TestCase):
     evidence moves, and never when it does not."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Snapshot")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Snapshot")
         self.document = make_document(self.collection, "Title A", curated_text="source body")
 
     def _snapshot(self):
@@ -378,8 +379,8 @@ class StaleReviewProtectionTests(TestCase):
     """
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="CAS")
-        self.other_collection = KnowledgeCollection.objects.create(name="CAS Other")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="CAS")
+        self.other_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="CAS Other")
         self.document = make_document(self.collection, "CAS Doc", curated_text="source")
 
     def _assert_conflict_on(self, expected, field):
@@ -575,8 +576,8 @@ class UnauditableMutationTests(TestCase):
     """The foundation refuses a change its event row cannot describe."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Auditable")
-        self.other = KnowledgeCollection.objects.create(name="Auditable Other")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Auditable")
+        self.other = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Auditable Other")
         self.document = make_document(self.collection, "Auditable Doc")
 
     def test_a_collection_move_inside_a_governed_mutation_is_refused(self):
@@ -609,7 +610,7 @@ class MutationEventAtomicityTests(TestCase):
     """Neither half may survive the other."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Atomic")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Atomic")
         self.document = make_document(self.collection, "Atomic Doc", curated_text="source")
 
     def test_successful_mutation_records_exactly_one_event_with_before_and_after(self):
@@ -724,7 +725,7 @@ class MutationPrincipalTests(TestCase):
     """Lifecycle mutation is operator/system activity, never Agent identity."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Principal")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Principal")
         self.document = make_document(self.collection)
 
     def test_principal_is_immutable(self):
@@ -839,6 +840,7 @@ class MutationSecurityBoundaryTests(TestCase):
 
     def test_no_seeded_tool_definition_exposes_the_mutation_foundation(self):
         """Seed the real starter tool set, then prove none of it reaches here."""
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         self.assertGreater(ToolDefinition.objects.count(), 0)
         for tool in ToolDefinition.objects.all():
@@ -853,6 +855,7 @@ class MutationSecurityBoundaryTests(TestCase):
                     self.assertNotIn(forbidden, blob)
 
     def test_no_tool_definition_declares_a_knowledge_lifecycle_write(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         knowledge_tools = ToolDefinition.objects.filter(name__icontains="knowledge")
         self.assertGreater(knowledge_tools.count(), 0)
@@ -929,7 +932,7 @@ class MutationSecurityBoundaryTests(TestCase):
     def test_no_public_callable_writes_to_the_database(self):
         """`build_snapshot` and `verify_expected_state` are the only public
         callables, and neither may change anything."""
-        collection = KnowledgeCollection.objects.create(name="Public Surface")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Public Surface")
         document = make_document(collection, "Read Only")
         before = _snapshot_database()
 
@@ -1026,7 +1029,7 @@ class ExistingWriterInvarianceTests(TestCase):
     """
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Writers")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Writers")
 
     def test_ingestion_fallback_still_produces_unknown_and_no_event(self):
         document = KnowledgeDocument.objects.create(
@@ -1069,7 +1072,7 @@ class ExistingWriterInvarianceTests(TestCase):
 
 class PreflightAndRetrievalRegressionTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Regression")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Regression")
         self.document = make_document(self.collection, "Reg Doc", curated_text="source")
 
     def test_preflight_is_still_read_only_and_creates_no_events(self):
@@ -1123,7 +1126,7 @@ class PreflightAndRetrievalRegressionTests(TestCase):
 
 class GovernedMutationLockingTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Locking")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Locking")
         self.document = make_document(self.collection, "Locked")
 
     def test_document_and_chunks_are_selected_for_update(self):
@@ -1181,7 +1184,7 @@ class GovernedMutationConcurrencyTests(TransactionTestCase):
                 "this test on PostgreSQL CI."
             )
 
-        collection = KnowledgeCollection.objects.create(name="Race")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Race")
         document = make_document(collection, "Contended")
         expected = expected_for(document)
 

@@ -72,6 +72,7 @@ from ai_hub.test_retrieval_baseline import (
     SEARCH_LIMIT,
     evaluate_golden_set,
 )
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 # Documents that must never be reachable, projected from the Slice 1 chunk set.
@@ -165,6 +166,7 @@ def build_dual_path_corpus(agent, *, populate_curated_text=True):
 
     for collection_spec in CORPUS:
         collection = KnowledgeCollection.objects.create(
+            application_scope=test_scope(),
             name=collection_spec["name"],
             description=collection_spec["description"],
             is_active=collection_spec["is_active"],
@@ -476,6 +478,7 @@ class GameRetrievalCharacterizationTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-baseline-agent",
             role="GAME retrieval characterization",
             model_config=model,
@@ -811,11 +814,12 @@ class KnowledgeFieldDivergenceTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="divergence-agent",
             role="Field divergence characterization",
             model_config=model,
         )
-        collection = KnowledgeCollection.objects.create(name="Divergence Collection")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Divergence Collection")
         cls.agent.knowledge_collections.add(collection)
         cls.session = ExecutionSession.objects.create(
             entry_agent=cls.agent,
@@ -892,12 +896,13 @@ class GameRetrievalAuditTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-audit-agent",
             role="GAME retrieval audit characterization",
             model_config=model,
         )
         build_dual_path_corpus(cls.agent)
-        cls.workspace = create_workspace(name="GAME retrieval audit workspace")
+        cls.workspace = create_workspace(application_scope=test_scope(), name="GAME retrieval audit workspace")
         cls.goal = create_goal(
             workspace=cls.workspace,
             title="Characterize GAME retrieval audit",
@@ -967,6 +972,7 @@ class GameRetrievalAuditTests(TestCase):
         Convergence must not lose this property.
         """
         other_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-audit-other-agent",
             role="Should never be used",
             model_config=self.agent.model_config,

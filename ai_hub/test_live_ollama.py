@@ -19,6 +19,7 @@ from ai_hub.services.agent_runtime import execute_agent
 from ai_hub.services.execution_runner import run_execution_session
 from ai_hub.services.execution_sessions import create_execution_session
 from ai_hub.services import litellm_client
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 LIVE_BASE_URL = os.getenv("AI_HUB_LIVE_OLLAMA_BASE_URL", "").strip()
@@ -46,6 +47,7 @@ class LiveOllamaIntegrationTests(TestCase):
             max_tokens_default=64,
         )
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Live Ollama foundation agent",
             role="Provider integration probe",
             model_config=self.model,
@@ -149,6 +151,7 @@ class LiveOllamaIntegrationTests(TestCase):
             max_tokens_default=16,
         )
         unreachable_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Live fallback primary failure",
             role="Controlled provider failure",
             model_config=unreachable_model,
@@ -242,6 +245,7 @@ class LiveOllamaIntegrationTests(TestCase):
             max_tokens_default=16,
         )
         unreachable_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Controlled failure agent",
             role="Provider failure probe",
             model_config=unreachable_model,

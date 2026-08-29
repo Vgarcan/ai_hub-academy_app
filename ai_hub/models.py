@@ -12,6 +12,49 @@ from django.utils import timezone
 # === REUSABLE AI PIPELINE CORE =============================================
 # These models are generic orchestration primitives. They can be copied to
 # another Django project without depending on Dreamsreader domain models.
+class ApplicationScope(models.Model):
+    """The root security boundary for ONE application hosted by this AI Hub.
+
+    One AI Hub installation may serve several independent applications out of a
+    single database and runtime. This model is the only thing that says which
+    application a resource belongs to, and it is deliberately generic: Core
+    never learns what a scope MEANS. A host maps its own domain object onto a
+    scope from outside; no host, project or domain concept may appear here.
+
+    S-14 establishes OWNERSHIP only. Answering "which scope owns this?" is in
+    scope; answering "may this agent retrieve this collection in this
+    execution?" is S-15's effective authorization policy and is deliberately
+    NOT implemented here.
+
+    There is no runtime default and no implicit scope. A resource without an
+    explicitly supplied scope is a resource whose security boundary nobody
+    decided, and the schema refuses it.
+    """
+
+    name = models.CharField(max_length=140, unique=True)
+    # Stable machine identity. Names are edited; slugs are referenced by
+    # migrations, fixtures and operators, so this is the durable handle.
+    slug = models.SlugField(max_length=140, unique=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "1.0 Application scope"
+        verbose_name_plural = "1.0 Application scopes - isolation boundaries"
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        if not str(self.name or "").strip():
+            raise ValidationError({"name": "Application scope name is required."})
+        if not str(self.slug or "").strip():
+            raise ValidationError({"slug": "Application scope slug is required."})
+
+
 class ProviderConfig(models.Model):
     class ProviderType(models.TextChoices):
         OPENAI = "openai", "OpenAI"
@@ -167,6 +210,21 @@ class ToolboxTool(models.Model):
 
 
 class KnowledgeCollection(models.Model):
+    # Root-owned: a collection belongs to exactly one application scope.
+    # PROTECT, because a scope that still owns Knowledge must not vanish
+    # through an accidental cascade - deleting a security boundary is a
+    # deliberate operator act, not a side effect.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="knowledge_collections",
+    )
+    # Global uniqueness is retained DELIBERATELY in S-14 and is stricter than
+    # multi-application isolation requires. Name-based resolution paths still
+    # exist in the runtime and assume a global namespace; relaxing this to
+    # UniqueConstraint(application_scope, name) before those paths are
+    # scope-aware would create ambiguous identity resolution. A later slice may
+    # change it, and only then.
     name = models.CharField(max_length=140, unique=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
@@ -300,6 +358,18 @@ class AgentProfile(models.Model):
         ASYNC = "async", "Async"
         INHERIT = "inherit", "Inherit"
 
+    # Root-owned, and SINGLE-scope in V1. An AgentProfile is mutable
+    # operational configuration - Knowledge assignments, model choice, tools,
+    # runtime settings - so sharing one across security boundaries would make
+    # its authorization ambiguous. If reusable agents are needed later they
+    # need a separate template/definition abstraction; that is not S-14.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="agent_profiles",
+    )
+    # Globally unique in S-14 by deliberate compatibility choice; see the note
+    # on KnowledgeCollection.name.
     name = models.CharField(max_length=140, unique=True)
     role = models.CharField(max_length=140)
     system_prompt = models.TextField(blank=True)
@@ -482,6 +552,17 @@ class PipelineStep(models.Model):
 
 
 class GameWorkspace(models.Model):
+    # Root-owned. A workspace belongs to a scope; it is NOT the security root
+    # itself. It is a GAME execution environment, Orchestrator sessions have no
+    # workspace at all, and its agent allow-list fails open when empty - none of
+    # which is acceptable in a root boundary.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="game_workspaces",
+    )
+    # Globally unique in S-14 by deliberate compatibility choice; see the note
+    # on KnowledgeCollection.name.
     name = models.CharField(max_length=160, unique=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)

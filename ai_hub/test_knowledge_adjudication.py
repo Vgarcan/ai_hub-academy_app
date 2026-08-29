@@ -52,6 +52,7 @@ from ai_hub.services.knowledge_mutation import (
 )
 from ai_hub.services.knowledge_preflight import run_knowledge_preflight
 from ai_hub.services.starter_toolboxes import seed_starter_toolboxes
+from ai_hub.test_application_scope_helpers import test_scope
 
 MODES = KnowledgeDocument.ChunkAuthorityMode
 
@@ -108,7 +109,7 @@ class ProjectionMatchesRealGeneratorTests(TestCase):
     """
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Projection")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Projection")
 
     def _assert_projection_matches_writer(self, title, curated_text):
         document = make_document(self.collection, title, curated_text=curated_text)
@@ -185,7 +186,7 @@ class ProjectionMatchesRealGeneratorTests(TestCase):
 
 class AdjudicateExplicitTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Explicit")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Explicit")
         self.document = make_document(
             self.collection, "Hand Authored", curated_text="source",
             chunks=((1, "hand written chunk"),),
@@ -274,7 +275,7 @@ class AdjudicateExplicitTests(TestCase):
 
 class AdoptDerivedTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Adopt")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Adopt")
         self.document = make_reproducible_document(self.collection)
 
     def test_reproducible_chunk_set_is_adopted(self):
@@ -490,7 +491,7 @@ class AdoptDerivedTests(TestCase):
 
 class AdjudicationPreconditionTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Preconditions")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Preconditions")
 
     def _both_operations(self, document):
         return (
@@ -547,7 +548,7 @@ class AdjudicationPreconditionTests(TestCase):
 
 class AdjudicationUsesTheGovernedBoundaryTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Boundary")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Boundary")
         self.document = make_reproducible_document(self.collection)
 
     def test_stale_review_is_rejected_by_the_shared_compare_and_swap(self):
@@ -565,7 +566,7 @@ class AdjudicationUsesTheGovernedBoundaryTests(TestCase):
     def test_a_collection_move_between_review_and_commit_is_rejected(self):
         """Neither `i1` nor `c1` moves, but the authorization boundary did."""
         expected = expected_for(self.document)
-        other = KnowledgeCollection.objects.create(name="Elsewhere")
+        other = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Elsewhere")
         KnowledgeDocument.objects.filter(pk=self.document.pk).update(collection=other)
 
         with self.assertRaises(KnowledgeMutationConflict) as caught:
@@ -698,6 +699,7 @@ class AdjudicationSecurityBoundaryTests(TestCase):
                 self._module_path(relative)
 
     def test_no_seeded_tool_definition_exposes_adjudication(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         self.assertGreater(ToolDefinition.objects.count(), 0)
         for tool in ToolDefinition.objects.all():
@@ -735,7 +737,7 @@ class AdjudicationSecurityBoundaryTests(TestCase):
 
 class AdjudicationLeavesEverythingElseAloneTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Unchanged")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Unchanged")
         self.document = make_reproducible_document(self.collection)
 
     def test_no_new_migration_is_required(self):

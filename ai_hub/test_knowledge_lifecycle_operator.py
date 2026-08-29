@@ -43,6 +43,7 @@ from ai_hub.services.knowledge_mutation import (
 from ai_hub.services.knowledge_preflight import run_knowledge_preflight
 from ai_hub.test_knowledge_regeneration import make_derived, preflight_row
 from ai_hub.test_knowledge_repair import make_modified
+from ai_hub.test_application_scope_helpers import test_scope
 
 MODES = KnowledgeDocument.ChunkAuthorityMode
 COMMAND = "knowledge_lifecycle_action"
@@ -97,7 +98,7 @@ class ReviewedSnapshotIsSubmittedTests(TestCase):
     """If this fails, the whole reviewed-state guarantee is theatre."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Submitted")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Submitted")
         self.document = make_unknown(self.collection, "Submitted Doc")
 
     def test_the_captured_expected_state_is_what_the_service_receives(self):
@@ -198,7 +199,7 @@ class ReviewedSnapshotIsSubmittedTests(TestCase):
 
 class ReviewCoherenceTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Coherence")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Coherence")
 
     def test_displayed_chunks_hash_to_the_snapshot_fingerprint(self):
         document = make_unknown(
@@ -319,7 +320,7 @@ class ActionDispatchTests(TestCase):
 
 class EndToEndActionTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="E2E")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="E2E")
 
     def test_adjudicate_unknown_as_explicit(self):
         document = make_unknown(self.collection, "E2E Explicit")
@@ -363,7 +364,7 @@ class EndToEndActionTests(TestCase):
 
 class ConfirmationContractTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Confirm")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Confirm")
         self.document = make_unknown(self.collection, "Confirm Doc")
 
     def _assert_aborted(self, confirm):
@@ -412,7 +413,7 @@ class ConfirmationContractTests(TestCase):
 
 class StaleReviewTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Stale")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Stale")
 
     def test_a_change_after_capture_conflicts_and_is_not_retried(self):
         document = make_unknown(self.collection, "Stale Doc", chunks=((1, "reviewed"),))
@@ -453,7 +454,7 @@ class StaleReviewTests(TestCase):
 
 class PrincipalAndReasonTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Principal")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Principal")
         self.document = make_unknown(self.collection, "Principal Doc")
 
     def _required(self, **omit):
@@ -555,7 +556,7 @@ class PrincipalAndReasonTests(TestCase):
 
 class CandidatePreviewTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Preview")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Preview")
 
     def test_only_generator_backed_actions_carry_a_candidate(self):
         self.assertEqual(
@@ -658,7 +659,7 @@ class CandidateGeneratorVersionTests(TestCase):
     CURRENT = GENERATOR_CURATED_TEXT_SINGLE_CHUNK_VERSION
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Candidate Version")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Candidate Version")
 
     def _rendered(self, document, action):
         out = StringIO()
@@ -854,7 +855,7 @@ class CandidateVersionDirectionTests(TestCase):
     UNCHANGED = "unchanged from the recorded version"
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Version Direction")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Version Direction")
 
     def _rendered(self, document, action):
         """Render the review, then abort. No service call, no writes."""
@@ -1077,7 +1078,7 @@ class CandidateVersionDirectionTests(TestCase):
 
 class WarningTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Warnings")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Warnings")
 
     def _output(self, document, action):
         out = StringIO()
@@ -1132,7 +1133,7 @@ class WarningTests(TestCase):
 
 class ErrorHandlingTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Errors")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Errors")
 
     def test_a_missing_document_fails_cleanly(self):
         with self.assertRaises(CommandError) as caught:
@@ -1311,6 +1312,7 @@ class OperatorSurfaceSafetyTests(TestCase):
         from ai_hub.models import ToolDefinition
         from ai_hub.services.starter_toolboxes import seed_starter_toolboxes
 
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         self.assertGreater(ToolDefinition.objects.count(), 0)
         for tool in ToolDefinition.objects.all():
@@ -1328,7 +1330,7 @@ class OperatorSurfaceSafetyTests(TestCase):
 
 class PreflightSeparationTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Preflight Sep")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Preflight Sep")
 
     def test_preflight_has_no_mutation_flags(self):
         import argparse
@@ -1392,7 +1394,7 @@ class BuildSnapshotUnchangedTests(TestCase):
     """The D-13-1 extraction must not have altered Slice 9 semantics."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Snapshot Parity")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Snapshot Parity")
 
     def test_build_snapshot_equals_the_row_based_constructor(self):
         from ai_hub.services.knowledge_mutation import _snapshot_from_chunk_rows

@@ -23,6 +23,7 @@ from ai_hub.models import (
     ProviderConfig,
     ToolDefinition,
 )
+from ai_hub.test_application_scope_helpers import test_scope
 
 User = get_user_model()
 
@@ -47,6 +48,7 @@ def _make_model(provider):
 
 def _make_agent(model):
     return AgentProfile.objects.create(
+        application_scope=test_scope(),
         name="Test Agent",
         role="tester",
         system_prompt="Respond with valid GAME JSON.",

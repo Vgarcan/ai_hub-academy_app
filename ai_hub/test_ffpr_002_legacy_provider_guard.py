@@ -14,6 +14,7 @@ from ai_hub.models import (
     ToolExecutionRun,
 )
 from ai_hub.services.execution_runner import run_execution_session
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 CALLABLE_PATH = "ai_hub.test_ffpr_002_legacy_provider_guard.record_side_effect"
@@ -43,6 +44,7 @@ class FFPR002LegacyProviderGuardTests(TestCase):
             model_name="training/ffpr-002",
         )
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="ffpr-002-agent",
             role="Legacy provider guard regression",
             model_config=self.model,

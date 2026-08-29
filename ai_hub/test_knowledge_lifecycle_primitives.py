@@ -78,6 +78,7 @@ from ai_hub.services.knowledge_lifecycle import (
     normalize_title_text,
 )
 from ai_hub.services.knowledge_retrieval import search_knowledge
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 def chunk(index, section_title, content):
@@ -198,7 +199,7 @@ class GenerationInputFingerprintContractTests(TestCase):
             )
 
     def test_document_helper_uses_title_and_curated_text(self):
-        collection = KnowledgeCollection.objects.create(name="Input FP")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Input FP")
         document = KnowledgeDocument.objects.create(
             collection=collection, title="Doc Title", curated_text="  the body  "
         )
@@ -210,7 +211,7 @@ class GenerationInputFingerprintContractTests(TestCase):
         )
 
     def test_document_helper_detects_a_title_only_change(self):
-        collection = KnowledgeCollection.objects.create(name="Title Change")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Title Change")
         document = KnowledgeDocument.objects.create(
             collection=collection, title="Original", curated_text="unchanged body"
         )
@@ -367,7 +368,7 @@ class ChunkSetFingerprintIgnoresNonEvidenceTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Ignore Fields")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Ignore Fields")
 
     def _document(self, title):
         document = KnowledgeDocument.objects.create(
@@ -454,7 +455,7 @@ class LifecycleFieldSemanticsTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Lifecycle Fields")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Lifecycle Fields")
 
     def test_a_new_document_defaults_to_unknown_with_blank_provenance(self):
         document = KnowledgeDocument.objects.create(
@@ -540,9 +541,10 @@ class LifecycleFieldsDoNotAffectRetrievalTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
-            name="lifecycle-agent", role="Lifecycle", model_config=model
+            application_scope=test_scope(),
+            name="lifecycle-agent", role="Lifecycle", model_config=model,
         )
-        collection = KnowledgeCollection.objects.create(name="Lifecycle Retrieval")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Lifecycle Retrieval")
         cls.agent.knowledge_collections.add(collection)
         cls.document = KnowledgeDocument.objects.create(
             collection=collection,
@@ -661,7 +663,7 @@ class MigrationStateIsolationTests(TransactionTestCase):
         MigrationExecutor(connection).migrate([("ai_hub", "0020_approval_execution_intent")])
         restore_migration_state()
 
-        collection = KnowledgeCollection.objects.create(name="Post-restore Collection")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Post-restore Collection")
         document = KnowledgeDocument.objects.create(
             collection=collection, title="Post-restore Document",
         )

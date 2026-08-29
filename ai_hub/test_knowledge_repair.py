@@ -62,6 +62,7 @@ from ai_hub.test_knowledge_regeneration import (
     preflight_row,
     record_generation,
 )
+from ai_hub.test_application_scope_helpers import test_scope
 
 MODES = KnowledgeDocument.ChunkAuthorityMode
 WHY = "operator_reviewed"
@@ -120,7 +121,7 @@ def make_provenance_incomplete(collection, title="Incomplete", *, field="generat
 
 class AcceptCurrentChunksAsExplicitTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Accept")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Accept")
 
     def test_modified_chunks_can_be_blessed(self):
         document = make_modified(self.collection)
@@ -227,7 +228,7 @@ class AcceptCurrentChunksAsExplicitTests(TestCase):
 
 class AcceptExplicitRefusalTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Accept Refusals")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Accept Refusals")
 
     def _assert_refused(self, document, exception):
         before = knowledge_snapshot()
@@ -345,7 +346,7 @@ class AcceptExplicitRefusalTests(TestCase):
 
 class DiscardModifiedChunksTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Discard")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Discard")
 
     def test_modified_chunks_are_discarded_and_regenerated(self):
         document = make_modified(self.collection, curated_text="the true source body")
@@ -414,7 +415,7 @@ class DiscardModifiedChunksTests(TestCase):
 
 class DiscardRefusalTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Discard Refusals")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Discard Refusals")
 
     def _assert_refused(self, document, exception):
         before = knowledge_snapshot()
@@ -519,7 +520,7 @@ class DominantModifiedChunksOverCapabilityDefectTests(TestCase):
     )
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Dominance")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Dominance")
 
     def _modified_with_defect(self, label, field, value):
         document = make_modified(self.collection, label, curated_text="the true body")
@@ -623,7 +624,7 @@ class IneligibilityReasonContractTests(TestCase):
     """
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Reasons")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Reasons")
 
     def _reason_from_accept(self, document):
         with self.assertRaises(IneligibleLifecycleStateError) as caught:
@@ -736,7 +737,7 @@ class Slice11RefusalIsUnchangedTests(TestCase):
     """The shared-helper extraction must not have relaxed ordinary regeneration."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Slice 11 Intact")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Slice 11 Intact")
 
     def test_ordinary_regeneration_still_refuses_modified_chunks(self):
         document = make_modified(self.collection)
@@ -804,7 +805,7 @@ class Slice11RefusalIsUnchangedTests(TestCase):
 
 class RepairAuditTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Repair Audit")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Repair Audit")
 
     def test_accept_records_the_authority_transfer_truthfully(self):
         document = make_modified(self.collection)
@@ -919,7 +920,7 @@ class RepairAuditTests(TestCase):
 
 class RepairRollbackTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Repair Rollback")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Repair Rollback")
         self.document = make_modified(self.collection, curated_text="the true body")
 
     def test_a_stale_review_conflicts_for_both_verbs(self):
@@ -954,7 +955,7 @@ class RepairRollbackTests(TestCase):
         self.assertEqual(knowledge_snapshot(), before)
 
     def test_a_collection_move_conflicts_for_both_verbs(self):
-        other = KnowledgeCollection.objects.create(name="Elsewhere")
+        other = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Elsewhere")
         for verb in (accept_current_chunks_as_explicit, discard_modified_chunks_and_regenerate):
             with self.subTest(verb=verb.__name__):
                 document = make_modified(self.collection, f"Moved {verb.__name__}")
@@ -1033,7 +1034,7 @@ class RepairRollbackTests(TestCase):
 
 class RepairDeliberateOmissionsTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Omissions")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Omissions")
 
     def test_there_is_no_reset_to_unknown_verb(self):
         """D-3e-4: it would be a laundering route back to a convenient claim."""
@@ -1210,6 +1211,7 @@ class RepairSecurityBoundaryTests(TestCase):
             self.assertNotIn(symbol, source)
 
     def test_no_seeded_tool_definition_exposes_repair(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         self.assertGreater(ToolDefinition.objects.count(), 0)
         for tool in ToolDefinition.objects.all():
@@ -1263,7 +1265,7 @@ class DiscardConcurrencyTests(TransactionTestCase):
                 "this test on PostgreSQL CI."
             )
 
-        collection = KnowledgeCollection.objects.create(name="Discard Race")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Discard Race")
         document = make_derived(collection, "Contended", curated_text="the true body")
         chunk = document.chunks.get()
         chunk.content = "an ungoverned edit"

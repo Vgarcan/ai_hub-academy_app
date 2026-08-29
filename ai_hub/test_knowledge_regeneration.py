@@ -50,6 +50,7 @@ from ai_hub.services.knowledge_regeneration import (
     regenerate_derived_chunk_set,
 )
 from ai_hub.services.starter_toolboxes import seed_starter_toolboxes
+from ai_hub.test_application_scope_helpers import test_scope
 
 MODES = KnowledgeDocument.ChunkAuthorityMode
 
@@ -206,7 +207,7 @@ class GeneratorVersionDriftGuardTests(TestCase):
     }
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Drift Guard")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Drift Guard")
 
     def test_the_declared_version_is_the_one_these_goldens_describe(self):
         self.assertEqual(
@@ -255,7 +256,7 @@ class GeneratorVersionDriftGuardTests(TestCase):
 
 class RegenerationReplacesChangedChunkSetTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Replace")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Replace")
         self.document = make_derived(self.collection, "Replace Me", curated_text="original body")
         # A governed source change: the document is now DERIVED_INPUT_CHANGED.
         KnowledgeDocument.objects.filter(pk=self.document.pk).update(
@@ -345,7 +346,7 @@ class RegenerationPreservesUnchangedChunkSetTests(TestCase):
     """No chunk identity churn when the artifact did not actually change."""
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Preserve")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Preserve")
 
     def _assert_chunks_untouched(self, document, before):
         after = chunk_rows(document)
@@ -423,7 +424,7 @@ class RegenerationFromEmptyChunkSetTests(TestCase):
     """
 
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Empty Set")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Empty Set")
 
     def _derived_with_empty_recorded_set(self, curated_text="body for regeneration"):
         document = KnowledgeDocument.objects.create(
@@ -483,7 +484,7 @@ class RegenerationFromEmptyChunkSetTests(TestCase):
 
 class RegenerationRefusalTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Refusals")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Refusals")
 
     def _assert_refused(self, document, exception):
         before_db = knowledge_snapshot()
@@ -587,7 +588,7 @@ class RegenerationRefusalTests(TestCase):
 
 class RegenerationRollbackTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Rollback")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Rollback")
         self.document = make_derived(self.collection, "Rollback", curated_text="original")
         KnowledgeDocument.objects.filter(pk=self.document.pk).update(curated_text="changed body")
         self.document.refresh_from_db()
@@ -736,7 +737,7 @@ class RegenerationRollbackTests(TestCase):
 
     def test_a_collection_move_between_review_and_commit_conflicts(self):
         expected = expected_for(self.document)
-        other = KnowledgeCollection.objects.create(name="Elsewhere")
+        other = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Elsewhere")
         KnowledgeDocument.objects.filter(pk=self.document.pk).update(collection=other)
 
         with self.assertRaises(KnowledgeMutationConflict) as caught:
@@ -752,7 +753,7 @@ class RegenerationRollbackTests(TestCase):
 
 class RegenerationAuditTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Audit")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Audit")
         self.document = make_derived(self.collection, "Audited", curated_text="before body")
         self.before_snapshot = build_snapshot(self.document)
         KnowledgeDocument.objects.filter(pk=self.document.pk).update(curated_text="after body")
@@ -874,6 +875,7 @@ class RegenerationSecurityBoundaryTests(TestCase):
                     self.assertNotIn(symbol, source)
 
     def test_no_seeded_tool_definition_exposes_regeneration(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         self.assertGreater(ToolDefinition.objects.count(), 0)
         for tool in ToolDefinition.objects.all():
@@ -983,7 +985,7 @@ class RegenerationSecurityBoundaryTests(TestCase):
 
 class RegenerationLeavesEverythingElseAloneTests(TestCase):
     def setUp(self):
-        self.collection = KnowledgeCollection.objects.create(name="Isolation")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Isolation")
         self.document = make_derived(self.collection, "Isolated", curated_text="a")
         KnowledgeDocument.objects.filter(pk=self.document.pk).update(curated_text="b")
         self.document.refresh_from_db()
@@ -1062,7 +1064,7 @@ class RegenerationConcurrencyTests(TransactionTestCase):
                 "this test on PostgreSQL CI."
             )
 
-        collection = KnowledgeCollection.objects.create(name="Regen Race")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Regen Race")
         document = make_derived(collection, "Contended", curated_text="original body")
         KnowledgeDocument.objects.filter(pk=document.pk).update(
             curated_text="a materially different body"

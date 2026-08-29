@@ -36,6 +36,7 @@ from ai_hub.models import (
     KnowledgeDocumentChunk,
 )
 from ai_hub.services.knowledge_ingestion import ensure_initial_knowledge_chunk
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 # The provenance markers production actually writes, gathered by inspection and
@@ -50,7 +51,7 @@ class ProvenanceMarkerInventoryTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Marker Inventory")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Marker Inventory")
 
     def _document(self, curated_text="source body", title="Marker Document"):
         return KnowledgeDocument.objects.create(
@@ -130,7 +131,7 @@ class ProvenanceMarkerDurabilityTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Marker Durability")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Marker Durability")
 
     def _derived_document(self):
         document = KnowledgeDocument.objects.create(
@@ -198,7 +199,7 @@ class StructuralHeuristicTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Heuristics")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Heuristics")
 
     def _derived(self, title="Heuristic Document", body="heuristic source body"):
         document = KnowledgeDocument.objects.create(
@@ -303,7 +304,7 @@ class TimestampEvidenceTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Timestamps")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Timestamps")
 
     def _derived(self):
         document = KnowledgeDocument.objects.create(
@@ -396,7 +397,7 @@ class NoPersistedLifecycleStateTests(TestCase):
         field = KnowledgeDocumentChunk._meta.get_field("metadata")
         self.assertEqual(field.get_internal_type(), "JSONField")
 
-        collection = KnowledgeCollection.objects.create(name="Metadata Shape")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Metadata Shape")
         document = KnowledgeDocument.objects.create(
             collection=collection, title="Shape", status=KnowledgeDocument.Status.ACTIVE
         )
@@ -416,7 +417,7 @@ class NoPersistedLifecycleStateTests(TestCase):
         Re-stated here as a lifecycle fact because the future contract depends
         on it; the retrieval consequences were measured in Slice 3.
         """
-        collection = KnowledgeCollection.objects.create(name="Readiness")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Readiness")
         empty_active = KnowledgeDocument.objects.create(
             collection=collection,
             title="Active But Empty",

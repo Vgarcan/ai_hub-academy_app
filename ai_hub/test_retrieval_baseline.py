@@ -40,6 +40,7 @@ from ai_hub.models import (
     ProviderConfig,
 )
 from ai_hub.services.knowledge_retrieval import search_knowledge
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 # Matches the retrieval service default and the seeded tool adapter default.
@@ -678,6 +679,7 @@ class LexicalRetrievalBaselineTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="baseline-retrieval-agent",
             role="Lexical retrieval baseline",
             model_config=model,
@@ -688,6 +690,7 @@ class LexicalRetrievalBaselineTests(TestCase):
 
         for collection_spec in CORPUS:
             collection = KnowledgeCollection.objects.create(
+                application_scope=test_scope(),
                 name=collection_spec["name"],
                 description=collection_spec["description"],
                 is_active=collection_spec["is_active"],
@@ -916,11 +919,13 @@ class LexicalCandidateTruncationBaselineTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="truncation-baseline-agent",
             role="Candidate truncation baseline",
             model_config=model,
         )
         collection = KnowledgeCollection.objects.create(
+            application_scope=test_scope(),
             name="Baseline Truncation Corpus",
             description="Single collection so document title decides candidate order.",
         )

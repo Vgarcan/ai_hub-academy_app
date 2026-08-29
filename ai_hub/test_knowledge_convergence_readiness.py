@@ -40,6 +40,7 @@ from ai_hub.services.knowledge_retrieval import (
     search_knowledge,
 )
 from ai_hub.test_game_retrieval_baseline import _ActionRunStub, run_path2_search
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 SEARCH_LIMIT = 5
@@ -116,7 +117,7 @@ STATE_MARKERS = {
 
 def build_state_matrix_corpus(agent):
     """Create one ACTIVE document per state. Returns {state: document}."""
-    collection = KnowledgeCollection.objects.create(name="Convergence State Matrix")
+    collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Convergence State Matrix")
     agent.knowledge_collections.add(collection)
     documents = {}
     for spec in STATE_MATRIX:
@@ -149,6 +150,7 @@ class KnowledgeStateMatrixTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="convergence-agent",
             role="Convergence readiness",
             model_config=model,
@@ -230,9 +232,10 @@ class KnowledgeDriftCharacterizationTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
-            name="drift-agent", role="Drift characterization", model_config=model
+            application_scope=test_scope(),
+            name="drift-agent", role="Drift characterization", model_config=model,
         )
-        cls.collection = KnowledgeCollection.objects.create(name="Drift Collection")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Drift Collection")
         cls.agent.knowledge_collections.add(cls.collection)
 
     def _document(self, curated_text, chunk_content):
@@ -322,7 +325,7 @@ class IngestionFallbackAuthorityTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.collection = KnowledgeCollection.objects.create(name="Fallback Collection")
+        cls.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Fallback Collection")
 
     def _document(self, curated_text=""):
         return KnowledgeDocument.objects.create(
@@ -445,7 +448,7 @@ class AdminAuthoringPathCharacterizationTests(TestCase):
 
     def test_a_document_saved_through_ordinary_orm_has_no_chunks(self):
         """The Admin uses the ordinary ModelForm save path, which creates none."""
-        collection = KnowledgeCollection.objects.create(name="Admin Path Collection")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Admin Path Collection")
         document = KnowledgeDocument.objects.create(
             collection=collection,
             title="Admin Authored Document",
@@ -473,9 +476,10 @@ class WholeDocumentCapabilityAnalysisTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
-            name="window-agent", role="Whole-document analysis", model_config=model
+            application_scope=test_scope(),
+            name="window-agent", role="Whole-document analysis", model_config=model,
         )
-        collection = KnowledgeCollection.objects.create(name="Window Collection")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Window Collection")
         cls.agent.knowledge_collections.add(collection)
         cls.document = KnowledgeDocument.objects.create(
             collection=collection,
@@ -556,7 +560,8 @@ class ConvergenceGapDetectionTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         cls.agent = AgentProfile.objects.create(
-            name="preflight-agent", role="Preflight", model_config=model
+            application_scope=test_scope(),
+            name="preflight-agent", role="Preflight", model_config=model,
         )
         cls.documents = build_state_matrix_corpus(cls.agent)
 

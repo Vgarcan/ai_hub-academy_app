@@ -1485,18 +1485,31 @@ class AbsenceTests(TestCase):
 
 
 class MigrationTests(TestCase):
-    def test_the_migration_leaf_is_the_retrieval_audit_foundation(self):
+    def test_this_slice_owns_exactly_one_migration_with_the_right_parent(self):
+        """A slice asserts ITS migration, not what the current leaf happens to be.
+
+        This previously asserted `leaf == 0029`, which was really a claim about
+        every future slice - and it broke the moment S-24 legitimately added
+        `0030`. The current-leaf assertion belongs with the newest migration; a
+        historical slice owns only its own file and its own parent.
+        """
         from django.db.migrations.loader import MigrationLoader
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
-        ai_hub_migrations = sorted(
+        names = [
             name for app, name in loader.disk_migrations if app == "ai_hub"
-        )
-        self.assertEqual(ai_hub_migrations[-1], "0029_retrieval_audit_foundation")
+        ]
+        self.assertIn("0029_retrieval_audit_foundation", names)
         self.assertEqual(
-            len([name for name in ai_hub_migrations if name.startswith("0029")]),
+            len([name for name in names if name.startswith("0029")]),
             1,
-            "exactly one leaf; no alternate 0029",
+            "exactly one 0029; no alternate branch",
+        )
+        migration = loader.disk_migrations[
+            ("ai_hub", "0029_retrieval_audit_foundation")
+        ]
+        self.assertEqual(
+            migration.dependencies, [("ai_hub", "0028_knowledge_chunk_embedding")]
         )
 
     def test_the_migration_is_schema_only_and_portable(self):

@@ -20,11 +20,13 @@ and filtered afterwards; only the plan shows whether its graph was opened at all
 """
 
 import ast
+import dataclasses
 import inspect
 import json
 import re
-from decimal import Decimal
+import sys
 import threading
+from decimal import Decimal
 from unittest import mock, skipUnless
 
 from django.db import connection, connections
@@ -93,6 +95,53 @@ E1_A = "e1:sha256:" + ("ab" * 32)
 E1_B = "e1:sha256:" + ("cd" * 32)
 
 KNOWLEDGE_SECRET = "KNOWLEDGE-SECRET-PGV-5150"
+
+
+#: Payload keys that must never appear anywhere in an S-24 result.
+FORBIDDEN_PAYLOAD_KEYS = frozenset({
+    "query", "query_text", "canonical_query", "query_values", "query_vector",
+    "vector", "vector_bytes", "embedding", "embeddings",
+    "content", "section_title", "snippet", "title",
+    "metadata", "tags", "curated_text",
+    "provider_response", "response_body",
+    "api_key", "credential", "token",
+})
+
+#: The complete, intended S-24 result schema. Anything a walk over a real
+#: result yields that is not in here is either a leak or a walker that escaped.
+ALLOWED_RESULT_FIELDS = frozenset({
+    "matches", "application_scope_id", "collection_ids",
+    "embedding_model_config_id", "e1", "backend_version", "metric",
+    "ann_candidate_pool", "ann_candidates_returned",
+})
+ALLOWED_MATCH_FIELDS = frozenset({
+    "rank", "chunk_id", "document_id", "collection_id", "application_scope_id",
+    "k1", "e1", "metric", "metric_value",
+})
+
+
+def result_schema_keys(value):
+    """Field names of OUR result dataclasses, recursively. Nothing else.
+
+    The traversal boundary is the whole point. An earlier version recursed on
+    `hasattr(value, "__dict__")`, which is true of far more than a result
+    object - notably a Django `TextChoices` member, whose `__dict__` contains
+    `__objclass__` pointing back at its own enum class. The walk left the result
+    schema, entered Python's enum machinery and did not terminate.
+
+    So: recurse into dataclass INSTANCES and into tuple/list containers, and
+    treat everything else - strings, numbers, ids, metric values, enum members,
+    classes - as an atomic leaf. Deliberately NOT fixed with a raised recursion
+    limit or a visited-object set: both would preserve a general-purpose object
+    crawler that has no business inspecting a bounded result contract.
+    """
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for field in dataclasses.fields(value):
+            yield field.name
+            yield from result_schema_keys(getattr(value, field.name))
+    elif isinstance(value, (tuple, list)):
+        for child in value:
+            yield from result_schema_keys(child)
 
 
 def _migration_module():
@@ -518,6 +567,142 @@ class CosineZeroVectorParityTests(TestCase):
         }
         for forbidden in ("normalize_embedding_vector", "normalize"):
             self.assertNotIn(forbidden, names)
+
+
+class ResultSchemaWalkerTests(TestCase):
+    """The CI #54 regression. Runs on EVERY backend, deliberately.
+
+    The test it protects is PostgreSQL-gated, so the defect it caught could only
+    surface in CI. Constructing the result dataclasses directly needs no
+    database, so the walker's traversal boundary is now provable locally.
+    """
+
+    def _result(self, *, metric=METRIC.COSINE):
+        """A result carrying a REAL `TextChoices` member, as production does.
+
+        `resolve_embedding_contract` passes through the in-memory
+        `EmbeddingModelConfig.distance_metric`, which is an enum member when the
+        configuration object was built in Python rather than reloaded from the
+        database. That member is exactly what broke the old walker.
+        """
+        match = pgvector_ann.PgvectorAnnMatch(
+            rank=1, chunk_id=7, document_id=8, collection_id=9,
+            application_scope_id=3, k1="k1:sha256:" + "0" * 64, e1=E1_A,
+            metric=metric, metric_value=0.75,
+        )
+        return pgvector_ann.PgvectorAnnResult(
+            matches=(match,), application_scope_id=3, collection_ids=(9,),
+            embedding_model_config_id=11, e1=E1_A,
+            backend_version=PGVECTOR_BACKEND_VERSION, metric=metric,
+            ann_candidate_pool=ANN_CANDIDATE_POOL, ann_candidates_returned=1,
+        )
+
+    def test_a_textchoices_metric_is_exactly_what_broke_the_old_walker(self):
+        """Documents the root cause without reimplementing the broken walk."""
+        member = METRIC.COSINE
+        self.assertTrue(
+            hasattr(member, "__dict__"),
+            "which is why `hasattr(value, '__dict__')` was the wrong boundary",
+        )
+        self.assertIn(
+            "__objclass__", vars(member),
+            "and why the walk escaped: it points back at the enum class",
+        )
+        self.assertFalse(hasattr("cosine", "__dict__"), "a plain str does not")
+
+    def test_the_walker_terminates_on_a_textchoices_metric(self):
+        keys = set(result_schema_keys(self._result()))
+        self.assertEqual(keys, ALLOWED_RESULT_FIELDS | ALLOWED_MATCH_FIELDS)
+
+    def test_the_walker_never_yields_enum_or_python_internals(self):
+        keys = set(result_schema_keys(self._result()))
+        for internal in (
+            "_value_", "_name_", "__objclass__", "_sort_order_", "_label_",
+            "__module__", "__qualname__", "_member_map_", "_value2member_map_",
+        ):
+            with self.subTest(internal=internal):
+                self.assertNotIn(internal, keys)
+
+    def test_the_walker_yields_the_same_keys_for_a_plain_string_metric(self):
+        """A DB-loaded config gives a plain str; the schema must not differ."""
+        self.assertEqual(
+            set(result_schema_keys(self._result(metric=METRIC.COSINE))),
+            set(result_schema_keys(self._result(metric="cosine"))),
+        )
+
+    def test_the_walker_recurses_only_into_dataclasses_and_containers(self):
+        source = inspect.getsource(result_schema_keys)
+        tree = ast.parse(source.lstrip())
+        called = {
+            node.func.id for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        self.assertIn("isinstance", called)
+        self.assertNotIn("hasattr", called)
+        self.assertNotIn("vars", called)
+        attributes = {
+            node.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+        }
+        self.assertIn("is_dataclass", attributes)
+        self.assertIn("fields", attributes)
+        self.assertNotIn("__dict__", attributes)
+
+    def test_no_recursion_limit_workaround_and_no_visited_set(self):
+        """Fix the abstraction, not the symptom.
+
+        Structural, because this test's own source names every forbidden
+        construct while forbidding it - a text scan matches itself. (Ninth time
+        that trap has appeared across these slices.)
+        """
+        walker_tree = ast.parse(inspect.getsource(result_schema_keys).lstrip())
+        called_names = {
+            node.func.id for node in ast.walk(walker_tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        called_attrs = {
+            node.func.attr for node in ast.walk(walker_tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        self.assertNotIn("id", called_names, "no identity-based visited set")
+        self.assertNotIn("setrecursionlimit", called_attrs)
+        self.assertNotIn("setrecursionlimit", called_names)
+
+        bound = {
+            node.id for node in ast.walk(walker_tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+        }
+        for forbidden in ("seen", "visited", "_visited", "memo"):
+            self.assertNotIn(forbidden, bound)
+
+        # And nothing anywhere in the suite or the backend raises the limit.
+        for module in (pgvector_ann, sys.modules[__name__]):
+            with self.subTest(module=module.__name__):
+                tree = ast.parse(inspect.getsource(module))
+                attrs = {
+                    node.func.attr for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                }
+                self.assertNotIn("setrecursionlimit", attrs)
+
+    def test_a_leaked_payload_field_would_be_caught(self):
+        """Proves the forbidden-key assertion is not vacuous."""
+
+        @dataclasses.dataclass(frozen=True)
+        class LeakyMatch:
+            rank: int
+            content: str
+
+        @dataclasses.dataclass(frozen=True)
+        class LeakyResult:
+            matches: tuple
+
+        observed = set(
+            result_schema_keys(LeakyResult(matches=(LeakyMatch(1, "secret"),)))
+        )
+        self.assertIn("content", observed)
+        self.assertNotEqual(observed & FORBIDDEN_PAYLOAD_KEYS, set())
 
 
 class VendorGuardTests(TestCase):
@@ -1952,51 +2137,22 @@ class AnnSearchTests(PgvectorFixtureMixin, TestCase):
         contract.
         """
         result = self.search()
+        self.assertEqual(set(result.__dict__), set(ALLOWED_RESULT_FIELDS))
         self.assertEqual(
-            set(result.__dict__),
-            {
-                "matches",
-                "application_scope_id",
-                "collection_ids",
-                "embedding_model_config_id",
-                "e1",
-                "backend_version",
-                "metric",
-                "ann_candidate_pool",
-                "ann_candidates_returned",
-            },
-        )
-        self.assertEqual(
-            set(result.matches[0].__dict__),
-            {
-                "rank", "chunk_id", "document_id", "collection_id",
-                "application_scope_id", "k1", "e1", "metric", "metric_value",
-            },
+            set(result.matches[0].__dict__), set(ALLOWED_MATCH_FIELDS)
         )
 
     def test_no_payload_field_exists_anywhere_in_the_result(self):
-        """Recursive exact-key inspection of every dataclass in the result."""
-        forbidden_keys = {
-            "query", "query_text", "canonical_query", "query_values",
-            "query_vector", "vector", "vector_bytes", "embedding",
-            "embeddings", "content", "section_title", "snippet", "title",
-            "metadata", "tags", "curated_text", "provider_response",
-            "response_body", "api_key", "credential", "token",
-        }
-
-        def keys_of(value):
-            if hasattr(value, "__dict__"):
-                for key, child in vars(value).items():
-                    yield key
-                    yield from keys_of(child)
-            elif isinstance(value, (tuple, list)):
-                for child in value:
-                    yield from keys_of(child)
-
+        """Recursive exact-key inspection, bounded to our result dataclasses."""
         result = self.search()
-        observed = set(keys_of(result))
+        observed = set(result_schema_keys(result))
         self.assertTrue(observed)
-        self.assertEqual(observed & forbidden_keys, set())
+        self.assertEqual(observed & FORBIDDEN_PAYLOAD_KEYS, set())
+        # The walk must stay inside the known schema. Anything else here is
+        # either a leaked field or a walker that escaped into internals.
+        self.assertEqual(
+            observed, ALLOWED_RESULT_FIELDS | ALLOWED_MATCH_FIELDS
+        )
 
     def test_no_corpus_marker_or_vector_literal_reaches_the_result(self):
         """The value-level check, kept separate from the key-level one."""

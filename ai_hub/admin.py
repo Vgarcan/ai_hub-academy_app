@@ -19,6 +19,9 @@ from .admin_json import (
     expected_json_container,
 )
 from .models import (
+    ApplicationScope,
+    EmbeddingModelConfig,
+    ProviderGrant,
     AgentProfile,
     AgentToolGrant,
     AgentToolboxAssignment,
@@ -49,6 +52,7 @@ from .models import (
     ToolboxTool,
     ToolExecutionRun,
 )
+from .services.application_scope import require_single_active_scope
 from .services.admin_control_center import (
     build_ai_hub_home_context,
     build_control_center_context,
@@ -333,7 +337,12 @@ def _wizard_build_game(request, data):
         }
         workspace, _created = GameWorkspace.objects.get_or_create(
             name=ws_name,
-            defaults={"default_policy": policy},
+            defaults={
+                "default_policy": policy,
+                # No scope selector on this quick-start form yet; resolve the
+                # single active scope and refuse when that is ambiguous.
+                "application_scope": require_single_active_scope(),
+            },
         )
         goal = GameGoal.objects.create(
             workspace=workspace,
@@ -679,6 +688,174 @@ class KnowledgeDocumentChunkInline(AIHubFormHelpMixin, admin.TabularInline):
     verbose_name_plural = "1.2 Knowledge chunks - retrievable sections"
 
 
+@admin.register(ApplicationScope)
+class ApplicationScopeAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    """The operator path for creating the FIRST application scope.
+
+    This registration is load-bearing on a fresh installation. Every root-owned
+    resource requires a scope, Core never creates one implicitly, and there is
+    no bootstrap. Without an admin page an operator would be unable to create
+    anything at all - so this is the entry point, not a convenience.
+    """
+
+    ai_hub_section_title = _("Application scopes")
+    ai_hub_section_description = _(
+        "One scope per application this AI Hub installation serves. A scope owns its own "
+        "knowledge collections, agents and GAME workspaces, and is the boundary that keeps "
+        "one application's data apart from another's."
+    )
+    ai_hub_section_note = _(
+        "Create a scope first. Knowledge collections, agents and workspaces each require one, "
+        "and AI Hub will not choose a scope on your behalf."
+    )
+    ai_hub_section_accent = "provider"
+    ai_hub_section_actions = (
+        {"label": _("Add scope"), "url": lambda self: reverse("admin:ai_hub_applicationscope_add"), "default": True},
+    )
+    list_display = (
+        "name", "slug", "is_active",
+        "allow_external_embedding_corpus_egress",
+        "allow_external_embedding_query_egress",
+        "updated_at",
+    )
+    list_filter = (
+        "is_active",
+        "allow_external_embedding_corpus_egress",
+        "allow_external_embedding_query_egress",
+    )
+    search_fields = ("name", "slug", "description")
+    prepopulated_fields = {"slug": ("name",)}
+    ai_hub_field_guidance = {
+        "name": {
+            "placeholder": "Example: Internal Support, Customer Portal",
+        },
+        "slug": {
+            "placeholder": "Example: internal-support",
+        },
+        "allow_external_embedding_corpus_egress": {
+            "help": _(
+                "Allow this application's knowledge text to be sent to a provider "
+                "declared EXTERNAL for embedding. Off by default. A collection can "
+                "still refuse individually."
+            ),
+        },
+        "allow_external_embedding_query_egress": {
+            "help": _(
+                "Allow live query text to leave as well. Queries are not reviewed and "
+                "may contain user or client detail, so this needs its own decision and "
+                "can never be broader than the corpus setting above."
+            ),
+        },
+    }
+
+
+@admin.register(EmbeddingModelConfig)
+class EmbeddingModelConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    """Operator surface for the embedding/vector-space contract.
+
+    Configuring a model here grants nothing: permission to send an application's
+    data to the provider is a separate decision (see Provider grants), and
+    Knowledge access is a third one again.
+    """
+
+    ai_hub_section_title = _("Embedding models")
+    ai_hub_section_description = _(
+        "What an embedding model means to AI Hub: its vector dimension, distance "
+        "metric and normalization contract. These describe the vector space, not "
+        "permission to use it."
+    )
+    ai_hub_section_note = _(
+        "Change the model revision whenever the backing model may produce an "
+        "incompatible vector space - the contract fingerprint depends on it, and "
+        "the provider endpoint deliberately does not."
+    )
+    ai_hub_section_accent = "provider"
+    ai_hub_section_actions = (
+        {"label": _("Add embedding model"), "url": lambda self: reverse("admin:ai_hub_embeddingmodelconfig_add"), "default": True},
+        {"label": _("View provider grants"), "url": lambda self: reverse("admin:ai_hub_providergrant_changelist")},
+    )
+    list_display = (
+        "name", "provider", "provider_locality", "model_name", "model_revision",
+        "vector_dimension", "distance_metric", "normalization",
+        "max_input_chars", "request_timeout_seconds", "is_active",
+    )
+    list_filter = ("is_active", "distance_metric", "normalization", "provider")
+    search_fields = ("name", "model_name", "model_revision", "provider__name")
+    list_select_related = ("provider",)
+    readonly_fields = ("embedding_contract_fingerprint",)
+    fields = (
+        "name", "provider", "model_name", "model_revision",
+        "vector_dimension", "distance_metric", "normalization",
+        "max_input_chars", "request_timeout_seconds", "is_active",
+        "embedding_contract_fingerprint",
+    )
+
+    @admin.display(description=_("Provider locality"), ordering="provider__declared_locality")
+    def provider_locality(self, obj):
+        return obj.provider.get_declared_locality_display()
+
+    @admin.display(description=_("Contract fingerprint (e1)"))
+    def embedding_contract_fingerprint(self, obj):
+        """Delegates to the canonical implementation - never reimplemented here."""
+        if obj is None or obj.pk is None:
+            return _("Saved configurations show their contract fingerprint here.")
+        from .services.embedding_contract import (
+            embedding_contract_fingerprint as compute_e1,
+        )
+
+        return compute_e1(
+            provider_type=obj.provider.provider_type,
+            model_name=obj.model_name,
+            model_revision=obj.model_revision,
+            vector_dimension=obj.vector_dimension,
+            distance_metric=obj.distance_metric,
+            normalization=obj.normalization,
+        )
+
+
+@admin.register(ProviderGrant)
+class ProviderGrantAdmin(AIHubListPageMixin, admin.ModelAdmin):
+    """The operator surface for scope-specific provider embedding permission.
+
+    Load-bearing: a provider being configured never means an application may
+    use it. Without this page there is no way to record that permission, and
+    embedding use stays denied everywhere.
+    """
+
+    ai_hub_section_title = _("Provider grants")
+    ai_hub_section_description = _(
+        "Permission for one application scope to use one provider for embeddings. "
+        "Configuring a provider does not grant its use - this is where that decision "
+        "is recorded, per application."
+    )
+    ai_hub_section_note = _(
+        "A grant with embeddings disabled allows nothing. Combine with the provider's "
+        "declared locality and the scope's egress settings."
+    )
+    ai_hub_section_accent = "provider"
+    ai_hub_section_actions = (
+        {"label": _("Add grant"), "url": lambda self: reverse("admin:ai_hub_providergrant_add"), "default": True},
+        {"label": _("View providers"), "url": lambda self: reverse("admin:ai_hub_providerconfig_changelist")},
+    )
+    list_display = (
+        "application_scope", "provider", "provider_locality",
+        "allow_embeddings", "updated_at",
+    )
+    list_filter = ("allow_embeddings", "application_scope", "provider")
+    search_fields = (
+        "application_scope__name", "application_scope__slug",
+        "provider__name", "notes",
+    )
+    list_select_related = ("application_scope", "provider")
+    # Credentials are never surfaced here: this page is about permission, not
+    # about how the provider authenticates.
+    fields = ("application_scope", "provider", "allow_embeddings", "notes")
+
+    @admin.display(description=_("Provider locality"), ordering="provider__declared_locality")
+    def provider_locality(self, obj):
+        return obj.provider.get_declared_locality_display()
+
+
 @admin.register(ProviderConfig)
 class ProviderConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Providers")
@@ -695,7 +872,10 @@ class ProviderConfigAdmin(AIHubListPageMixin, admin.ModelAdmin):
         {"label": _("Add provider"), "url": lambda self: reverse("admin:ai_hub_providerconfig_add"), "default": True},
         {"label": _("Open control center"), "url": lambda self: reverse("admin:ai_hub_control_center")},
     )
-    list_display = ("name", "provider_type", "base_url", "api_key_env_var", "is_active", "default_timeout")
+    list_display = (
+        "name", "provider_type", "declared_locality", "base_url",
+        "api_key_env_var", "is_active", "default_timeout",
+    )
     list_filter = ("provider_type", "is_active")
     search_fields = ("name", "api_key_env_var", "base_url")
     ai_hub_field_guidance = {
@@ -1048,8 +1228,11 @@ class KnowledgeCollectionAdmin(AIHubListPageMixin, admin.ModelAdmin):
         {"label": _("Add collection"), "url": lambda self: reverse("admin:ai_hub_knowledgecollection_add"), "default": True},
         {"label": _("View documents"), "url": lambda self: reverse("admin:ai_hub_knowledgedocument_changelist")},
     )
-    list_display = ("name", "is_active", "documents_count", "updated_at")
-    list_filter = ("is_active",)
+    list_display = (
+        "name", "is_active", "external_embedding_egress_policy",
+        "documents_count", "updated_at",
+    )
+    list_filter = ("is_active", "external_embedding_egress_policy")
     search_fields = ("name", "description", "documents__title", "documents__curated_text")
     inlines = [KnowledgeDocumentInline]
     ai_hub_field_guidance = {

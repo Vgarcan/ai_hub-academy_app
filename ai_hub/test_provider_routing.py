@@ -10,6 +10,7 @@ from ai_hub.services import litellm_client
 from ai_hub.services.agent_runtime import execute_agent
 from ai_hub.services.health import STATUS_OK, evaluate_provider
 from ai_hub.services.provider_registry import resolve_model_config
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 class ProviderTypeRoutingTests(SimpleTestCase):
@@ -146,6 +147,7 @@ class ProviderTypePropagationTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="qwen3:8b")
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Routing agent",
             role="Routing regression",
             model_config=model,

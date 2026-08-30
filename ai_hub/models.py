@@ -12,7 +12,111 @@ from django.utils import timezone
 # === REUSABLE AI PIPELINE CORE =============================================
 # These models are generic orchestration primitives. They can be copied to
 # another Django project without depending on Dreamsreader domain models.
+class ApplicationScope(models.Model):
+    """The root security boundary for ONE application hosted by this AI Hub.
+
+    One AI Hub installation may serve several independent applications out of a
+    single database and runtime. This model is the only thing that says which
+    application a resource belongs to, and it is deliberately generic: Core
+    never learns what a scope MEANS. A host maps its own domain object onto a
+    scope from outside; no host, project or domain concept may appear here.
+
+    S-14 establishes OWNERSHIP only. Answering "which scope owns this?" is in
+    scope; answering "may this agent retrieve this collection in this
+    execution?" is S-15's effective authorization policy and is deliberately
+    NOT implemented here.
+
+    There is no runtime default and no implicit scope. A resource without an
+    explicitly supplied scope is a resource whose security boundary nobody
+    decided, and the schema refuses it.
+    """
+
+    name = models.CharField(max_length=140, unique=True)
+    # Stable machine identity. Names are edited; slugs are referenced by
+    # migrations, fixtures and operators, so this is the durable handle.
+    slug = models.SlugField(max_length=140, unique=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    # --- External embedding egress policy (S-17) ---------------------------
+    # The scope OWNS this decision. A collection may narrow it; nothing may
+    # widen it. Both default to DENY, so a fresh install and every migrated
+    # legacy scope authorize no external embedding egress at all until an
+    # operator explicitly decides otherwise.
+    #
+    # These govern the FUTURE embedding capability only. Existing chat and
+    # completion execution is deliberately untouched by them.
+    allow_external_embedding_corpus_egress = models.BooleanField(default=False)
+    # Query text is not curated: it may carry a user message, a client name or
+    # a pasted document, and no review step exists. So it needs its own
+    # permission AND can never be broader than the corpus permission - see the
+    # constraint below, which is enforced in the database, not just in `clean`.
+    allow_external_embedding_query_egress = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "1.0 Application scope"
+        verbose_name_plural = "1.0 Application scopes - isolation boundaries"
+        constraints = [
+            # query egress ⊆ corpus egress. Expressed as: NOT (query AND NOT
+            # corpus). A raw ORM write cannot produce the invalid combination.
+            models.CheckConstraint(
+                condition=models.Q(allow_external_embedding_query_egress=False)
+                | models.Q(allow_external_embedding_corpus_egress=True),
+                name="ai_hub_query_egress_subset_of_corpus",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        if not str(self.name or "").strip():
+            raise ValidationError({"name": "Application scope name is required."})
+        if not str(self.slug or "").strip():
+            raise ValidationError({"slug": "Application scope slug is required."})
+        if (
+            self.allow_external_embedding_query_egress
+            and not self.allow_external_embedding_corpus_egress
+        ):
+            raise ValidationError(
+                {
+                    "allow_external_embedding_query_egress": (
+                        "External query egress cannot be broader than external "
+                        "corpus egress. Enable corpus egress first, or leave "
+                        "both disabled."
+                    )
+                }
+            )
+
+
 class ProviderConfig(models.Model):
+    class DeclaredLocality(models.TextChoices):
+        """Where this provider sits relative to the deployment's trust boundary.
+
+        An OPERATOR DECLARATION, and the only authoritative source for it. Core
+        must never infer locality from `provider_type`, `base_url`, hostname, IP
+        address, scheme, provider name or model name - all of them are wrong in
+        realistic deployments:
+
+            provider_type=ollama, declared_locality=external   (hosted Ollama)
+            provider_type=openai, declared_locality=local      (internal gateway)
+
+        There is deliberately no DNS lookup, no RFC1918 check and no localhost
+        detection anywhere in this codebase.
+        """
+
+        # Not yet classified. Embedding use FAILS CLOSED - this is the default
+        # for every existing and new row, and it is never auto-upgraded.
+        UNKNOWN = "unknown", "Unknown (not classified - embeddings denied)"
+        # Inside the approved internal trust boundary. NOT necessarily the same
+        # machine, localhost or a particular vendor; it may be another server
+        # the operator controls.
+        LOCAL = "local", "Local (inside the declared trust boundary)"
+        # Sending text here crosses the trust boundary.
+        EXTERNAL = "external", "External (crosses the trust boundary)"
+
     class ProviderType(models.TextChoices):
         OPENAI = "openai", "OpenAI"
         OLLAMA = "ollama", "Ollama"
@@ -26,6 +130,14 @@ class ProviderConfig(models.Model):
     provider_type = models.CharField(max_length=30, choices=ProviderType.choices)
     base_url = models.URLField(blank=True)
     api_key_env_var = models.CharField(max_length=100, blank=True)
+    # S-17. Governs the FUTURE embedding capability only; existing completion
+    # execution does not consult it, so an unclassified provider keeps working
+    # for chat exactly as before while being refused for embeddings.
+    declared_locality = models.CharField(
+        max_length=20,
+        choices=DeclaredLocality.choices,
+        default=DeclaredLocality.UNKNOWN,
+    )
     default_timeout = models.PositiveIntegerField(default=60)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -38,6 +150,59 @@ class ProviderConfig(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class ProviderGrant(models.Model):
+    """Permission for ONE application scope to use ONE provider for embeddings.
+
+    **Provider definition is not provider permission.** A `ProviderConfig` row
+    describes an endpoint the deployment has configured; it never implies that
+    any particular application may send that provider its data. This model is
+    the explicit, per-scope grant that does.
+
+    A row with `allow_embeddings=False` grants nothing - it exists so an
+    operator can record a considered "no" rather than leaving an absence that
+    reads the same as "never asked".
+
+    Scope: FUTURE embedding use (S-17/S-18). Existing chat and completion
+    execution is deliberately NOT routed through grants; doing so would be a
+    much wider authorization redesign.
+    """
+
+    # A grant is subordinate configuration owned by its scope: deleting the
+    # application removes its authorization records with it.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.CASCADE,
+        related_name="provider_grants",
+    )
+    # PROTECT the other way round: a globally configured provider that scopes
+    # still explicitly reference should require intentional cleanup, not have
+    # its authorization records silently erased underneath it.
+    provider = models.ForeignKey(
+        ProviderConfig,
+        on_delete=models.PROTECT,
+        related_name="scope_grants",
+    )
+    allow_embeddings = models.BooleanField(default=False)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["application_scope__name", "provider__name"]
+        verbose_name = "1.2b Provider grant"
+        verbose_name_plural = "1.2b Provider grants - scope embedding permission"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["application_scope", "provider"],
+                name="ai_hub_unique_scope_provider_grant",
+            ),
+        ]
+
+    def __str__(self):
+        state = "embeddings allowed" if self.allow_embeddings else "no embedding use"
+        return f"{self.application_scope.name} -> {self.provider.name} ({state})"
 
 
 class ModelConfig(models.Model):
@@ -74,6 +239,117 @@ class ModelConfig(models.Model):
                         )
                     }
                 )
+
+
+class EmbeddingModelConfig(models.Model):
+    """What an embedding model MEANS to AI Hub - its vector-space contract.
+
+    Deliberately NOT an extension of `ModelConfig`. A completion model is
+    described by temperature, max tokens and tool support; an embedding model is
+    described by dimension, distance metric and normalization. Neither set is
+    meaningful for the other, so sharing one table would give every row a
+    handful of misleading fields and still lack the ones that matter.
+
+    A GLOBAL reusable definition. There is deliberately no `application_scope`,
+    `knowledge_collection`, `agent` or `workspace` FK here: permission to use a
+    provider already exists as `ProviderGrant` plus the ApplicationScope egress
+    policy (S-17), and a second permission system would be one more thing that
+    can disagree with the first.
+
+    Configuring an embedding model grants nothing. Future embedding execution
+    will require BOTH a resolved contract (this model) AND an allowed
+    `EmbeddingAccessDecision`.
+    """
+
+    class DistanceMetric(models.TextChoices):
+        """Core semantics, not backend operator names.
+
+        A future vector backend maps these to its own implementation. There are
+        deliberately no `pgvector_cosine` / `l2_ops` / `vector_ip_ops` members -
+        binding the contract to one backend's vocabulary would make the contract
+        unportable and would leak a storage decision into a semantic one.
+        """
+
+        COSINE = "cosine", "Cosine"
+        DOT_PRODUCT = "dot_product", "Dot product"
+        EUCLIDEAN = "euclidean", "Euclidean"
+
+    class Normalization(models.TextChoices):
+        """What a future execution pipeline must do before a vector is valid."""
+
+        NONE = "none", "None (no additional transform)"
+        L2 = "l2", "L2 normalize"
+
+    # An operator-facing administrative label. Deliberately NOT part of `e1`:
+    # renaming a configuration must never invalidate vectors produced under it.
+    name = models.CharField(max_length=140, unique=True)
+    # PROTECT, stricter than the legacy completion `ModelConfig` relationship
+    # and intentionally so: an embedding contract must not silently disappear
+    # because someone tried to delete a provider definition. Vectors produced
+    # under a contract outlive attempts to tidy up configuration.
+    provider = models.ForeignKey(
+        ProviderConfig,
+        on_delete=models.PROTECT,
+        related_name="embedding_models",
+    )
+    model_name = models.CharField(max_length=140)
+    # Operator-declared stable identity for the model REVISION, and therefore
+    # for the vector space. Load-bearing, because the provider endpoint is not
+    # part of `e1`: if the backing model may produce an incompatible vector
+    # space, the operator MUST change this even when `model_name` is unchanged.
+    # Core never contacts the provider to verify it, and never invents a
+    # floating "latest" / "current" / provider-default revision.
+    model_revision = models.CharField(max_length=140)
+    vector_dimension = models.PositiveIntegerField()
+    # No default on purpose: the operator decides the contract explicitly.
+    distance_metric = models.CharField(max_length=20, choices=DistanceMetric.choices)
+    normalization = models.CharField(max_length=20, choices=Normalization.choices)
+    # A Core safety ceiling in CHARACTERS, not tokens. AI Hub has no embedding
+    # tokenizer contract, and claiming a token count would be false precision.
+    #
+    # Future rule, recorded here because the enforcement point does not exist
+    # yet: input over this limit must be REJECTED, never silently truncated.
+    # Truncating would change the text being embedded without saying so.
+    max_input_chars = models.PositiveIntegerField(default=8000)
+    # Operational only, independent of completion behaviour. Not part of `e1`.
+    request_timeout_seconds = models.PositiveIntegerField(default=60)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "1.2c Embedding model config"
+        verbose_name_plural = "1.2c Embedding model configs - vector-space contracts"
+
+    def __str__(self):
+        return f"{self.name} ({self.model_name} @ {self.model_revision})"
+
+    def clean(self):
+        # Two rows may legitimately share every `e1` field while differing
+        # operationally - a short-timeout and a long-timeout variant of the same
+        # vector space. That is CORRECT, so there is deliberately no uniqueness
+        # constraint over the semantic fields.
+        errors = {}
+        for field in ("name", "model_name", "model_revision"):
+            if not str(getattr(self, field, "") or "").strip():
+                errors[field] = f"{field.replace('_', ' ').capitalize()} is required."
+        for field in ("vector_dimension", "max_input_chars", "request_timeout_seconds"):
+            value = getattr(self, field, None)
+            if value is not None and value <= 0:
+                errors[field] = (
+                    f"{field.replace('_', ' ').capitalize()} must be greater than zero."
+                )
+        if self.distance_metric not in self.DistanceMetric.values:
+            errors["distance_metric"] = "Select a supported distance metric."
+        if self.normalization not in self.Normalization.values:
+            errors["normalization"] = "Select a supported normalization contract."
+        if self.is_active and self.provider_id and not self.provider.is_active:
+            errors["is_active"] = (
+                "Cannot activate an embedding model whose provider is inactive."
+            )
+        if errors:
+            raise ValidationError(errors)
 
 
 class ToolDefinition(models.Model):
@@ -167,9 +443,43 @@ class ToolboxTool(models.Model):
 
 
 class KnowledgeCollection(models.Model):
+    class ExternalEmbeddingEgressPolicy(models.TextChoices):
+        """A collection may only NARROW its scope's external egress decision.
+
+        There is deliberately no `allow` / `force_allow` / `override_allow`
+        member. A collection can accept the scope's decision or refuse external
+        egress outright; it can never turn a scope-level DENY into an ALLOW.
+        The security root stays the ApplicationScope.
+        """
+
+        INHERIT = "inherit", "Inherit the application scope decision"
+        DENY = "deny", "Deny external embedding egress for this collection"
+
+    # Root-owned: a collection belongs to exactly one application scope.
+    # PROTECT, because a scope that still owns Knowledge must not vanish
+    # through an accidental cascade - deleting a security boundary is a
+    # deliberate operator act, not a side effect.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="knowledge_collections",
+    )
+    # Global uniqueness is retained DELIBERATELY in S-14 and is stricter than
+    # multi-application isolation requires. Name-based resolution paths still
+    # exist in the runtime and assume a global namespace; relaxing this to
+    # UniqueConstraint(application_scope, name) before those paths are
+    # scope-aware would create ambiguous identity resolution. A later slice may
+    # change it, and only then.
     name = models.CharField(max_length=140, unique=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    # S-17. `inherit` grants nothing by itself: every scope migrates with both
+    # external egress flags FALSE, so inheriting a DENY is still a DENY.
+    external_embedding_egress_policy = models.CharField(
+        max_length=20,
+        choices=ExternalEmbeddingEgressPolicy.choices,
+        default=ExternalEmbeddingEgressPolicy.INHERIT,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -188,6 +498,34 @@ class KnowledgeDocument(models.Model):
         ACTIVE = "active", "Active"
         ARCHIVED = "archived", "Archived"
 
+    class ChunkAuthorityMode(models.TextChoices):
+        """Who is authoritative for this document's retrieval chunk set.
+
+        Authority is a property of the chunk SET, not of an individual chunk,
+        so it lives on the document that owns the set. A per-chunk mode would
+        permit an incoherent half-derived document with no defined
+        regeneration semantics.
+
+        UNKNOWN  - legacy or ungoverned. Generation provenance may be absent
+                   and must not be trusted. Never auto-repaired, never
+                   silently reclassified. This is the safe default for every
+                   pre-existing row and for any raw ORM write, until a future
+                   governed write explicitly declares authority.
+        DERIVED  - the set was generated from a source representation.
+                   NOTE: this alone NEVER authorizes overwrite. Safe
+                   regeneration also requires the current generation inputs to
+                   match `generation_input_fingerprint` AND the current chunks
+                   to match `generation_chunk_set_fingerprint`.
+        EXPLICIT - the chunk set itself was deliberately authored and is
+                   authoritative for retrieval. Generation provenance is
+                   normally blank, and `curated_text` changing does not make
+                   it stale.
+        """
+
+        UNKNOWN = "unknown", "Unknown (legacy or ungoverned)"
+        DERIVED = "derived", "Derived from a source"
+        EXPLICIT = "explicit", "Explicitly authored"
+
     collection = models.ForeignKey(KnowledgeCollection, on_delete=models.CASCADE, related_name="documents")
     title = models.CharField(max_length=180)
     curated_text = models.TextField(blank=True)
@@ -196,6 +534,29 @@ class KnowledgeDocument(models.Model):
     language = models.CharField(max_length=20, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     notes = models.TextField(blank=True)
+    # --- Lifecycle facts. Persisted only; no runtime code reads them yet. ----
+    # Deliberately unconstrained beyond types and defaults: the governed
+    # mutation boundary does not exist, raw ORM stays an intentional escape
+    # hatch, and a future preflight must be able to REPORT inconsistent
+    # combinations rather than be prevented from observing them.
+    chunk_authority_mode = models.CharField(
+        max_length=20,
+        choices=ChunkAuthorityMode.choices,
+        default=ChunkAuthorityMode.UNKNOWN,
+    )
+    # Versioned fingerprints ("i1:<sha256>" / "c1:<sha256>"); see
+    # ai_hub.services.knowledge_lifecycle. Blank unless mode is DERIVED.
+    #
+    # generation_input_fingerprint covers the COMPLETE mutable input set the
+    # recorded generator reads - for curated_text_single_chunk that is BOTH
+    # `title` (which becomes section_title) and `curated_text` (which becomes
+    # content). A curated_text-only fingerprint could not detect a title change.
+    generation_input_fingerprint = models.CharField(max_length=80, blank=True)
+    generation_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    generator_identity = models.CharField(max_length=64, blank=True)
+    # Null - not zero - when no generator applies. A fake version would be a
+    # provenance claim about a generator that never ran.
+    generator_version = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -243,12 +604,137 @@ class KnowledgeDocumentChunk(models.Model):
             raise ValidationError({"metadata": "Chunk metadata must be a JSON object."})
 
 
+class KnowledgeChunkEmbedding(models.Model):
+    """One persisted vector for one Knowledge chunk under one vector-space contract.
+
+    DERIVED INDEX STATE, never Knowledge authority. A vector is downstream of the
+    chunk that produced it and can always be rebuilt from it; it never becomes
+    source-of-truth Knowledge, and nothing here touches `chunk_authority_mode`,
+    `i1`, `c1` or `KnowledgeLifecycleEvent`.
+
+    A row is CURRENT only when its stored `k1` still matches the chunk's canonical
+    embedding input AND its stored `e1` still matches its recorded configuration's
+    vector-space contract. A stale row is allowed to EXIST - staleness is
+    observable state to be reported and later replaced, not corruption to be
+    auto-deleted. Nothing in this model reacts to a signal.
+
+    The direct `application_scope` and `collection` columns are deliberate
+    denormalization for storage NAMESPACE and pre-ranking narrowing, not an
+    exception to the S-14 "do not spray scope FKs" rule: this is a new,
+    security-sensitive index resource whose physical namespace must be explicit,
+    and a future semantic search must be able to narrow by authorized collection
+    BEFORE candidate generation rather than rediscovering that predicate through
+    document joins. They ACCELERATE the boundary; they never define it. Canonical
+    ownership remains `chunk -> document -> collection -> application_scope`, and
+    the loader re-derives and compares it on every read.
+    """
+
+    class VectorFormat(models.TextChoices):
+        """Physical encoding of `vector_bytes`. Closed set; no fallback decoder.
+
+        Deliberately NOT part of `e1`: the same mathematical vector stored under
+        a different byte encoding is the same vector space. Changing the encoding
+        may require a re-ENCODE migration; it must never require re-EMBEDDING.
+        """
+
+        F32LE1 = "f32le1", "IEEE-754 float32, little endian, v1"
+
+    # Storage namespace. CASCADE: vectors are subordinate derived state and go
+    # when the owning Knowledge hierarchy is deliberately removed. (An
+    # ApplicationScope that still owns collections is already PROTECT-ed by S-14,
+    # so this cannot become an accidental mass deletion.)
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.CASCADE,
+        related_name="chunk_embeddings",
+    )
+    collection = models.ForeignKey(
+        KnowledgeCollection,
+        on_delete=models.CASCADE,
+        related_name="chunk_embeddings",
+    )
+    # A vector without its canonical retrieval chunk has no purpose.
+    chunk = models.ForeignKey(
+        KnowledgeDocumentChunk,
+        on_delete=models.CASCADE,
+        related_name="embeddings",
+    )
+    # PROTECT: a stored vector must never silently lose the configuration that
+    # produced it. Provenance outlives configuration tidying.
+    embedding_model_config = models.ForeignKey(
+        EmbeddingModelConfig,
+        on_delete=models.PROTECT,
+        related_name="chunk_embeddings",
+    )
+
+    # Self-describing fingerprints, never naked digests.
+    k1 = models.CharField(max_length=80)
+    e1 = models.CharField(max_length=80)
+
+    # The shape of the stored bytes. Recorded rather than inferred from byte
+    # length, so a decode can be checked against the CONFIGURED dimension.
+    vector_dimension = models.PositiveIntegerField()
+    vector_format = models.CharField(
+        max_length=20,
+        choices=VectorFormat.choices,
+        default=VectorFormat.F32LE1,
+    )
+    # Derived numeric bytes only. No Knowledge text, no credential.
+    vector_bytes = models.BinaryField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["application_scope__name", "collection__name", "chunk_id"]
+        verbose_name = "1.5b Knowledge chunk embedding"
+        verbose_name_plural = "1.5b Knowledge chunk embeddings - derived index state"
+        constraints = [
+            # (chunk, e1) - NOT (chunk, embedding_model_config). Two operational
+            # configurations may deliberately share one `e1`; those vectors are
+            # the same vector-space contract, so storing both would duplicate a
+            # vector purely because a timeout or a label differs.
+            models.UniqueConstraint(
+                fields=["chunk", "e1"], name="ai_hub_unique_chunk_e1_vector"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(vector_dimension__gte=1),
+                name="ai_hub_chunk_embedding_dimension_positive",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["application_scope", "e1"], name="aihub_cemb_scope_e1_idx"
+            ),
+            models.Index(
+                fields=["application_scope", "collection", "e1"],
+                name="aihub_cemb_scope_coll_e1_idx",
+            ),
+        ]
+
+    def __str__(self):
+        # Bounded identifiers only: never vector values, never Knowledge text.
+        return f"chunk {self.chunk_id} @ {self.e1[:19]}... ({self.vector_dimension}d)"
+
+
 class AgentProfile(models.Model):
     class ExecutionMode(models.TextChoices):
         SYNC = "sync", "Sync"
         ASYNC = "async", "Async"
         INHERIT = "inherit", "Inherit"
 
+    # Root-owned, and SINGLE-scope in V1. An AgentProfile is mutable
+    # operational configuration - Knowledge assignments, model choice, tools,
+    # runtime settings - so sharing one across security boundaries would make
+    # its authorization ambiguous. If reusable agents are needed later they
+    # need a separate template/definition abstraction; that is not S-14.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="agent_profiles",
+    )
+    # Globally unique in S-14 by deliberate compatibility choice; see the note
+    # on KnowledgeCollection.name.
     name = models.CharField(max_length=140, unique=True)
     role = models.CharField(max_length=140)
     system_prompt = models.TextField(blank=True)
@@ -356,6 +842,20 @@ class PipelineDefinition(models.Model):
             steps = list(self.steps.order_by("order"))
             if not steps:
                 raise ValidationError("Cannot activate pipeline without steps.")
+            # An executable pipeline must belong to ONE application scope, or it
+            # becomes a bridge between them: step 1 retrieves Scope A Knowledge
+            # and the output mapping hands it to a Scope B agent. Configuration
+            # time only - `execution_runner` re-checks before running, and that
+            # runtime check is the authoritative one.
+            from ai_hub.services.knowledge_authorization import (
+                PipelineScopeError,
+                require_coherent_pipeline_scope,
+            )
+
+            try:
+                require_coherent_pipeline_scope(self)
+            except PipelineScopeError as exc:
+                raise ValidationError(str(exc)) from exc
             expected = list(range(1, len(steps) + 1))
             got = [s.order for s in steps]
             if got != expected:
@@ -428,9 +928,34 @@ class PipelineStep(models.Model):
             raise ValidationError("Fallback agent is required when on_error is fallback_agent.")
         if self.fallback_agent_id and not self.fallback_agent.is_active:
             raise ValidationError("Fallback agent must be active.")
+        # Fallback agents are part of the security boundary: an error path that
+        # switches to an agent in another application is still a bridge between
+        # applications.
+        if self.agent_id:
+            scope_ids = {self.agent.application_scope_id}
+            if self.fallback_agent_id:
+                scope_ids.add(self.fallback_agent.application_scope_id)
+            if self.pipeline_id and self.pipeline.entry_agent_id:
+                scope_ids.add(self.pipeline.entry_agent.application_scope_id)
+            if len(scope_ids) > 1:
+                raise ValidationError(
+                    "All agents in a pipeline must belong to the same "
+                    "application scope."
+                )
 
 
 class GameWorkspace(models.Model):
+    # Root-owned. A workspace belongs to a scope; it is NOT the security root
+    # itself. It is a GAME execution environment, Orchestrator sessions have no
+    # workspace at all, and its agent allow-list fails open when empty - none of
+    # which is acceptable in a root boundary.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="game_workspaces",
+    )
+    # Globally unique in S-14 by deliberate compatibility choice; see the note
+    # on KnowledgeCollection.name.
     name = models.CharField(max_length=160, unique=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
@@ -1263,6 +1788,486 @@ class GameDelegationRun(models.Model):
                 raise ValidationError("Delegated session entry agent must match the target agent.")
         if self.status in {self.Status.SUCCESS, self.Status.FAILED} and not self.finished_at:
             raise ValidationError("Terminal delegation runs require finished_at.")
+
+
+class KnowledgeLifecycleEvent(models.Model):
+    """Durable, append-only record of a COMMITTED Knowledge lifecycle change.
+
+    WHAT THIS IS
+    ------------
+    Corpus history, not execution history. One row means: a governed Knowledge
+    mutation **committed**. It is written inside the same transaction as the
+    mutation it describes, so the pair is atomic in both directions - there is
+    no committed governed mutation without its event, and no event claiming a
+    mutation that rolled back.
+
+    It is deliberately NOT an execution-attempt model. Rejected validation,
+    stale-review conflicts and exceptions produce no row: nothing changed, so
+    there is no state change to record. Durable auditing of *attempts* is a
+    separate concern and is not built here.
+
+    WHY NOT AN EXISTING AUDIT MODEL
+    -------------------------------
+    `ToolExecutionRun`, `GameActionRun`, `ExecutionSession` and
+    `ExecutionStepRun` are all execution-scoped: each requires a session, step,
+    tool or action to exist. A corpus mutation may have none of those - an
+    operator adjudicating a legacy document acts outside any AI execution
+    entirely - so reusing them would force a fabricated execution context and
+    couple corpus history to AI runtime lifetimes.
+
+    Numbered `1.12` rather than `4.x` on purpose: it belongs with the Knowledge
+    corpus models (1.3-1.5), not with the execution audit family.
+
+    REFERENCE-FIRST
+    ---------------
+    This model records facts and references. It never stores `curated_text`,
+    chunk content, `source_file` bytes, retrieval snippets, or any other
+    Knowledge body - not directly and not inside a generic payload. Every field
+    is a bounded scalar, which is enforced by test rather than left to habit.
+
+    WHAT IT DOES *NOT* AUDIT
+    ------------------------
+    This schema describes lifecycle facts: authority mode, status, generation
+    inputs, chunk set, generator identity/version and chunk count. It does NOT
+    carry before/after values for `collection`, so it cannot explain a
+    collection move - which is an authorization-boundary change and a separate,
+    security-sensitive future operation. The mutation foundation therefore
+    REFUSES a mutation that changes the collection, rather than committing a
+    change it cannot describe. Extend this schema first if that operation is
+    ever built.
+
+    Title and `curated_text` are likewise not copied here, but a change to
+    either moves the observed `i1` fingerprint, so the event still states
+    truthfully that the generation inputs moved.
+
+    APPEND-ONLY
+    -----------
+    Conceptually immutable once written. Core exposes no update or delete API
+    for these rows and does not register them in the Admin. Raw ORM can of
+    course still reach them; the contract is about supported Core behavior, not
+    about pretending the ORM can be locked out.
+    """
+
+    class PrincipalKind(models.TextChoices):
+        """WHO initiated the mutation.
+
+        Deliberately tiny and closed. This is an operator/system axis, not an
+        Agent identity axis: an `AgentProfile` is never a lifecycle principal,
+        and a model must never be able to declare one. Unlike `operation`, this
+        vocabulary is not expected to grow, so `choices` costs no migration
+        churn and buys validation.
+        """
+
+        HUMAN = "human", "Human operator"
+        SYSTEM = "system", "System or service"
+
+    # SET_NULL, never CASCADE: deleting a document must not erase the history of
+    # what was done to it. `document_id_snapshot` keeps the row intelligible
+    # after the FK is nulled.
+    document = models.ForeignKey(
+        KnowledgeDocument,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lifecycle_events",
+    )
+    # PositiveBigIntegerField, not PositiveIntegerField: DEFAULT_AUTO_FIELD is
+    # BigAutoField, so these ids are 64-bit. A durable snapshot must never have
+    # a narrower numeric domain than the identifier it copies - the whole point
+    # of the snapshot is that it stays valid after the FK is gone, and a 32-bit
+    # column would start failing on a long-lived corpus exactly when the history
+    # matters most.
+    document_id_snapshot = models.PositiveBigIntegerField()
+    # Bounded collection context: which collection owned the document when the
+    # mutation committed. An id only - names and collection bodies are not
+    # duplicated here. Collection MOVES are an authorization concern, are NOT a
+    # governed operation in this slice, and are refused by the mutation
+    # foundation precisely because this schema cannot describe one truthfully.
+    collection_id_snapshot = models.PositiveBigIntegerField()
+
+    # No `choices` on purpose. The operation vocabulary is known to grow as
+    # later slices add adjudication, explicit authoring, derived generation,
+    # regeneration and repair, and Django emits an AlterField migration for
+    # every `choices` change - schema churn for a column whose storage never
+    # changes. The service layer validates the slug shape instead, which keeps
+    # the column queryable without inventing speculative operations now.
+    operation = models.CharField(max_length=64)
+    # Optional bounded machine code explaining WHY. Never free-form prose, and
+    # never a place to smuggle content.
+    reason_code = models.CharField(max_length=64, blank=True)
+
+    # Principal snapshot, not a foreign key: the record must stay intelligible
+    # after a host deletes the user, and Core must not depend on a host's user
+    # model. `principal_identifier` is a stable opaque handle (a primary key or
+    # username). Do not put an email address or any other personal contact
+    # detail here.
+    #
+    # There is deliberately NO display-label column. A human-readable name is
+    # convenience data, and audit rows are kept indefinitely, so a label column
+    # is a standing invitation to persist personal data forever for no
+    # correctness benefit. A host that wants to show a name can resolve it from
+    # the identifier at display time. Data minimization wins absent a proven
+    # requirement, and no requirement was found.
+    principal_kind = models.CharField(max_length=20, choices=PrincipalKind.choices)
+    principal_identifier = models.CharField(max_length=150)
+
+    # --- Lifecycle facts BEFORE and AFTER, mirroring KnowledgeDocument -------
+    previous_authority_mode = models.CharField(max_length=20)
+    new_authority_mode = models.CharField(max_length=20)
+    # Status is recorded because it gates retrievability (D-L3). Without it a
+    # governed ACTIVE/ARCHIVED transition would commit unexplained.
+    previous_status = models.CharField(max_length=20)
+    new_status = models.CharField(max_length=20)
+    previous_generation_input_fingerprint = models.CharField(max_length=80, blank=True)
+    new_generation_input_fingerprint = models.CharField(max_length=80, blank=True)
+    previous_generation_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    new_generation_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    previous_generator_identity = models.CharField(max_length=64, blank=True)
+    new_generator_identity = models.CharField(max_length=64, blank=True)
+    previous_generator_version = models.PositiveIntegerField(null=True, blank=True)
+    new_generator_version = models.PositiveIntegerField(null=True, blank=True)
+    previous_chunk_count = models.PositiveIntegerField()
+    new_chunk_count = models.PositiveIntegerField()
+    # Observed fingerprints, which are NOT the same as the recorded generation
+    # fingerprints above: these are what the rows actually hashed to inside the
+    # mutation transaction. Together the two pairs are the tamper evidence a
+    # later reader needs - a recorded/observed divergence is exactly what
+    # Preflight V2 reports as DERIVED_CHUNKS_MODIFIED.
+    #
+    # The observed INPUT pair is also what makes a title or curated_text edit
+    # explicable from the audit alone: neither field is copied here, but a change
+    # to either moves `i1`, so the event still says truthfully that the
+    # generation inputs moved.
+    previous_observed_input_fingerprint = models.CharField(max_length=80, blank=True)
+    new_observed_input_fingerprint = models.CharField(max_length=80, blank=True)
+    previous_observed_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+    new_observed_chunk_set_fingerprint = models.CharField(max_length=80, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        verbose_name = "1.12 Knowledge lifecycle event"
+        verbose_name_plural = "1.12 Knowledge lifecycle events - corpus mutation history"
+        # Two indexes, deliberately not a speculative set.
+        #
+        # `document_id_snapshot` first, because it - not the FK - is the DURABLE
+        # history key: once the document is deleted the FK is NULL and the
+        # snapshot is the only way to ask "what happened to document 42?".
+        # Leaving that unindexed would make the one query the SET_NULL design
+        # exists to support a full-table scan. Django already indexes the FK
+        # itself, so no separate index for it is added.
+        #
+        # `operation` is indexed because the column is explicitly intended to be
+        # queryable; both are paired with `created_at` since lifecycle history is
+        # always read in time order.
+        indexes = [
+            models.Index(
+                fields=["document_id_snapshot", "created_at"],
+                name="aihub_klc_evt_docsnap_idx",
+            ),
+            models.Index(
+                fields=["operation", "created_at"], name="aihub_klc_evt_op_time_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.operation} on document #{self.document_id_snapshot}: "
+            f"{self.previous_authority_mode} -> {self.new_authority_mode}"
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# Retrieval audit (S-23). Reference-first evidence for governed hybrid search.
+#
+# These four models record WHAT a retrieval operation did. They never record
+# what was searched for or what was read. Every persisted fact is an id, a rank,
+# a fingerprint, a bounded status or a count - because an audit row that carried
+# the query and the returned text would be a durable search-history database and
+# a second Knowledge store, built by accident and reviewed by nobody.
+#
+# There is deliberately NO `q1`, no `query_hash` and no `sha256(query)` either.
+# A raw deterministic hash of a query is still a durable identifier for what
+# somebody searched, and it is dictionary-attackable for predictable queries.
+# No keyed/HMAC privacy contract has been approved, so the only safe amount of
+# query-derived durable data is none.
+#
+# Deliberately separate from `KnowledgeLifecycleEvent`, which records committed
+# corpus MUTATION history. Reading and writing are different events and must not
+# share a table merely because both are called "audit".
+# ---------------------------------------------------------------------------
+
+class RetrievalRun(models.Model):
+    """One governed retrieval operation, recorded BEFORE it executes.
+
+    Created once and never updated. There is deliberately no `status` column
+    that starts as "running" and is later rewritten: a mutable status row cannot
+    distinguish "finished" from "was rewritten to look finished", and it loses
+    the one signal that matters most.
+
+    Instead, a run with no `RetrievalOutcome` means exactly one thing - the
+    operation began and no durable terminal outcome was ever recorded. A crash,
+    a killed worker, an unexpected exception. That absence is truthful evidence
+    and must stay observable.
+    """
+
+    # The one deliberate durable FK. Retrieval evidence belongs structurally to
+    # ONE root security namespace, and PROTECT means deleting a namespace that
+    # still owns audit evidence has to be an explicit retention decision rather
+    # than a side effect. There is deliberately no global/nullable audit
+    # namespace to fall back to.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="retrieval_runs",
+    )
+
+    # Bounded numeric snapshots, NOT foreign keys. Audit durability must not
+    # depend on the lifecycle of mutable operational configuration: deleting an
+    # agent, a workspace, a model configuration or a provider must not erase or
+    # break the record of a retrieval that already happened.
+    #
+    # Ids only. No agent name, workspace name, provider name, model name, email
+    # or human display name - none of which the audit needs, and all of which
+    # would turn this table into a place personal data accumulates.
+    agent_id_snapshot = models.PositiveBigIntegerField()
+    workspace_id_snapshot = models.PositiveBigIntegerField(null=True, blank=True)
+    embedding_model_config_id_snapshot = models.PositiveBigIntegerField(
+        null=True, blank=True
+    )
+    provider_id_snapshot = models.PositiveBigIntegerField(null=True, blank=True)
+
+    requested_limit = models.PositiveSmallIntegerField()
+
+    # What the persisted evidence MEANS. Not a relevance-model version: it
+    # identifies the shape and semantics of these rows, so a later change to
+    # what is recorded becomes a new version rather than a silent
+    # reinterpretation of every historical row.
+    evidence_version = models.CharField(max_length=32)
+
+    # The fusion contract this run was computed under, copied so an auditor can
+    # recompute a hit's RRF contribution from durable facts alone.
+    fusion_version = models.CharField(max_length=32)
+    rrf_k = models.PositiveIntegerField()
+    branch_depth = models.PositiveIntegerField()
+
+    started_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "5.1 Retrieval run"
+        verbose_name_plural = "5.1 Retrieval runs"
+        ordering = ["-started_at", "-id"]
+        indexes = [
+            # Evidence is read per namespace, in time order. Deliberately the
+            # only speculative index on this table.
+            models.Index(
+                fields=["application_scope", "started_at"],
+                name="aihub_retrun_scope_time_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"retrieval run #{self.pk} in scope {self.application_scope_id}"
+
+
+class RetrievalRunCollection(models.Model):
+    """One AUTHORIZED target collection of a retrieval run.
+
+    Only the EFFECTIVE authorized target set is recorded. If a caller asked for
+    a collection that does not exist, belongs to another application, or is
+    simply not assigned to that agent, S-15 and S-22 already collapse all three
+    into one indistinguishable outcome (ADR-N5) - and persisting the requested
+    id here would undo that by building a durable, queryable history of
+    unauthorized references. An empty authorized target set means ZERO rows.
+    """
+
+    retrieval_run = models.ForeignKey(
+        RetrievalRun,
+        on_delete=models.CASCADE,
+        related_name="target_collections",
+    )
+    # A snapshot, not an FK: deleting a collection later must not erase the
+    # record that a retrieval once targeted it.
+    collection_id_snapshot = models.PositiveBigIntegerField()
+
+    class Meta:
+        verbose_name = "5.2 Retrieval run collection"
+        verbose_name_plural = "5.2 Retrieval run collections"
+        ordering = ["collection_id_snapshot"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["retrieval_run", "collection_id_snapshot"],
+                name="ai_hub_unique_retrieval_run_collection",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"run #{self.retrieval_run_id} -> collection "
+            f"#{self.collection_id_snapshot}"
+        )
+
+
+class RetrievalOutcome(models.Model):
+    """The ONE terminal outcome of a run, appended after it completes or refuses.
+
+    A `OneToOneField`, so a run can never accumulate two terminal stories. There
+    is no supported update path: an outcome is written once, in the same short
+    transaction as the hits it describes, or not at all.
+
+    Every column is an explicit bounded fact. There is deliberately no
+    `details`, `payload`, `context` or `metadata` JSON field - a "flexible audit
+    payload" is how a query, a snippet or a provider body eventually ends up in
+    an audit table without anyone reviewing a migration.
+    """
+
+    class Outcome(models.TextChoices):
+        COMPLETED = "completed", "Completed"
+        REFUSED = "refused", "Refused"
+
+    retrieval_run = models.OneToOneField(
+        RetrievalRun,
+        on_delete=models.CASCADE,
+        related_name="outcome",
+    )
+
+    outcome = models.CharField(max_length=20, choices=Outcome.choices)
+    finished_at = models.DateTimeField(auto_now_add=True)
+
+    # Bounded S-22 vocabulary, copied verbatim. A degraded result is still a
+    # COMPLETED retrieval: losing the semantic branch while lexical stayed
+    # complete produced a real answer, and calling that "refused" would misread
+    # the governance record.
+    mode = models.CharField(max_length=32, blank=True)
+    degraded = models.BooleanField(default=False)
+
+    lexical_status = models.CharField(max_length=32, blank=True)
+    semantic_status = models.CharField(max_length=32, blank=True)
+    semantic_failure_kind = models.CharField(max_length=32, blank=True)
+
+    # A bounded machine code for a REFUSED outcome. Never `str(exc)`, never a
+    # traceback, never a provider body - an audit trail must not become the
+    # place error text smuggles content back out.
+    failure_category = models.CharField(max_length=64, blank=True)
+
+    # Which vector space answered, if any. `e1` is a contract fingerprint, not
+    # a vector and not content.
+    e1 = models.CharField(max_length=80, blank=True)
+    semantic_metric = models.CharField(max_length=20, blank=True)
+
+    lexical_candidates_scanned = models.PositiveIntegerField(default=0)
+    lexical_candidates_truncated = models.BooleanField(default=False)
+
+    semantic_candidate_count = models.PositiveIntegerField(default=0)
+    semantic_scored_count = models.PositiveIntegerField(default=0)
+
+    returned_count = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "5.3 Retrieval outcome"
+        verbose_name_plural = "5.3 Retrieval outcomes"
+        ordering = ["-finished_at", "-id"]
+
+    def __str__(self):
+        return f"run #{self.retrieval_run_id}: {self.outcome}"
+
+
+class RetrievalHit(models.Model):
+    """One FINAL RETURNED match, as it was at the composition boundary.
+
+    Only what was actually returned. Not the thousand lexical candidates, not
+    the branch top-20 entries that lost, not the filtered or stale ones - that
+    would bound nothing and would quietly rebuild a shadow retrieval index in
+    the audit schema.
+
+    `k1` is the S-19 canonical chunk embedding fingerprint CAPTURED by the
+    hybrid final composition boundary, never recomputed while writing this row.
+    A chunk edited between the result and the audit write would otherwise make
+    the audit describe a version of the corpus the caller never saw.
+
+    `fusion_score` is deliberately absent. Under `rrf1` it is fully determined
+    by `run.rrf_k`, `lexical_rank` and `semantic_rank`, so storing it would add
+    a derived value that can drift out of agreement with its own inputs. The raw
+    lexical score and the semantic `metric_value` are absent for the same
+    reason S-22 never fuses them: they are branch-local numbers on no common
+    scale, and they are not what the ordering was built from.
+    """
+
+    retrieval_run = models.ForeignKey(
+        RetrievalRun,
+        on_delete=models.CASCADE,
+        related_name="hits",
+    )
+
+    # Snapshots, not FKs. Deleting a chunk, document or collection tomorrow must
+    # not erase the evidence that a retrieval returned it today.
+    chunk_id_snapshot = models.PositiveBigIntegerField()
+    document_id_snapshot = models.PositiveBigIntegerField()
+    collection_id_snapshot = models.PositiveBigIntegerField()
+
+    k1 = models.CharField(max_length=80)
+
+    final_rank = models.PositiveSmallIntegerField()
+    lexical_rank = models.PositiveSmallIntegerField(null=True, blank=True)
+    semantic_rank = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "5.4 Retrieval hit"
+        verbose_name_plural = "5.4 Retrieval hits"
+        ordering = ["retrieval_run_id", "final_rank"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["retrieval_run", "final_rank"],
+                name="ai_hub_unique_retrieval_hit_rank",
+            ),
+            models.UniqueConstraint(
+                fields=["retrieval_run", "chunk_id_snapshot"],
+                name="ai_hub_unique_retrieval_hit_chunk",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(final_rank__gte=1),
+                name="ai_hub_retrieval_hit_rank_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(lexical_rank__isnull=True)
+                    | models.Q(lexical_rank__gte=1)
+                ),
+                name="ai_hub_retrieval_hit_lexical_rank_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(semantic_rank__isnull=True)
+                    | models.Q(semantic_rank__gte=1)
+                ),
+                name="ai_hub_retrieval_hit_semantic_rank_positive",
+            ),
+            models.CheckConstraint(
+                # A hit that matched neither branch cannot exist: RRF gives a
+                # chunk a score only through a branch rank.
+                condition=(
+                    models.Q(lexical_rank__isnull=False)
+                    | models.Q(semantic_rank__isnull=False)
+                ),
+                name="ai_hub_retrieval_hit_has_a_branch",
+            ),
+        ]
+        indexes = [
+            # "Which retrievals ever returned this chunk" is the one durable
+            # reference query this table exists to answer. The unique
+            # constraints already index the rest.
+            models.Index(
+                fields=["chunk_id_snapshot"], name="aihub_rethit_chunk_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"run #{self.retrieval_run_id} rank {self.final_rank}: "
+            f"chunk #{self.chunk_id_snapshot}"
+        )
 
 
 # === END REUSABLE AI PIPELINE CORE =========================================

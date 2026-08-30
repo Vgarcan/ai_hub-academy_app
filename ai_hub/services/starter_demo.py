@@ -12,6 +12,7 @@ from ai_hub.models import (
     ToolDefinition,
 )
 from ai_hub.services.starter_toolboxes import seed_starter_toolboxes
+from ai_hub.services.application_scope import require_single_active_scope
 
 
 @transaction.atomic
@@ -27,11 +28,16 @@ def seed_starter_demo(*, force_update: bool = False) -> dict:
         "workspace_agents_created": 0,
     }
 
+    # Explicit ownership: the starter demo seeds into the single active scope
+    # and refuses rather than guessing when more than one exists.
+    scope = require_single_active_scope()
+
     collection, created = KnowledgeCollection.objects.get_or_create(
         name="AI Hub Starter Knowledge",
         defaults={
             "description": "Example knowledge library for starter agents.",
             "is_active": True,
+            "application_scope": scope,
         },
     )
     if created:
@@ -82,6 +88,7 @@ def seed_starter_demo(*, force_update: bool = False) -> dict:
     workspace, created = GameWorkspace.objects.get_or_create(
         name="AI Hub Starter GAME Workspace",
         defaults={
+            "application_scope": scope,
             "description": "Safe example GAME workspace for starter agents.",
             "default_policy": {
                 "allowed_actions": ["submit_for_approval"],

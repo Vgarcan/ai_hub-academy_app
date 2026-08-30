@@ -1134,7 +1134,9 @@ class SemanticDegradationTests(HybridFixtureMixin, TestCase):
                 self.search()
 
     def test_the_semantic_handler_is_narrow(self):
-        tree = ast.parse(inspect.getsource(hybrid_search_knowledge_local).lstrip())
+        tree = ast.parse(
+            inspect.getsource(hybrid_retrieval.search_hybrid_with_scope).lstrip()
+        )
         handlers = [
             node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)
         ]
@@ -1327,7 +1329,7 @@ class LimitTests(HybridFixtureMixin, TestCase):
                 self.assertEqual(transport.calls, [])
 
     def test_the_blank_predicate_reuses_the_s21_contract(self):
-        source = inspect.getsource(hybrid_search_knowledge_local)
+        source = inspect.getsource(hybrid_retrieval.validate_hybrid_request)
         called = {
             node.func.id
             for node in ast.walk(ast.parse(source.lstrip()))
@@ -1648,12 +1650,41 @@ class AbsenceTests(TestCase):
             self.assertNotIn(forbidden, names)
 
 
-class NoSchemaChangeTests(TestCase):
-    def test_this_slice_adds_no_migration(self):
-        from django.db.migrations.loader import MigrationLoader
+class ComputationalApiWritesNothingTests(HybridFixtureMixin, TestCase):
+    """The S-22 API is a computation. Durable evidence is a separate boundary.
 
-        loader = MigrationLoader(None, ignore_no_migrations=True)
-        ai_hub_migrations = sorted(
-            name for app, name in loader.disk_migrations if app == "ai_hub"
+    S-23 added retrieval audit models. This asserts the guarantee that keeps
+    them separate: reaching for the pure computation must never start
+    populating an audit table as a side effect.
+    """
+
+    def setUp(self):
+        self.build_corpus()
+
+    def test_the_computational_api_creates_no_retrieval_audit_rows(self):
+        from ai_hub.models import (
+            RetrievalHit,
+            RetrievalOutcome,
+            RetrievalRun,
+            RetrievalRunCollection,
         )
-        self.assertEqual(ai_hub_migrations[-1], "0028_knowledge_chunk_embedding")
+
+        result = self.search()
+        self.assertTrue(result.matches, "a real hybrid result, not a no-op")
+        for model in (
+            RetrievalRun, RetrievalRunCollection, RetrievalOutcome, RetrievalHit
+        ):
+            with self.subTest(model=model.__name__):
+                self.assertEqual(model.objects.count(), 0)
+
+    def test_the_hybrid_module_imports_no_audit_model(self):
+        tree = ast.parse(inspect.getsource(hybrid_retrieval))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                imported.update(alias.name for alias in node.names)
+        for forbidden in (
+            "RetrievalRun", "RetrievalRunCollection",
+            "RetrievalOutcome", "RetrievalHit",
+        ):
+            self.assertNotIn(forbidden, imported)

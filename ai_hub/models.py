@@ -1978,4 +1978,296 @@ class KnowledgeLifecycleEvent(models.Model):
         )
 
 
+
+# ---------------------------------------------------------------------------
+# Retrieval audit (S-23). Reference-first evidence for governed hybrid search.
+#
+# These four models record WHAT a retrieval operation did. They never record
+# what was searched for or what was read. Every persisted fact is an id, a rank,
+# a fingerprint, a bounded status or a count - because an audit row that carried
+# the query and the returned text would be a durable search-history database and
+# a second Knowledge store, built by accident and reviewed by nobody.
+#
+# There is deliberately NO `q1`, no `query_hash` and no `sha256(query)` either.
+# A raw deterministic hash of a query is still a durable identifier for what
+# somebody searched, and it is dictionary-attackable for predictable queries.
+# No keyed/HMAC privacy contract has been approved, so the only safe amount of
+# query-derived durable data is none.
+#
+# Deliberately separate from `KnowledgeLifecycleEvent`, which records committed
+# corpus MUTATION history. Reading and writing are different events and must not
+# share a table merely because both are called "audit".
+# ---------------------------------------------------------------------------
+
+class RetrievalRun(models.Model):
+    """One governed retrieval operation, recorded BEFORE it executes.
+
+    Created once and never updated. There is deliberately no `status` column
+    that starts as "running" and is later rewritten: a mutable status row cannot
+    distinguish "finished" from "was rewritten to look finished", and it loses
+    the one signal that matters most.
+
+    Instead, a run with no `RetrievalOutcome` means exactly one thing - the
+    operation began and no durable terminal outcome was ever recorded. A crash,
+    a killed worker, an unexpected exception. That absence is truthful evidence
+    and must stay observable.
+    """
+
+    # The one deliberate durable FK. Retrieval evidence belongs structurally to
+    # ONE root security namespace, and PROTECT means deleting a namespace that
+    # still owns audit evidence has to be an explicit retention decision rather
+    # than a side effect. There is deliberately no global/nullable audit
+    # namespace to fall back to.
+    application_scope = models.ForeignKey(
+        ApplicationScope,
+        on_delete=models.PROTECT,
+        related_name="retrieval_runs",
+    )
+
+    # Bounded numeric snapshots, NOT foreign keys. Audit durability must not
+    # depend on the lifecycle of mutable operational configuration: deleting an
+    # agent, a workspace, a model configuration or a provider must not erase or
+    # break the record of a retrieval that already happened.
+    #
+    # Ids only. No agent name, workspace name, provider name, model name, email
+    # or human display name - none of which the audit needs, and all of which
+    # would turn this table into a place personal data accumulates.
+    agent_id_snapshot = models.PositiveBigIntegerField()
+    workspace_id_snapshot = models.PositiveBigIntegerField(null=True, blank=True)
+    embedding_model_config_id_snapshot = models.PositiveBigIntegerField(
+        null=True, blank=True
+    )
+    provider_id_snapshot = models.PositiveBigIntegerField(null=True, blank=True)
+
+    requested_limit = models.PositiveSmallIntegerField()
+
+    # What the persisted evidence MEANS. Not a relevance-model version: it
+    # identifies the shape and semantics of these rows, so a later change to
+    # what is recorded becomes a new version rather than a silent
+    # reinterpretation of every historical row.
+    evidence_version = models.CharField(max_length=32)
+
+    # The fusion contract this run was computed under, copied so an auditor can
+    # recompute a hit's RRF contribution from durable facts alone.
+    fusion_version = models.CharField(max_length=32)
+    rrf_k = models.PositiveIntegerField()
+    branch_depth = models.PositiveIntegerField()
+
+    started_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "5.1 Retrieval run"
+        verbose_name_plural = "5.1 Retrieval runs"
+        ordering = ["-started_at", "-id"]
+        indexes = [
+            # Evidence is read per namespace, in time order. Deliberately the
+            # only speculative index on this table.
+            models.Index(
+                fields=["application_scope", "started_at"],
+                name="aihub_retrun_scope_time_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"retrieval run #{self.pk} in scope {self.application_scope_id}"
+
+
+class RetrievalRunCollection(models.Model):
+    """One AUTHORIZED target collection of a retrieval run.
+
+    Only the EFFECTIVE authorized target set is recorded. If a caller asked for
+    a collection that does not exist, belongs to another application, or is
+    simply not assigned to that agent, S-15 and S-22 already collapse all three
+    into one indistinguishable outcome (ADR-N5) - and persisting the requested
+    id here would undo that by building a durable, queryable history of
+    unauthorized references. An empty authorized target set means ZERO rows.
+    """
+
+    retrieval_run = models.ForeignKey(
+        RetrievalRun,
+        on_delete=models.CASCADE,
+        related_name="target_collections",
+    )
+    # A snapshot, not an FK: deleting a collection later must not erase the
+    # record that a retrieval once targeted it.
+    collection_id_snapshot = models.PositiveBigIntegerField()
+
+    class Meta:
+        verbose_name = "5.2 Retrieval run collection"
+        verbose_name_plural = "5.2 Retrieval run collections"
+        ordering = ["collection_id_snapshot"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["retrieval_run", "collection_id_snapshot"],
+                name="ai_hub_unique_retrieval_run_collection",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"run #{self.retrieval_run_id} -> collection "
+            f"#{self.collection_id_snapshot}"
+        )
+
+
+class RetrievalOutcome(models.Model):
+    """The ONE terminal outcome of a run, appended after it completes or refuses.
+
+    A `OneToOneField`, so a run can never accumulate two terminal stories. There
+    is no supported update path: an outcome is written once, in the same short
+    transaction as the hits it describes, or not at all.
+
+    Every column is an explicit bounded fact. There is deliberately no
+    `details`, `payload`, `context` or `metadata` JSON field - a "flexible audit
+    payload" is how a query, a snippet or a provider body eventually ends up in
+    an audit table without anyone reviewing a migration.
+    """
+
+    class Outcome(models.TextChoices):
+        COMPLETED = "completed", "Completed"
+        REFUSED = "refused", "Refused"
+
+    retrieval_run = models.OneToOneField(
+        RetrievalRun,
+        on_delete=models.CASCADE,
+        related_name="outcome",
+    )
+
+    outcome = models.CharField(max_length=20, choices=Outcome.choices)
+    finished_at = models.DateTimeField(auto_now_add=True)
+
+    # Bounded S-22 vocabulary, copied verbatim. A degraded result is still a
+    # COMPLETED retrieval: losing the semantic branch while lexical stayed
+    # complete produced a real answer, and calling that "refused" would misread
+    # the governance record.
+    mode = models.CharField(max_length=32, blank=True)
+    degraded = models.BooleanField(default=False)
+
+    lexical_status = models.CharField(max_length=32, blank=True)
+    semantic_status = models.CharField(max_length=32, blank=True)
+    semantic_failure_kind = models.CharField(max_length=32, blank=True)
+
+    # A bounded machine code for a REFUSED outcome. Never `str(exc)`, never a
+    # traceback, never a provider body - an audit trail must not become the
+    # place error text smuggles content back out.
+    failure_category = models.CharField(max_length=64, blank=True)
+
+    # Which vector space answered, if any. `e1` is a contract fingerprint, not
+    # a vector and not content.
+    e1 = models.CharField(max_length=80, blank=True)
+    semantic_metric = models.CharField(max_length=20, blank=True)
+
+    lexical_candidates_scanned = models.PositiveIntegerField(default=0)
+    lexical_candidates_truncated = models.BooleanField(default=False)
+
+    semantic_candidate_count = models.PositiveIntegerField(default=0)
+    semantic_scored_count = models.PositiveIntegerField(default=0)
+
+    returned_count = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "5.3 Retrieval outcome"
+        verbose_name_plural = "5.3 Retrieval outcomes"
+        ordering = ["-finished_at", "-id"]
+
+    def __str__(self):
+        return f"run #{self.retrieval_run_id}: {self.outcome}"
+
+
+class RetrievalHit(models.Model):
+    """One FINAL RETURNED match, as it was at the composition boundary.
+
+    Only what was actually returned. Not the thousand lexical candidates, not
+    the branch top-20 entries that lost, not the filtered or stale ones - that
+    would bound nothing and would quietly rebuild a shadow retrieval index in
+    the audit schema.
+
+    `k1` is the S-19 canonical chunk embedding fingerprint CAPTURED by the
+    hybrid final composition boundary, never recomputed while writing this row.
+    A chunk edited between the result and the audit write would otherwise make
+    the audit describe a version of the corpus the caller never saw.
+
+    `fusion_score` is deliberately absent. Under `rrf1` it is fully determined
+    by `run.rrf_k`, `lexical_rank` and `semantic_rank`, so storing it would add
+    a derived value that can drift out of agreement with its own inputs. The raw
+    lexical score and the semantic `metric_value` are absent for the same
+    reason S-22 never fuses them: they are branch-local numbers on no common
+    scale, and they are not what the ordering was built from.
+    """
+
+    retrieval_run = models.ForeignKey(
+        RetrievalRun,
+        on_delete=models.CASCADE,
+        related_name="hits",
+    )
+
+    # Snapshots, not FKs. Deleting a chunk, document or collection tomorrow must
+    # not erase the evidence that a retrieval returned it today.
+    chunk_id_snapshot = models.PositiveBigIntegerField()
+    document_id_snapshot = models.PositiveBigIntegerField()
+    collection_id_snapshot = models.PositiveBigIntegerField()
+
+    k1 = models.CharField(max_length=80)
+
+    final_rank = models.PositiveSmallIntegerField()
+    lexical_rank = models.PositiveSmallIntegerField(null=True, blank=True)
+    semantic_rank = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "5.4 Retrieval hit"
+        verbose_name_plural = "5.4 Retrieval hits"
+        ordering = ["retrieval_run_id", "final_rank"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["retrieval_run", "final_rank"],
+                name="ai_hub_unique_retrieval_hit_rank",
+            ),
+            models.UniqueConstraint(
+                fields=["retrieval_run", "chunk_id_snapshot"],
+                name="ai_hub_unique_retrieval_hit_chunk",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(final_rank__gte=1),
+                name="ai_hub_retrieval_hit_rank_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(lexical_rank__isnull=True)
+                    | models.Q(lexical_rank__gte=1)
+                ),
+                name="ai_hub_retrieval_hit_lexical_rank_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(semantic_rank__isnull=True)
+                    | models.Q(semantic_rank__gte=1)
+                ),
+                name="ai_hub_retrieval_hit_semantic_rank_positive",
+            ),
+            models.CheckConstraint(
+                # A hit that matched neither branch cannot exist: RRF gives a
+                # chunk a score only through a branch rank.
+                condition=(
+                    models.Q(lexical_rank__isnull=False)
+                    | models.Q(semantic_rank__isnull=False)
+                ),
+                name="ai_hub_retrieval_hit_has_a_branch",
+            ),
+        ]
+        indexes = [
+            # "Which retrievals ever returned this chunk" is the one durable
+            # reference query this table exists to answer. The unique
+            # constraints already index the rest.
+            models.Index(
+                fields=["chunk_id_snapshot"], name="aihub_rethit_chunk_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"run #{self.retrieval_run_id} rank {self.final_rank}: "
+            f"chunk #{self.chunk_id_snapshot}"
+        )
+
+
 # === END REUSABLE AI PIPELINE CORE =========================================

@@ -331,6 +331,68 @@ class HybridRetrievalResult:
     semantic_metric: str
 
 
+@dataclass(frozen=True)
+class HybridHitIdentity:
+    """One returned match as the composition boundary saw it. INTERNAL.
+
+    Carries the `k1` captured at that boundary, which is the whole point: an
+    auditor writing this down later must record what the caller was actually
+    handed, not what the chunk says today. No text, no raw branch score, no
+    vector.
+    """
+
+    final_rank: int
+    chunk_id: int
+    document_id: int
+    collection_id: int
+    application_scope_id: int
+    k1: str
+    lexical_rank: int | None
+    semantic_rank: int | None
+
+
+@dataclass(frozen=True)
+class HybridRetrievalEvidence:
+    """Bounded facts about HOW one hybrid computation ran. INTERNAL, not public.
+
+    Deliberately not folded into `HybridRetrievalResult`: adding audit-only
+    fields to a public contract because one consumer wants them is how public
+    contracts grow things nobody asked for. Callers of the S-22 API see exactly
+    what they saw before; only the audited boundary reads this.
+
+    Counts and codes only - never the query, never Knowledge, never a vector,
+    never a provider body.
+    """
+
+    lexical_candidates_scanned: int
+    lexical_candidates_truncated: bool
+    semantic_candidate_count: int
+    semantic_scored_count: int
+    #: The same bounded `SemanticFailureKind` the public result reports. One
+    #: vocabulary, deliberately: a second failure taxonomy visible only to the
+    #: audit would be a second thing to keep true.
+    semantic_failure_code: str
+    final_hit_identities: tuple
+
+
+@dataclass(frozen=True)
+class HybridComputation:
+    """What the shared core returns: the public result plus internal evidence."""
+
+    result: HybridRetrievalResult
+    evidence: HybridRetrievalEvidence
+
+
+EMPTY_EVIDENCE = HybridRetrievalEvidence(
+    lexical_candidates_scanned=0,
+    lexical_candidates_truncated=False,
+    semantic_candidate_count=0,
+    semantic_scored_count=0,
+    semantic_failure_code=SemanticFailureKind.NONE,
+    final_hit_identities=(),
+)
+
+
 def _empty_result(
     scope,
     *,
@@ -365,25 +427,13 @@ def _empty_result(
 # The public operation
 # ---------------------------------------------------------------------------
 
-def hybrid_search_knowledge_local(
-    agent,
-    *,
-    query,
-    embedding_model_config,
-    workspace=None,
-    collection_id=None,
-    limit=5,
-) -> HybridRetrievalResult:
-    """Fuse the lexical and semantic rankings of ONE authorized search.
+def validate_hybrid_request(*, query, limit) -> None:
+    """Caller-only validation. Runs BEFORE authorization, and writes nothing.
 
-    The caller supplies who is asking, what they are asking and which vector
-    space to ask in. It supplies no scope, no collection set, no `e1`, no metric,
-    no weights, no `RRF_K` and no branch depth - those are Core-owned, because a
-    caller-supplied authorization fact is not an authorization fact and a
-    caller-supplied fusion weight is a relevance model nobody approved.
+    Inspects the arguments and nothing else, so it leaks nothing about the
+    corpus - and so a rejected request never becomes a durable record of what
+    somebody typed. An invalid call is not a retrieval operation.
     """
-    # -- 1. caller-only validation -----------------------------------------
-    # Inspects nothing but the arguments, so it leaks nothing about the corpus.
     if (
         isinstance(limit, bool)
         or not isinstance(limit, int)
@@ -404,28 +454,50 @@ def hybrid_search_knowledge_local(
             HybridFailureCategory.QUERY_EMPTY, "A non-empty query is required."
         )
 
-    # -- 2. AUTHORIZATION. Resolved EXACTLY ONCE, for both branches --------
-    scope = resolve_effective_knowledge_scope(agent, workspace=workspace)
-    if scope.is_empty:
-        return _empty_result(scope)
 
-    # -- 3. request narrowing, never widening ------------------------------
-    target_ids = set(scope.collection_ids)
+def derive_hybrid_targets(scope, collection_id) -> tuple:
+    """The EFFECTIVE authorized target collections, narrowed but never widened.
+
+    Returns an ordered tuple, possibly empty. An empty result covers three cases
+    that must stay indistinguishable (ADR-N5): the scope authorizes nothing, the
+    requested collection does not exist, or it exists somewhere this caller
+    cannot reach. Collapsing them here is what stops a durable audit row from
+    later becoming an oracle for which collections exist.
+    """
+    if scope.is_empty:
+        return ()
     if collection_id is not None:
         if not scope.allows(collection_id):
-            # ADR-N5: identical to "the corpus is empty". A caller must not be
-            # able to tell a nonexistent collection from a cross-scope one from
-            # a same-scope one it simply has no assignment to.
-            return _empty_result(scope)
-        target_ids = {int(collection_id)}
-    if not target_ids:
-        return _empty_result(scope)
+            return ()
+        return (int(collection_id),)
+    return tuple(sorted(scope.collection_ids))
 
+
+def search_hybrid_with_scope(
+    scope,
+    *,
+    query,
+    embedding_model_config,
+    collection_id=None,
+    limit=5,
+    target_ids=(),
+) -> HybridComputation:
+    """The ONE hybrid implementation, inside an ALREADY-RESOLVED scope.
+
+    Deliberately does NOT call `resolve_effective_knowledge_scope`, and does not
+    re-derive the target set. Both the public S-22 API and the audited S-23
+    boundary funnel through here, so there is exactly one hybrid algorithm - two
+    would drift, and the audited one would end up recording something the
+    unaudited one never did.
+    """
     ordered_targets = tuple(sorted(target_ids))
 
-    # -- 4. nothing asked for, nothing spent -------------------------------
-    if limit == 0:
-        return _empty_result(scope, collection_ids=ordered_targets)
+    # -- 4. nothing to search, or nothing asked for ------------------------
+    if not ordered_targets or limit == 0:
+        return HybridComputation(
+            result=_empty_result(scope, collection_ids=ordered_targets),
+            evidence=EMPTY_EVIDENCE,
+        )
 
     # -- 5. lexical branch, at FUSION depth --------------------------------
     # Depth, not the caller's limit: fusion needs more than the final answer.
@@ -442,7 +514,7 @@ def hybrid_search_knowledge_local(
     lexical = rank_knowledge_chunks_with_scope(
         scope,
         query=lexical_query,
-        collection_ids=target_ids,
+        collection_ids=ordered_targets,
         limit=HYBRID_BRANCH_DEPTH,
         capture_identity=True,
     )
@@ -491,7 +563,7 @@ def hybrid_search_knowledge_local(
         surviving = {
             chunk.pk: chunk
             for chunk in authorized_chunks(scope).filter(
-                pk__in=union_ids, document__collection_id__in=target_ids
+                pk__in=union_ids, document__collection_id__in=ordered_targets
             )
         }
     # One fingerprint per surviving chunk, shared by both CAS checks.
@@ -527,23 +599,44 @@ def hybrid_search_knowledge_local(
         chunk_id: surviving[chunk_id]
         for chunk_id in set(lexical_ranks) | set(semantic_ranks)
     }
-    matches = tuple(
-        HybridMatch(
-            rank=position,
-            chunk_id=chunk_id,
-            document_id=identity[chunk_id].document_id,
-            collection_id=identity[chunk_id].document.collection_id,
-            application_scope_id=(
-                identity[chunk_id].document.collection.application_scope_id
-            ),
-            fusion_score=score,
-            lexical_rank=lexical_rank,
-            semantic_rank=semantic_rank,
+    matches = []
+    hit_identities = []
+    for position, (score, chunk_id, lexical_rank, semantic_rank) in enumerate(
+        fused[:limit], start=1
+    ):
+        chunk = identity[chunk_id]
+        document_id = chunk.document_id
+        collection_pk = chunk.document.collection_id
+        scope_pk = chunk.document.collection.application_scope_id
+        matches.append(
+            HybridMatch(
+                rank=position,
+                chunk_id=chunk_id,
+                document_id=document_id,
+                collection_id=collection_pk,
+                application_scope_id=scope_pk,
+                fusion_score=score,
+                lexical_rank=lexical_rank,
+                semantic_rank=semantic_rank,
+            )
         )
-        for position, (score, chunk_id, lexical_rank, semantic_rank) in enumerate(
-            fused[:limit], start=1
+        hit_identities.append(
+            HybridHitIdentity(
+                final_rank=position,
+                chunk_id=chunk_id,
+                document_id=document_id,
+                collection_id=collection_pk,
+                application_scope_id=scope_pk,
+                # The `k1` this boundary VALIDATED, carried forward. An auditor
+                # must never re-read the chunk to obtain it: the row could have
+                # changed since, and the evidence would then describe a corpus
+                # the caller never saw.
+                k1=current_k1[chunk_id],
+                lexical_rank=lexical_rank,
+                semantic_rank=semantic_rank,
+            )
         )
-    )
+    matches = tuple(matches)
 
     # -- 10. report what actually happened ---------------------------------
     # Status is decided AFTER revalidation, so `used` never means "ran but
@@ -577,7 +670,7 @@ def hybrid_search_knowledge_local(
     if not semantic_available:
         reasons.append(DegradationReason.SEMANTIC_UNAVAILABLE)
 
-    return HybridRetrievalResult(
+    result = HybridRetrievalResult(
         matches=matches,
         application_scope_id=scope.application_scope_id,
         agent_id=scope.agent_id,
@@ -598,3 +691,49 @@ def hybrid_search_knowledge_local(
         e1=semantic.e1 if semantic_available else "",
         semantic_metric=semantic.metric if semantic_available else "",
     )
+    evidence = HybridRetrievalEvidence(
+        lexical_candidates_scanned=lexical.candidates_scanned,
+        lexical_candidates_truncated=lexical.candidates_truncated,
+        semantic_candidate_count=(
+            semantic.candidate_count if semantic_available else 0
+        ),
+        semantic_scored_count=semantic.scored_count if semantic_available else 0,
+        semantic_failure_code=semantic_failure_kind,
+        final_hit_identities=tuple(hit_identities),
+    )
+    return HybridComputation(result=result, evidence=evidence)
+
+
+def hybrid_search_knowledge_local(
+    agent,
+    *,
+    query,
+    embedding_model_config,
+    workspace=None,
+    collection_id=None,
+    limit=5,
+) -> HybridRetrievalResult:
+    """Fuse the lexical and semantic rankings of ONE authorized search.
+
+    The caller supplies who is asking, what they are asking and which vector
+    space to ask in. It supplies no scope, no collection set, no `e1`, no metric,
+    no weights, no `RRF_K` and no branch depth - those are Core-owned, because a
+    caller-supplied authorization fact is not an authorization fact and a
+    caller-supplied fusion weight is a relevance model nobody approved.
+
+    **This is the computational API and it writes NOTHING.** It records no
+    retrieval evidence, and it must never acquire that as a side effect - a
+    caller reaching for a pure computation should not silently start populating
+    an audit table. Durable evidence is the separate, explicit audited boundary
+    in `retrieval_audit.py`.
+    """
+    validate_hybrid_request(query=query, limit=limit)
+    scope = resolve_effective_knowledge_scope(agent, workspace=workspace)
+    return search_hybrid_with_scope(
+        scope,
+        query=query,
+        embedding_model_config=embedding_model_config,
+        collection_id=collection_id,
+        limit=limit,
+        target_ids=derive_hybrid_targets(scope, collection_id),
+    ).result

@@ -1542,12 +1542,34 @@ class ReadOnlyDisciplineTests(RetrievalFixtureMixin, TestCase):
 # No schema change
 # ---------------------------------------------------------------------------
 
-class NoSchemaChangeTests(TestCase):
-    def test_this_slice_adds_no_migration(self):
-        from django.db.migrations.loader import MigrationLoader
+class SemanticRetrievalOwnsNoSchemaTests(TestCase):
+    """Semantic retrieval is read-only and defines no persistence of its own.
 
-        loader = MigrationLoader(None, ignore_no_migrations=True)
-        ai_hub_migrations = sorted(
-            name for app, name in loader.disk_migrations if app == "ai_hub"
-        )
-        self.assertEqual(ai_hub_migrations[-1], "0028_knowledge_chunk_embedding")
+    Replaces an earlier migration-leaf assertion. That check named `0028`, so it
+    was really asserting "no LATER slice has added a migration" - a claim about
+    other people's work that failed the moment S-23 legitimately added retrieval
+    audit tables. The leaf assertion now lives with the slice that owns it; what
+    belongs here is that THIS module still persists nothing.
+    """
+
+    def test_the_module_defines_no_model_and_writes_nothing(self):
+        tree = ast.parse(inspect.getsource(semantic_retrieval))
+        classes = [
+            node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for node in classes:
+            bases = {
+                base.attr if isinstance(base, ast.Attribute) else
+                getattr(base, "id", "")
+                for base in node.bases
+            }
+            self.assertNotIn("Model", bases)
+
+        attributes = {
+            node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+        }
+        for forbidden in (
+            "save", "create", "bulk_create", "get_or_create",
+            "update_or_create", "delete", "atomic", "select_for_update",
+        ):
+            self.assertNotIn(forbidden, attributes)

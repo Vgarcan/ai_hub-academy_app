@@ -47,6 +47,7 @@ from ai_hub.services.embedding_egress import PAYLOAD_CORPUS, PAYLOAD_QUERY
 from ai_hub.services.semantic_retrieval import (
     MAX_REFERENCE_SEMANTIC_CANDIDATES,
     canonical_query_embedding_text,
+    search_semantic_with_scope,
     METRIC_SCORERS,
     MetricSpec,
     RetrievalFailureCategory,
@@ -56,6 +57,9 @@ from ai_hub.services.semantic_retrieval import (
     euclidean_distance,
     resolve_metric_scorer,
     semantic_search_knowledge_local,
+)
+from ai_hub.services.knowledge_authorization import (
+    resolve_effective_knowledge_scope,
 )
 from ai_hub.services.vector_store import decode_vector, store_chunk_vector
 
@@ -358,24 +362,28 @@ class OrderingInvariantTests(RetrievalFixtureMixin, TestCase):
     def test_source_never_ranks_then_filters(self):
         """Structural, so a future refactor cannot quietly invert the order.
 
+        Scans the INTERNAL scope-aware implementation, which is where the work
+        now lives - scanning the public wrapper would inspect three lines of
+        delegation and prove nothing.
+
         Asserted on the AST rather than on the text, because this module's own
         docstrings name every forbidden shape while explaining why it is
         forbidden - a source-text scan would match its own prose.
         """
-        source = inspect.getsource(semantic_search_knowledge_local)
+        source = inspect.getsource(search_semantic_with_scope)
         tree = ast.parse(source.lstrip())
         calls = {}
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 calls.setdefault(node.func.id, node.lineno)
 
-        self.assertIn("resolve_effective_knowledge_scope", calls)
         self.assertIn("load_current_vectors", calls)
         self.assertIn("resolve_embedding_access", calls)
+        self.assertIn("authorized_chunks", calls)
 
         self.assertLess(
-            calls["resolve_effective_knowledge_scope"], calls["load_current_vectors"],
-            "authorization must precede candidate generation",
+            calls["authorized_chunks"], calls["load_current_vectors"],
+            "the authorized chunk set must precede candidate generation",
         )
         self.assertLess(
             calls["resolve_embedding_access"], calls["load_current_vectors"],
@@ -388,7 +396,7 @@ class OrderingInvariantTests(RetrievalFixtureMixin, TestCase):
 
     def test_the_scoped_load_is_the_only_candidate_source(self):
         """Candidates come from the scoped loader, never from a bare queryset."""
-        source = inspect.getsource(semantic_search_knowledge_local)
+        source = inspect.getsource(search_semantic_with_scope)
         called = {
             node.func.attr
             for node in ast.walk(ast.parse(source.lstrip()))
@@ -1290,7 +1298,7 @@ class QueryHandlingTests(RetrievalFixtureMixin, TestCase):
 
 class SharedVectorPathTests(RetrievalFixtureMixin, TestCase):
     def test_the_query_is_normalized_by_the_shared_module(self):
-        source = inspect.getsource(semantic_search_knowledge_local)
+        source = inspect.getsource(search_semantic_with_scope)
         called = {
             node.func.id
             for node in ast.walk(ast.parse(source.lstrip()))
@@ -1448,6 +1456,72 @@ class ReadOnlyDisciplineTests(RetrievalFixtureMixin, TestCase):
             with self.subTest(category=category):
                 self.assertIsInstance(category, str)
                 self.assertRegex(category, r"^[a-z0-9_]+$")
+
+    def test_the_public_entry_point_resolves_the_scope_exactly_once(self):
+        """One public call, one authorization answer.
+
+        Load-bearing for S-22: a composing caller must be able to resolve once
+        and hand the frozen answer to several branches. If the public wrapper
+        resolved more than once, "one operation, one authorization" would
+        already be false before hybrid fusion existed.
+        """
+        self.build_corpus()
+        real = semantic_retrieval.resolve_effective_knowledge_scope
+        calls = []
+
+        def spy(agent, *, workspace=None):
+            calls.append((getattr(agent, "pk", None), workspace))
+            return real(agent, workspace=workspace)
+
+        with mock.patch.object(
+            semantic_retrieval, "resolve_effective_knowledge_scope", spy
+        ):
+            with mock.patch(
+                TRANSPORT_PATH,
+                return_value=self.transport_returning((1.0, 0.0, 0.0, 0.0)),
+            ):
+                semantic_search_knowledge_local(
+                    self.agent_a, query="find alpha",
+                    embedding_model_config=self.config,
+                )
+        self.assertEqual(len(calls), 1)
+
+    def test_the_internal_entry_point_never_resolves_a_scope(self):
+        """It consumes a frozen scope; it must never mint a second one."""
+        self.build_corpus()
+        scope = resolve_effective_knowledge_scope(self.agent_a)
+        with mock.patch.object(
+            semantic_retrieval,
+            "resolve_effective_knowledge_scope",
+            mock.Mock(side_effect=AssertionError("must not resolve again")),
+        ):
+            with mock.patch(
+                TRANSPORT_PATH,
+                return_value=self.transport_returning((1.0, 0.0, 0.0, 0.0)),
+            ):
+                result = search_semantic_with_scope(
+                    scope, query="find alpha",
+                    embedding_model_config=self.config,
+                )
+        self.assertEqual(self.chunk_ids(result)[0], self.a1.pk)
+
+        source = inspect.getsource(search_semantic_with_scope)
+        called = {
+            node.func.id
+            for node in ast.walk(ast.parse(source.lstrip()))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        self.assertNotIn("resolve_effective_knowledge_scope", called)
+
+    def test_the_internal_signature_takes_no_agent_and_no_workspace(self):
+        """Authorization enters as a resolved scope, never as raw principals."""
+        parameters = set(
+            inspect.signature(search_semantic_with_scope).parameters
+        )
+        self.assertEqual(
+            parameters,
+            {"scope", "query", "embedding_model_config", "collection_id", "limit"},
+        )
 
     def test_the_public_api_takes_no_authorization_facts_from_the_caller(self):
         parameters = set(

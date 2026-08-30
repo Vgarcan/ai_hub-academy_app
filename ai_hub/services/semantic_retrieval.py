@@ -358,6 +358,40 @@ def semantic_search_knowledge_local(
     add a collection. A caller naming a collection it may not reach gets the same
     empty answer as a caller whose corpus is simply empty (ADR-N5): the shape of
     a refusal must not become a way to enumerate collections.
+
+    This is the ONLY place in the semantic path that resolves authorization. The
+    work itself lives in `search_semantic_with_scope`, so a composing caller
+    (S-22 hybrid) can hand ONE frozen scope to several branches instead of each
+    branch resolving its own - two branches resolving separately could run one
+    user-visible search under two different authorization answers.
+    """
+    scope = resolve_effective_knowledge_scope(agent, workspace=workspace)
+    return search_semantic_with_scope(
+        scope,
+        query=query,
+        embedding_model_config=embedding_model_config,
+        collection_id=collection_id,
+        limit=limit,
+    )
+
+
+def search_semantic_with_scope(
+    scope,
+    *,
+    query,
+    embedding_model_config,
+    collection_id=None,
+    limit=5,
+) -> SemanticRetrievalResult:
+    """Rank AUTHORIZED chunks inside an ALREADY-RESOLVED scope. Fail closed.
+
+    Deliberately does NOT call `resolve_effective_knowledge_scope`, and is not a
+    way to hand in authorization from outside: `EffectiveKnowledgeScope` is only
+    ever produced by S-15, and every narrowing below still intersects with it.
+
+    Everything the public entry point promised holds here unchanged - the
+    ordering invariant, `PAYLOAD_QUERY`, LOCAL-only execution, the candidate
+    ceiling and post-inference revalidation.
     """
     # -- 1. content-free structural checks ---------------------------------
     # Before authorization, because they inspect nothing but the caller's own
@@ -383,8 +417,7 @@ def semantic_search_knowledge_local(
             "A non-empty query is required.",
         )
 
-    # -- 2. AUTHORIZATION. First, and the source of every later narrowing ---
-    scope = resolve_effective_knowledge_scope(agent, workspace=workspace)
+    # -- 2. AUTHORIZATION. Already resolved; the source of every narrowing --
     if scope.is_empty:
         return _empty_result(scope)
 

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import reduce
 
 from django.core.exceptions import ValidationError
@@ -5,6 +6,7 @@ from django.db.models import Q
 from django.db.models.functions import Length, Substr
 
 from ai_hub.models import AgentProfile, KnowledgeDocument, KnowledgeDocumentChunk
+from ai_hub.services.chunk_embedding_identity import chunk_embedding_fingerprint
 from ai_hub.services.knowledge_authorization import (
     authorized_chunks,
     authorized_collections,
@@ -226,30 +228,89 @@ def _snippet(content: str, words: list[str], max_chars: int = 500) -> str:
     return content[start:start + max_chars]
 
 
-def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, limit: int = 5) -> dict:
+@dataclass(frozen=True)
+class LexicalCandidate:
+    """One lexically ranked chunk, plus the identity it had WHEN IT WAS SCORED.
+
+    `k1` is the S-19 canonical chunk embedding fingerprint, captured from the
+    same database read that produced the score. It exists because lexical
+    ranking and a later composition step (S-22 hybrid fusion) are separated in
+    time: a chunk edited in between would otherwise contribute a rank that was
+    earned by text nobody is reading any more.
+
+    `k1` is `""` when the caller did not ask for identity capture - the public
+    lexical API has no composition boundary to defend and should not pay to load
+    every candidate body.
+    """
+
+    rank: int
+    chunk_id: int
+    document_id: int
+    collection_id: int
+    score: int
+    k1: str
+
+
+@dataclass(frozen=True)
+class LexicalRanking:
+    """The internal lexical result. ONE implementation, two projections.
+
+    `rows` carries the ORM objects the public dict projection needs (snippet,
+    citation, title); `candidates` carries the content-free identity view a
+    composing caller needs. Both describe the same ranking, in the same order,
+    from the same scoring pass - there is deliberately no second lexical
+    algorithm to drift.
+    """
+
+    query: str
+    words: tuple
+    rows: tuple
+    candidates: tuple
+    candidates_scanned: int
+    candidates_truncated: bool
+
+
+def validated_lexical_query(query) -> str:
     query = str(query or "").strip()[:MAX_SEARCH_QUERY_CHARS]
     if not query:
         raise ValidationError("search_knowledge requires a non-empty query.")
-    words = _query_words(query)
-    if not words:
-        return {
-            "query": query,
-            "results": [],
-            "total": 0,
-            "candidates_scanned": 0,
-            "candidate_limit": MAX_SEARCH_CANDIDATES,
-            "candidates_truncated": False,
-        }
+    return query
 
-    chunks = _accessible_chunks(agent)
-    if collection_id is not None:
-        try:
-            requested_collection_id = int(collection_id)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError("collection_id must be an integer.") from exc
-        if requested_collection_id not in _agent_collection_ids(agent):
-            raise ValidationError("Knowledge collection is not accessible to this agent.")
-        chunks = chunks.filter(document__collection_id=requested_collection_id)
+
+def rank_knowledge_chunks_with_scope(
+    scope,
+    *,
+    query: str,
+    collection_ids,
+    limit: int = 5,
+    capture_identity: bool = False,
+) -> LexicalRanking:
+    """Rank AUTHORIZED chunks lexically, inside an ALREADY-RESOLVED scope.
+
+    Deliberately does NOT call `resolve_effective_knowledge_scope`. A composing
+    caller resolves authorization once and hands the frozen answer to every
+    branch, so one search cannot run under two different authorization answers.
+    Resolving again here would reintroduce exactly that split.
+
+    `collection_ids` must already have been narrowed against `scope` by the
+    caller: this function applies it, it does not authorize it.
+    """
+    words = _query_words(query)
+    target_ids = frozenset(collection_ids or ())
+    bounded_limit = _bounded_integer(
+        limit, name="limit", minimum=0, maximum=MAX_SEARCH_RESULTS
+    )
+    if not words or not target_ids:
+        # An empty authorized target set means ZERO rows, never "no filter" -
+        # the same fail-closed shape S-15 uses.
+        return LexicalRanking(
+            query=query, words=tuple(words), rows=(), candidates=(),
+            candidates_scanned=0, candidates_truncated=False,
+        )
+
+    chunks = authorized_chunks(scope).filter(
+        document__collection_id__in=target_ids
+    )
 
     db_filter = reduce(
         lambda acc, word: (
@@ -263,20 +324,25 @@ def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, lim
         Q(),
     )
 
-    candidate_chunks = list(
-        chunks.filter(db_filter)
-        .annotate(
-            search_content=Substr(
-                "content",
-                1,
-                MAX_SEARCH_CANDIDATE_CONTENT_CHARS,
-            ),
-            search_content_chars=Length("content"),
-        )
-        .defer("content", "metadata")[:MAX_SEARCH_CANDIDATES + 1]
+    candidate_query = chunks.filter(db_filter).annotate(
+        search_content=Substr("content", 1, MAX_SEARCH_CANDIDATE_CONTENT_CHARS),
+        search_content_chars=Length("content"),
     )
+    if not capture_identity:
+        # Unchanged from before: the public path never loads full bodies.
+        candidate_query = candidate_query.defer("content", "metadata")
+    else:
+        # `content` is loaded by the SAME query that produces the score, so the
+        # captured `k1` describes the exact bytes that were scored. Deferring it
+        # and touching `chunk.content` afterwards would silently re-read the row
+        # and fingerprint whatever it says NOW - which is the staleness this
+        # capture exists to detect.
+        candidate_query = candidate_query.defer("metadata")
+
+    candidate_chunks = list(candidate_query[:MAX_SEARCH_CANDIDATES + 1])
     candidates_truncated = len(candidate_chunks) > MAX_SEARCH_CANDIDATES
     candidate_chunks = candidate_chunks[:MAX_SEARCH_CANDIDATES]
+
     scored = []
     for chunk in candidate_chunks:
         score = _score_chunk(chunk, words, content=chunk.search_content)
@@ -287,13 +353,60 @@ def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, lim
         if score > 0:
             scored.append((score, chunk.document.title, chunk.chunk_index, chunk))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
-    bounded_limit = _bounded_integer(
-        limit,
-        name="limit",
-        minimum=0,
-        maximum=MAX_SEARCH_RESULTS,
+    selected = scored[:bounded_limit]
+
+    candidates = tuple(
+        LexicalCandidate(
+            rank=position,
+            chunk_id=chunk.pk,
+            document_id=chunk.document_id,
+            collection_id=chunk.document.collection_id,
+            score=score,
+            k1=chunk_embedding_fingerprint(chunk) if capture_identity else "",
+        )
+        for position, (score, _title, _index, chunk) in enumerate(selected, start=1)
     )
-    selected = [item for item in scored[:bounded_limit]]
+    return LexicalRanking(
+        query=query,
+        words=tuple(words),
+        rows=tuple((score, chunk) for score, _t, _i, chunk in selected),
+        candidates=candidates,
+        candidates_scanned=len(candidate_chunks),
+        candidates_truncated=candidates_truncated,
+    )
+
+
+def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, limit: int = 5) -> dict:
+    """Public lexical search. Contract unchanged; internals now scope-aware.
+
+    Resolves authorization ONCE here and delegates all ranking to the shared
+    core, so this path and S-22's hybrid path can never diverge in what they
+    consider a match.
+    """
+    query = validated_lexical_query(query)
+    scope = _scope(agent)
+    target_ids = set(scope.collection_ids)
+    if collection_id is not None:
+        try:
+            requested_collection_id = int(collection_id)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("collection_id must be an integer.") from exc
+        if requested_collection_id not in target_ids:
+            raise ValidationError("Knowledge collection is not accessible to this agent.")
+        target_ids = {requested_collection_id}
+
+    ranking = rank_knowledge_chunks_with_scope(
+        scope, query=query, collection_ids=target_ids, limit=limit
+    )
+    if not ranking.words:
+        return {
+            "query": query,
+            "results": [],
+            "total": 0,
+            "candidates_scanned": 0,
+            "candidate_limit": MAX_SEARCH_CANDIDATES,
+            "candidates_truncated": False,
+        }
 
     results = [
         {
@@ -303,7 +416,7 @@ def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, lim
             "collection": chunk.document.collection.name,
             "section_title": chunk.section_title,
             "chunk_index": chunk.chunk_index,
-            "snippet": _snippet(chunk.search_content, words),
+            "snippet": _snippet(chunk.search_content, list(ranking.words)),
             "content_window_truncated": (
                 chunk.search_content_chars
                 > MAX_SEARCH_CANDIDATE_CONTENT_CHARS
@@ -311,15 +424,15 @@ def search_knowledge(agent: AgentProfile, *, query: str, collection_id=None, lim
             "score": score,
             "citation": _citation_for_chunk(chunk),
         }
-        for score, _title, _index, chunk in selected
+        for score, chunk in ranking.rows
     ]
     return {
         "query": query,
         "results": results,
         "total": len(results),
-        "candidates_scanned": len(candidate_chunks),
+        "candidates_scanned": ranking.candidates_scanned,
         "candidate_limit": MAX_SEARCH_CANDIDATES,
-        "candidates_truncated": candidates_truncated,
+        "candidates_truncated": ranking.candidates_truncated,
     }
 
 

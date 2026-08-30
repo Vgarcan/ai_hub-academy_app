@@ -886,10 +886,33 @@ class MigrationContractTests(TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, parent)
 
-    def test_the_mirror_cascades_from_the_canonical_store(self):
+    def test_the_mirror_has_no_referential_dependency_on_the_canonical_store(self):
+        """Deliberate, and proved by CI #53.
+
+        The first draft gave `source_embedding_id` an FK with
+        `ON DELETE CASCADE`, reasoning that a derived mirror should be
+        subordinate to canonical state. On PostgreSQL that inverted which table
+        is subordinate: Django's `flush` truncates the tables it MANAGES, these
+        ANN tables are outside model state by design and never join that set,
+        and PostgreSQL refuses the whole `TRUNCATE` because an unlisted table
+        references one being truncated. Rows survived and 43 later tests
+        collided on duplicate keys.
+
+        Asserted on the parsed table definition rather than on the whole SQL
+        text, because the migration now EXPLAINS the absence in a comment - a
+        substring scan would match its own explanation.
+        """
         forward, _reverse = self._sql()
-        self.assertIn("REFERENCES ai_hub_knowledgechunkembedding (id)", forward)
-        self.assertIn("ON DELETE CASCADE", forward)
+        definition = forward[
+            forward.index(f"CREATE TABLE IF NOT EXISTS {ANN_PARENT_TABLE}"):
+        ]
+        definition = definition[:definition.index(") PARTITION BY")]
+        for forbidden in ("FOREIGN KEY", "REFERENCES", "ON DELETE"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, definition)
+        # The column itself stays: it is how a candidate is resolved back to
+        # canonical state at the retrieval boundary.
+        self.assertIn("source_embedding_id  BIGINT       NOT NULL", definition)
 
     def test_the_generation_column_is_monotonic(self):
         forward, _reverse = self._sql()
@@ -1091,6 +1114,54 @@ class ExtensionAndSchemaTests(PgvectorFixtureMixin, TestCase):
                 [ANN_PARENT_TABLE],
             )
             self.assertEqual(cursor.fetchone()[0], "p", "a partitioned table")
+
+    def test_no_ann_table_references_the_canonical_store(self):
+        """The CI #53 regression, asserted against the live catalog.
+
+        An FK from an unmanaged mirror to a Django-managed table makes the
+        managed table untruncatable, and `flush` then fails for the whole suite.
+        Checks the parent AND every partition beneath it, since a constraint
+        added to a leaf would break `flush` just as thoroughly.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT con.conname, src.relname, tgt.relname "
+                "FROM pg_constraint con "
+                "JOIN pg_class src ON src.oid = con.conrelid "
+                "JOIN pg_class tgt ON tgt.oid = con.confrelid "
+                "WHERE con.contype = 'f' "
+                "AND tgt.relname = 'ai_hub_knowledgechunkembedding'"
+            )
+            offenders = [
+                row for row in cursor.fetchall()
+                if row[1] == ANN_PARENT_TABLE or row[1].startswith("ah_pgv_")
+            ]
+        self.assertEqual(
+            offenders, [],
+            "no ANN table may reference the canonical store",
+        )
+
+    def test_the_canonical_table_is_truncatable_without_the_mirror(self):
+        """Referential proof that Django's `flush` set is self-sufficient.
+
+        Asks PostgreSQL which tables depend on the canonical one and asserts
+        none of them is an ANN table. A real `TRUNCATE` is deliberately not
+        issued here: it would destroy the running test transaction's fixtures
+        for no extra information.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT src.relname FROM pg_constraint con "
+                "JOIN pg_class src ON src.oid = con.conrelid "
+                "JOIN pg_class tgt ON tgt.oid = con.confrelid "
+                "WHERE con.contype = 'f' AND tgt.relname = %s",
+                ["ai_hub_knowledgechunkembedding"],
+            )
+            dependants = {row[0] for row in cursor.fetchall()}
+        self.assertEqual(
+            {name for name in dependants if name.startswith("ah_pgv_")}, set()
+        )
+        self.assertNotIn(ANN_PARENT_TABLE, dependants)
 
 
 @requires_postgres
@@ -1389,6 +1460,44 @@ class RebuildTests(PgvectorFixtureMixin, TestCase):
         )
         self.assertEqual({row[0] for row in self.leaf_rows(self.coll_a1)}, canonical)
         self.assertEqual(result.source_count, len(canonical))
+
+    def test_deleting_a_canonical_vector_leaves_a_stale_leaf_unsearchable(self):
+        """The behaviour that replaces `ON DELETE CASCADE`.
+
+        Without the FK the mirror row survives the canonical delete. It must
+        never be servable: the DELETE trigger bumps the generation, the leaf
+        goes stale, and search refuses until a rebuild sweeps the row away.
+        """
+        self.provision_and_rebuild(self.coll_a1)
+        self.assertIn(self.a1.pk, {row[0] for row in self.leaf_rows(self.coll_a1)})
+
+        KnowledgeChunkEmbedding.objects.filter(chunk_id=self.a1.pk).delete()
+
+        # The derived row is still physically present - there is no cascade.
+        self.assertIn(
+            self.a1.pk, {row[0] for row in self.leaf_rows(self.coll_a1)}
+        )
+        readiness = leaf_readiness(
+            self.scope_a.pk, self.coll_a1.pk, self.contract
+        )
+        self.assertFalse(readiness.ready)
+        self.assertEqual(readiness.reason, "stale_generation")
+
+        result = self.provision_and_rebuild(self.coll_a1)
+        self.assertNotIn(
+            self.a1.pk, {row[0] for row in self.leaf_rows(self.coll_a1)},
+            "the rebuild sweeps the obsolete mirror row",
+        )
+        self.assertTrue(result.ready)
+
+    def test_deleting_a_chunk_leaves_a_stale_leaf_unsearchable(self):
+        self.provision_and_rebuild(self.coll_a1)
+        KnowledgeDocumentChunk.objects.filter(pk=self.a1.pk).delete()
+        readiness = leaf_readiness(
+            self.scope_a.pk, self.coll_a1.pk, self.contract
+        )
+        self.assertFalse(readiness.ready)
+        self.assertEqual(readiness.reason, "stale_generation")
 
     def test_a_rebuild_replaces_rather_than_appends(self):
         self.provision_and_rebuild(self.coll_a1)
@@ -1695,36 +1804,122 @@ class AnnSearchTests(PgvectorFixtureMixin, TestCase):
         self.assertFalse(readiness.ready)
         self.assertEqual(readiness.reason, "backend_version_mismatch")
 
-    def test_a_corrupt_mirror_row_refuses_rather_than_being_dropped(self):
-        """Quietly dropping it would return a short ranking that looks complete."""
+    def test_an_orphan_mirror_row_refuses_rather_than_being_dropped(self):
+        """The safety property that replaces the removed foreign key.
+
+        Without an FK a derived row CAN outlive - or never have had - a
+        canonical source. That is precisely why the retrieval boundary reloads
+        every ANN candidate from `KnowledgeChunkEmbedding` and REFUSES when one
+        cannot be resolved. Silently dropping it would hand the caller a shorter
+        ranking that looks complete while hiding mirror corruption.
+
+        The generation is deliberately untouched: only the MIRROR is corrupted,
+        so readiness still passes and the refusal can only come from canonical
+        revalidation.
+        """
         identity = self.leaf_names(self.coll_a1)
+        orphan_source_id = 10_000_001
+        orphan_chunk_id = 10_000_002
+        self.assertFalse(
+            KnowledgeChunkEmbedding.objects.filter(pk=orphan_source_id).exists()
+        )
+
+        generation_before = pgvector_ann.current_generation(
+            self.scope_a.pk, self.coll_a1.pk
+        )
         with connection.cursor() as cursor:
-            cursor.execute(
-                f'UPDATE "{identity.leaf_table}" SET k1 = %s WHERE chunk_id = %s',
-                ["k1:sha256:" + "0" * 64, self.a1.pk],
-            )
-            # Deliberately corrupt the MIRROR only, so the generation is
-            # untouched and readiness still passes - which is exactly the state
-            # canonical revalidation exists to catch.
-            cursor.execute(
-                f'DELETE FROM "{identity.leaf_table}" WHERE chunk_id = %s',
-                [self.a2.pk],
-            )
             cursor.execute(
                 f'INSERT INTO "{identity.leaf_table}" (source_embedding_id, '
                 "application_scope_id, collection_id, chunk_id, k1, e1, embedding) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s::vector)",
                 [
-                    10_000_001, self.scope_a.pk, self.coll_a1.pk, 10_000_001,
-                    "k1:sha256:" + "0" * 64, self.contract.e1, "[1,0,0,0]",
+                    orphan_source_id, self.scope_a.pk, self.coll_a1.pk,
+                    orphan_chunk_id, "k1:sha256:" + "0" * 64,
+                    self.contract.e1, "[1,0,0,0]",
                 ],
             )
+            cursor.execute(
+                f'SELECT count(*) FROM "{identity.leaf_table}" '
+                "WHERE source_embedding_id = %s",
+                [orphan_source_id],
+            )
+            self.assertEqual(
+                cursor.fetchone()[0], 1,
+                "no FK stands in the way: the malformed row really exists",
+            )
+
+        # The mirror-only corruption must not have moved the generation, so the
+        # leaf still reports READY and cannot refuse for staleness instead.
+        self.assertEqual(
+            pgvector_ann.current_generation(self.scope_a.pk, self.coll_a1.pk),
+            generation_before,
+        )
+        self.assertTrue(
+            leaf_readiness(
+                self.scope_a.pk, self.coll_a1.pk, self.contract
+            ).ready
+        )
+
         with self.assertRaises(PgvectorAnnError) as raised:
             self.search()
         self.assertEqual(
             raised.exception.category,
             PgvectorFailureCategory.ANN_INTEGRITY_MISMATCH,
         )
+
+    def test_the_orphan_row_really_reaches_candidate_discovery(self):
+        """Proves the refusal is not a coincidence of it ranking below the pool."""
+        identity = self.leaf_names(self.coll_a1)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'INSERT INTO "{identity.leaf_table}" (source_embedding_id, '
+                "application_scope_id, collection_id, chunk_id, k1, e1, embedding) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s::vector)",
+                [
+                    10_000_001, self.scope_a.pk, self.coll_a1.pk, 10_000_002,
+                    "k1:sha256:" + "0" * 64, self.contract.e1, "[1,0,0,0]",
+                ],
+            )
+        statement, params = build_ann_candidate_sql(
+            application_scope_id=self.scope_a.pk,
+            collection_ids=(self.coll_a1.pk,),
+            e1=self.contract.e1,
+            dimension=self.contract.vector_dimension,
+            metric=self.contract.distance_metric,
+            query_values=self.query,
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(statement, params)
+            discovered = {row[0] for row in cursor.fetchall()}
+        self.assertIn(10_000_001, discovered)
+
+    def test_the_mirror_k1_column_is_never_authoritative(self):
+        """Named for what it proves, which is NOT that the mirror is checked.
+
+        `_rerank_candidates` resolves a candidate by `source_embedding_id` and
+        then re-derives every fact from `KnowledgeChunkEmbedding`. The mirror's
+        own `k1` column is diagnostic and is deliberately never read, so
+        corrupting it changes nothing a caller can observe - the returned `k1`
+        is canonical.
+
+        That is the intended reference-first shape, but it does mean a mirror
+        row whose `k1` drifted while its `source_embedding_id` stayed valid is
+        not detected here. It is caught upstream instead: any canonical change
+        bumps the generation and the leaf goes stale.
+        """
+        identity = self.leaf_names(self.coll_a1)
+        canonical = KnowledgeChunkEmbedding.objects.get(chunk_id=self.a1.pk).k1
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'UPDATE "{identity.leaf_table}" SET k1 = %s WHERE chunk_id = %s',
+                ["k1:sha256:" + "0" * 64, self.a1.pk],
+            )
+
+        result = self.search()
+        returned = {match.chunk_id: match.k1 for match in result.matches}
+        self.assertIn(self.a1.pk, returned)
+        self.assertEqual(returned[self.a1.pk], canonical)
+        self.assertNotEqual(returned[self.a1.pk], "k1:sha256:" + "0" * 64)
 
     def test_a_source_change_during_search_refuses_the_result(self):
         real = pgvector_ann._rerank_candidates
@@ -1746,7 +1941,65 @@ class AnnSearchTests(PgvectorFixtureMixin, TestCase):
             PgvectorFailureCategory.SOURCE_CHANGED_DURING_SEARCH,
         )
 
-    def test_the_result_carries_no_query_content_or_vector(self):
+    def test_the_result_exposes_exactly_the_allowed_provenance_fields(self):
+        """Asserted on KEYS, not substrings.
+
+        The first draft scanned the serialized result for the substring
+        `"embedding"` and failed on `embedding_model_config_id` - a legitimate
+        bounded provenance fact. A substring rule cannot distinguish a field
+        NAMED after the embedding configuration from an embedding VECTOR, so it
+        is the wrong instrument: the field set is what actually defines the
+        contract.
+        """
+        result = self.search()
+        self.assertEqual(
+            set(result.__dict__),
+            {
+                "matches",
+                "application_scope_id",
+                "collection_ids",
+                "embedding_model_config_id",
+                "e1",
+                "backend_version",
+                "metric",
+                "ann_candidate_pool",
+                "ann_candidates_returned",
+            },
+        )
+        self.assertEqual(
+            set(result.matches[0].__dict__),
+            {
+                "rank", "chunk_id", "document_id", "collection_id",
+                "application_scope_id", "k1", "e1", "metric", "metric_value",
+            },
+        )
+
+    def test_no_payload_field_exists_anywhere_in_the_result(self):
+        """Recursive exact-key inspection of every dataclass in the result."""
+        forbidden_keys = {
+            "query", "query_text", "canonical_query", "query_values",
+            "query_vector", "vector", "vector_bytes", "embedding",
+            "embeddings", "content", "section_title", "snippet", "title",
+            "metadata", "tags", "curated_text", "provider_response",
+            "response_body", "api_key", "credential", "token",
+        }
+
+        def keys_of(value):
+            if hasattr(value, "__dict__"):
+                for key, child in vars(value).items():
+                    yield key
+                    yield from keys_of(child)
+            elif isinstance(value, (tuple, list)):
+                for child in value:
+                    yield from keys_of(child)
+
+        result = self.search()
+        observed = set(keys_of(result))
+        self.assertTrue(observed)
+        self.assertEqual(observed & forbidden_keys, set())
+
+    def test_no_corpus_marker_or_vector_literal_reaches_the_result(self):
+        """The value-level check, kept separate from the key-level one."""
         result = self.search()
         blob = json.dumps(
             {
@@ -1758,15 +2011,9 @@ class AnnSearchTests(PgvectorFixtureMixin, TestCase):
             },
             default=str,
         )
-        for forbidden in (KNOWLEDGE_SECRET, "alpha", "embedding", "[1.0"):
-            self.assertNotIn(forbidden, blob)
-        self.assertEqual(
-            set(result.matches[0].__dict__),
-            {
-                "rank", "chunk_id", "document_id", "collection_id",
-                "application_scope_id", "k1", "e1", "metric", "metric_value",
-            },
-        )
+        for forbidden in (KNOWLEDGE_SECRET, "alpha widget", "[1.0", "[0.6,"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, blob)
 
     def test_the_search_writes_no_audit_row(self):
         from ai_hub.models import RetrievalHit, RetrievalRun

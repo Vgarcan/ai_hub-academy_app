@@ -20,6 +20,29 @@ bypassed by `queryset.update()`, by `bulk_create`, by raw SQL and by any future
 management command. A missed invalidation means a stale HNSW graph keeps
 consuming finite ANN candidate slots while reporting itself ready - which is the
 one failure mode an approximate index makes invisible.
+
+**No referential dependency on the canonical store.** `source_embedding_id`
+carries no FOREIGN KEY, and that is deliberate rather than an omission.
+
+CI #53 proved why. Django's `flush` - which `TransactionTestCase` runs, and which
+any operator may run - issues `TRUNCATE` over the tables Django MANAGES. These
+ANN tables are outside Django's model state by design, so they are never in that
+set. PostgreSQL then refuses the whole statement:
+
+    cannot truncate a table referenced in a foreign key constraint
+    Table "ai_hub_pgvector_ann_embedding" references
+    "ai_hub_knowledgechunkembedding".
+
+The truncate fails, rows survive, and every later test collides on duplicate
+keys. A derived index mirror that Django does not manage must never become a
+truncation dependency of a table Django does manage; that inverts which of the
+two is subordinate.
+
+Nothing is weakened by removing it. Source existence is checked where it
+actually matters - at the retrieval boundary, where every ANN candidate id is
+re-loaded from `KnowledgeChunkEmbedding` and an unresolvable one REFUSES the
+whole search rather than being dropped. A schema constraint would have caught
+the same corruption later and at the cost of breaking the ORM's lifecycle.
 """
 
 from django.db import migrations
@@ -40,6 +63,15 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- Deliberately holds no Knowledge text, no title, no metadata, no query and no
 -- JSON. An index mirror that accumulated content would become a second, unaudited
 -- copy of the corpus.
+--
+-- `source_embedding_id` deliberately carries NO FOREIGN KEY. See the
+-- "No referential dependency" section of the module docstring: a derived mirror
+-- that Django does not manage must never become a truncation dependency of a
+-- table Django DOES manage, or `flush` stops working on PostgreSQL.
+--
+-- Source existence is validated where it matters - at the retrieval boundary,
+-- against `KnowledgeChunkEmbedding` - not by a schema constraint that outranks
+-- the ORM's own lifecycle.
 CREATE TABLE IF NOT EXISTS {ANN_PARENT_TABLE} (
     source_embedding_id  BIGINT       NOT NULL,
     application_scope_id BIGINT       NOT NULL,
@@ -47,11 +79,7 @@ CREATE TABLE IF NOT EXISTS {ANN_PARENT_TABLE} (
     chunk_id             BIGINT       NOT NULL,
     k1                   VARCHAR(80)  NOT NULL,
     e1                   VARCHAR(80)  NOT NULL,
-    embedding            vector       NOT NULL,
-    CONSTRAINT ai_hub_pgv_ann_source_fk
-        FOREIGN KEY (source_embedding_id)
-        REFERENCES ai_hub_knowledgechunkembedding (id)
-        ON DELETE CASCADE
+    embedding            vector       NOT NULL
 ) PARTITION BY LIST (application_scope_id);
 
 -- Source freshness per (scope, collection). Monotonic: incremented only, never

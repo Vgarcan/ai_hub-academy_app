@@ -370,33 +370,45 @@ class OrderingInvariantTests(RetrievalFixtureMixin, TestCase):
         docstrings name every forbidden shape while explaining why it is
         forbidden - a source-text scan would match its own prose.
         """
-        source = inspect.getsource(search_semantic_with_scope)
-        tree = ast.parse(source.lstrip())
-        calls = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                calls.setdefault(node.func.id, node.lineno)
+        def first_calls(target):
+            tree = ast.parse(inspect.getsource(target).lstrip())
+            found = {}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    found.setdefault(node.func.id, node.lineno)
+            return found
 
-        self.assertIn("load_current_vectors", calls)
-        self.assertIn("resolve_embedding_access", calls)
-        self.assertIn("authorized_chunks", calls)
-
+        # The retriever's own order. Candidate generation now lives in a shared
+        # internal, so the ordering is asserted ACROSS the two functions - the
+        # property is unchanged, only its expression moved.
+        outer = first_calls(search_semantic_with_scope)
+        self.assertIn("resolve_embedding_access", outer)
+        self.assertIn("load_current_semantic_candidates", outer)
+        self.assertIn("transport", outer)
         self.assertLess(
-            calls["authorized_chunks"], calls["load_current_vectors"],
-            "the authorized chunk set must precede candidate generation",
-        )
-        self.assertLess(
-            calls["resolve_embedding_access"], calls["load_current_vectors"],
+            outer["resolve_embedding_access"],
+            outer["load_current_semantic_candidates"],
             "egress authorization must precede candidate generation",
         )
         self.assertLess(
-            calls["load_current_vectors"], calls["transport"],
+            outer["load_current_semantic_candidates"], outer["transport"],
             "candidates must be generated before the provider is called",
+        )
+
+        # And inside the shared internal, authorization still precedes the load.
+        inner = first_calls(semantic_retrieval.load_current_semantic_candidates)
+        self.assertIn("authorized_chunks", inner)
+        self.assertIn("load_current_vectors", inner)
+        self.assertLess(
+            inner["authorized_chunks"], inner["load_current_vectors"],
+            "the authorized chunk set must precede candidate generation",
         )
 
     def test_the_scoped_load_is_the_only_candidate_source(self):
         """Candidates come from the scoped loader, never from a bare queryset."""
-        source = inspect.getsource(search_semantic_with_scope)
+        source = inspect.getsource(
+            semantic_retrieval.load_current_semantic_candidates
+        )
         called = {
             node.func.attr
             for node in ast.walk(ast.parse(source.lstrip()))

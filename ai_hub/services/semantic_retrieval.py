@@ -338,6 +338,301 @@ def _translate_vector_error(exc: EmbeddingVectorError) -> SemanticRetrievalError
     return SemanticRetrievalError(exc.category, str(exc))
 
 
+@dataclass(frozen=True)
+class SemanticTargets:
+    """The narrowed search target for ONE operation. Ephemeral.
+
+    `application_scope` is `None` and `collection_ids` empty for every denied or
+    empty case - the three ADR-N5 outcomes (nothing authorized, unknown
+    collection, unreachable collection) collapse here so no caller downstream can
+    tell them apart.
+    """
+
+    application_scope: object
+    collections: tuple
+    collection_ids: tuple
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.collection_ids
+
+
+def resolve_semantic_targets(scope, collection_id=None) -> SemanticTargets:
+    """The ONE narrowing implementation. Narrow-only; never widened.
+
+    Extracted so the exact oracle and any evaluator reach the same target set as
+    the retriever. A second copy of this derivation would eventually disagree
+    about which collections a scope authorizes, which is the one thing that must
+    never differ between a backend and the oracle it is measured against.
+    """
+    if scope.is_empty:
+        return SemanticTargets(None, (), ())
+    if collection_id is not None and not scope.allows(collection_id):
+        return SemanticTargets(None, (), ())
+
+    collections = list(
+        authorized_collections(scope).select_related("application_scope")
+    )
+    if collection_id is not None:
+        collections = [
+            collection
+            for collection in collections
+            if collection.pk == int(collection_id)
+        ]
+    if not collections:
+        return SemanticTargets(None, (), ())
+
+    application_scope = collections[0].application_scope
+    if (
+        application_scope is None
+        or application_scope.pk != scope.application_scope_id
+        or not application_scope.is_active
+    ):
+        # S-15 already guarantees this; asserting it here means a future change
+        # to either module cannot quietly widen the namespace being searched.
+        raise SemanticRetrievalError(
+            RetrievalFailureCategory.SCOPE_UNAVAILABLE,
+            "The authorized application scope is not usable.",
+        )
+    return SemanticTargets(
+        application_scope=application_scope,
+        collections=tuple(collections),
+        collection_ids=tuple(sorted(collection.pk for collection in collections)),
+    )
+
+
+def load_current_semantic_candidates(scope, *, targets, contract) -> tuple:
+    """CANDIDATE GENERATION. Pre-filtered by authorization, before any inference.
+
+    The eligible chunk set is derived from S-15 FIRST, so the candidate set is
+    bounded by authorization rather than corrected by it afterwards.
+
+    `load_current_vectors` narrows in SQL by scope, `e1` and the authorized
+    collection ids, and drops anything whose `k1`/`e1` is no longer current.
+    Nothing outside the target set is ever loaded, so nothing belonging to
+    another application or another collection can be decoded, scored, ranked or
+    counted.
+
+    S-19's loader takes collection ids only, so ONE authorization predicate -
+    `KnowledgeDocument.status` - cannot reach that SQL. It is applied here, in
+    the same step, before the ceiling and before anything is ranked or counted.
+    The residue it removes is narrow and same-tenant by construction: vectors of
+    ARCHIVED documents inside collections this caller is already authorized to
+    read. A real vector index must carry this predicate into the index too,
+    exactly as it must carry the collection filter.
+
+    Extracted verbatim from the retriever so the exact oracle generates
+    candidates through the SAME code. An oracle that assembled its own candidate
+    set could disagree with the retriever about what was eligible, and every
+    parity number measured against it would be meaningless.
+    """
+    authorized_ids = frozenset(
+        authorized_chunks(scope).values_list("pk", flat=True)
+    )
+    candidates = tuple(
+        candidate
+        for candidate in load_current_vectors(
+            application_scope=targets.application_scope,
+            e1=contract.e1,
+            collection_ids=targets.collection_ids,
+        )
+        if candidate.chunk_id in authorized_ids
+    )
+    if len(candidates) > MAX_REFERENCE_SEMANTIC_CANDIDATES:
+        raise SemanticRetrievalError(
+            RetrievalFailureCategory.REFERENCE_CANDIDATE_LIMIT_EXCEEDED,
+            f"{len(candidates)} eligible candidates exceed the reference "
+            f"backend ceiling of {MAX_REFERENCE_SEMANTIC_CANDIDATES}.",
+        )
+    return candidates
+
+
+def rank_semantic_candidates(
+    scope,
+    *,
+    candidates,
+    query_values,
+    contract,
+    metric_spec,
+    targets,
+    embedding_model_config_id,
+    limit,
+    provider_invoked,
+) -> SemanticRetrievalResult:
+    """Revalidate, then rank EXACTLY. THE canonical exact ordering.
+
+    This is the only implementation of S-21's exact ranking. S-24's rerank uses
+    the same `metric_spec` scorers, and S-25's oracle calls this function
+    directly rather than reproducing it - there must never be a second
+    "equivalent" ordering to drift against.
+
+    Time may have passed since the candidates were generated, so the authorized
+    chunk set and each chunk's identity are re-derived from the database before
+    anything is scored: a chunk whose collection was deactivated, whose document
+    was archived, which was deleted, or which was edited in the meantime is
+    dropped rather than ranked.
+
+    The `scope` itself is deliberately NOT re-resolved. It is the authorization
+    decision FOR this operation; resolving it again halfway through would mean
+    one search ran under two different authorization answers, which is harder to
+    audit than a search that ran under the one it started with.
+    """
+    empty_shape = {
+        "collection_ids": targets.collection_ids,
+        "embedding_model_config_id": embedding_model_config_id,
+        "e1": contract.e1,
+        "metric": contract.distance_metric,
+        "higher_is_better": metric_spec.higher_is_better,
+        "candidate_count": len(candidates),
+    }
+
+    surviving = {
+        chunk.pk: chunk
+        for chunk in authorized_chunks(scope).filter(
+            pk__in=[candidate.chunk_id for candidate in candidates]
+        )
+    }
+
+    scored = []
+    for candidate in candidates:
+        chunk = surviving.get(candidate.chunk_id)
+        if chunk is None:
+            continue
+        if chunk_embedding_fingerprint(chunk) != candidate.k1:
+            # The chunk's canonical embedding input changed while the query was
+            # in flight, so this vector no longer represents this chunk. Drop
+            # it; never re-embed on the caller's behalf.
+            continue
+        if len(candidate.values) != contract.vector_dimension:
+            # Unreachable through `e1` alone, but a vector of the wrong length
+            # would otherwise be scored against a truncating `zip` and produce a
+            # plausible number from a partial comparison.
+            raise SemanticRetrievalError(
+                RetrievalFailureCategory.CANDIDATE_DIMENSION_MISMATCH,
+                f"A stored vector has {len(candidate.values)} components; "
+                f"the contract requires {contract.vector_dimension}.",
+            )
+        scored.append(
+            (metric_spec.score(query_values, candidate.values), candidate)
+        )
+
+    if not scored:
+        return _empty_result(scope, **empty_shape)
+
+    # `chunk_id` ASC breaks ties deterministically, so equal scores never
+    # reorder between runs, backends or database row orders.
+    scored.sort(
+        key=lambda entry: (
+            -entry[0] if metric_spec.higher_is_better else entry[0],
+            entry[1].chunk_id,
+        )
+    )
+
+    matches = tuple(
+        SemanticMatch(
+            rank=position,
+            chunk_id=candidate.chunk_id,
+            document_id=candidate.document_id,
+            collection_id=candidate.collection_id,
+            application_scope_id=candidate.application_scope_id,
+            k1=candidate.k1,
+            e1=candidate.e1,
+            metric=contract.distance_metric,
+            metric_value=float(value),
+            higher_is_better=metric_spec.higher_is_better,
+        )
+        for position, (value, candidate) in enumerate(scored[:limit], start=1)
+    )
+
+    return SemanticRetrievalResult(
+        matches=matches,
+        application_scope_id=scope.application_scope_id,
+        agent_id=scope.agent_id,
+        workspace_id=scope.workspace_id,
+        collection_ids=targets.collection_ids,
+        embedding_model_config_id=embedding_model_config_id,
+        e1=contract.e1,
+        metric=contract.distance_metric,
+        higher_is_better=metric_spec.higher_is_better,
+        candidate_count=len(candidates),
+        scored_count=len(scored),
+        provider_invoked=provider_invoked,
+    )
+
+
+def rank_semantic_vector_with_scope(
+    scope,
+    *,
+    query_values,
+    embedding_model_config,
+    collection_id=None,
+    limit=5,
+) -> SemanticRetrievalResult:
+    """THE exact oracle for an ALREADY-GENERATED query vector. No provider call.
+
+    Exists so S-25 can measure an approximate backend against S-21's exact
+    ranking without embedding the query twice. Two embeddings of the same text
+    are not guaranteed identical, and any difference would be attributed to ANN
+    approximation - measuring the provider instead of the index.
+
+    Deliberately does NOT resolve authorization, does NOT contact a provider and
+    does NOT normalize: the caller supplies contract-conformant values and hands
+    the SAME tuple to every backend under comparison, exactly as S-24 requires.
+
+    Egress and transport are not consulted, and that is correct rather than a
+    shortcut: nothing leaves the process here, so there is no payload for S-17
+    to govern. Every authorization narrowing that decides WHICH Knowledge may be
+    ranked still applies, through the same shared code the retriever uses.
+    """
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+        raise SemanticRetrievalError(
+            RetrievalFailureCategory.INVALID_LIMIT,
+            "limit must be a non-negative integer.",
+        )
+
+    targets = resolve_semantic_targets(scope, collection_id)
+    if targets.is_empty:
+        return _empty_result(scope)
+
+    contract = resolve_embedding_contract(embedding_model_config)
+    metric_spec = resolve_metric_scorer(contract.distance_metric)
+
+    try:
+        values = validate_embedding_vector(
+            query_values, expected_dimension=contract.vector_dimension
+        )
+    except EmbeddingVectorError as exc:
+        raise _translate_vector_error(exc) from exc
+
+    candidates = load_current_semantic_candidates(
+        scope, targets=targets, contract=contract
+    )
+    empty_shape = {
+        "collection_ids": targets.collection_ids,
+        "embedding_model_config_id": getattr(embedding_model_config, "pk", None),
+        "e1": contract.e1,
+        "metric": contract.distance_metric,
+        "higher_is_better": metric_spec.higher_is_better,
+        "candidate_count": len(candidates),
+    }
+    if not candidates or limit == 0:
+        return _empty_result(scope, **empty_shape)
+
+    return rank_semantic_candidates(
+        scope,
+        candidates=candidates,
+        query_values=values,
+        contract=contract,
+        metric_spec=metric_spec,
+        targets=targets,
+        embedding_model_config_id=getattr(embedding_model_config, "pk", None),
+        limit=limit,
+        # No inference happened. Saying otherwise would misreport how the
+        # ranking was obtained.
+        provider_invoked=False,
+    )
+
+
 def semantic_search_knowledge_local(
     agent,
     *,
@@ -422,36 +717,14 @@ def search_semantic_with_scope(
         return _empty_result(scope)
 
     # -- 3. the authorized target collections ------------------------------
-    if collection_id is not None and not scope.allows(collection_id):
-        # Narrow-only. Never widened, never "helpfully" ignored.
+    # Narrow-only, through the ONE shared derivation. Never widened, never
+    # "helpfully" ignored.
+    targets = resolve_semantic_targets(scope, collection_id)
+    if targets.is_empty:
         return _empty_result(scope)
-
-    collections = list(
-        authorized_collections(scope).select_related("application_scope")
-    )
-    if collection_id is not None:
-        collections = [
-            collection
-            for collection in collections
-            if collection.pk == int(collection_id)
-        ]
-    if not collections:
-        return _empty_result(scope)
-
-    target_ids = tuple(sorted(collection.pk for collection in collections))
-
-    application_scope = collections[0].application_scope
-    if (
-        application_scope is None
-        or application_scope.pk != scope.application_scope_id
-        or not application_scope.is_active
-    ):
-        # S-15 already guarantees this; asserting it here means a future change
-        # to either module cannot quietly widen the namespace being searched.
-        raise SemanticRetrievalError(
-            RetrievalFailureCategory.SCOPE_UNAVAILABLE,
-            "The authorized application scope is not usable.",
-        )
+    collections = targets.collections
+    target_ids = targets.collection_ids
+    application_scope = targets.application_scope
 
     # -- 4. the embedding contract -----------------------------------------
     # The OPERATIONAL resolver: a query embedding is a NEW inference, so the
@@ -519,42 +792,13 @@ def search_semantic_with_scope(
         )
 
     # -- 8. CANDIDATE GENERATION. Pre-filtered, and before any inference ---
-    # The eligible chunk set is derived from S-15 FIRST, so the candidate set is
-    # bounded by authorization rather than corrected by it afterwards.
-    authorized_ids = frozenset(
-        authorized_chunks(scope).values_list("pk", flat=True)
+    # The shared implementation, so the exact oracle sees the same eligible set.
+    # Still BEFORE the provider call: a query whose answer cannot change the
+    # outcome must never be embedded.
+    candidates = load_current_semantic_candidates(
+        scope, targets=targets, contract=contract
     )
-
-    # `load_current_vectors` narrows in SQL by scope, `e1` and the authorized
-    # collection ids, and drops anything whose `k1`/`e1` is no longer current.
-    # Nothing outside `target_ids` is ever loaded, so nothing belonging to
-    # another application or another collection can be decoded, scored, ranked
-    # or counted.
-    #
-    # S-19's loader takes collection ids only, so ONE authorization predicate -
-    # `KnowledgeDocument.status` - cannot reach that SQL. It is applied here, in
-    # the same step, before the ceiling and before anything is ranked or
-    # counted. The residue it removes is narrow and same-tenant by construction:
-    # vectors of ARCHIVED documents inside collections this caller is already
-    # authorized to read. A real vector index must carry this predicate into the
-    # index too, exactly as it must carry the collection filter.
-    candidates = [
-        candidate
-        for candidate in load_current_vectors(
-            application_scope=application_scope,
-            e1=contract.e1,
-            collection_ids=target_ids,
-        )
-        if candidate.chunk_id in authorized_ids
-    ]
     candidate_count = len(candidates)
-
-    if candidate_count > MAX_REFERENCE_SEMANTIC_CANDIDATES:
-        raise SemanticRetrievalError(
-            RetrievalFailureCategory.REFERENCE_CANDIDATE_LIMIT_EXCEEDED,
-            f"{candidate_count} eligible candidates exceed the reference "
-            f"backend ceiling of {MAX_REFERENCE_SEMANTIC_CANDIDATES}.",
-        )
 
     empty_shape = {
         "collection_ids": target_ids,
@@ -589,89 +833,17 @@ def search_semantic_with_scope(
     except EmbeddingVectorError as exc:
         raise _translate_vector_error(exc) from exc
 
-    # -- 10. post-inference revalidation -----------------------------------
-    # Time passed during the network call, so the authorized chunk set and each
-    # chunk's identity are re-derived from the database before anything is
-    # scored: a chunk whose collection was deactivated, whose document was
-    # archived, which was deleted, or which was edited mid-flight is dropped
-    # rather than ranked.
-    #
-    # The `scope` itself is deliberately NOT re-resolved. It is the
-    # authorization decision FOR this operation, taken once at step 2; resolving
-    # it again halfway through would mean one search ran under two different
-    # authorization answers, which is harder to audit than a search that ran
-    # under the one it started with. A revoked assignment takes effect on the
-    # next search, which is a decision, not a race.
-    surviving = {
-        chunk.pk: chunk
-        for chunk in authorized_chunks(scope).filter(
-            pk__in=[candidate.chunk_id for candidate in candidates]
-        )
-    }
-
-    scored = []
-    for candidate in candidates:
-        chunk = surviving.get(candidate.chunk_id)
-        if chunk is None:
-            continue
-        if chunk_embedding_fingerprint(chunk) != candidate.k1:
-            # The chunk's canonical embedding input changed while the query was
-            # in flight, so this vector no longer represents this chunk. Drop
-            # it; never re-embed on the caller's behalf.
-            continue
-        if len(candidate.values) != contract.vector_dimension:
-            # Unreachable through `e1` alone, but a vector of the wrong length
-            # would otherwise be scored against a truncating `zip` and produce a
-            # plausible number from a partial comparison.
-            raise SemanticRetrievalError(
-                RetrievalFailureCategory.CANDIDATE_DIMENSION_MISMATCH,
-                f"A stored vector has {len(candidate.values)} components; "
-                f"the contract requires {contract.vector_dimension}.",
-            )
-        scored.append(
-            (metric_spec.score(query_values, candidate.values), candidate)
-        )
-
-    if not scored:
-        return _empty_result(scope, **empty_shape)
-
-    # -- 11. ranking, entirely over already-authorized candidates ----------
-    # `chunk_id` ASC breaks ties deterministically, so equal scores never
-    # reorder between runs, backends or database row orders.
-    scored.sort(
-        key=lambda entry: (
-            -entry[0] if metric_spec.higher_is_better else entry[0],
-            entry[1].chunk_id,
-        )
-    )
-
-    matches = tuple(
-        SemanticMatch(
-            rank=position,
-            chunk_id=candidate.chunk_id,
-            document_id=candidate.document_id,
-            collection_id=candidate.collection_id,
-            application_scope_id=candidate.application_scope_id,
-            k1=candidate.k1,
-            e1=candidate.e1,
-            metric=contract.distance_metric,
-            metric_value=float(value),
-            higher_is_better=metric_spec.higher_is_better,
-        )
-        for position, (value, candidate) in enumerate(scored[:limit], start=1)
-    )
-
-    return SemanticRetrievalResult(
-        matches=matches,
-        application_scope_id=scope.application_scope_id,
-        agent_id=scope.agent_id,
-        workspace_id=scope.workspace_id,
-        collection_ids=target_ids,
+    # -- 10. post-inference revalidation, then EXACT ranking ----------------
+    # Both live in the shared core, so this retriever and the S-25 oracle order
+    # results through the same code and cannot drift.
+    return rank_semantic_candidates(
+        scope,
+        candidates=candidates,
+        query_values=query_values,
+        contract=contract,
+        metric_spec=metric_spec,
+        targets=targets,
         embedding_model_config_id=embedding_model_config.pk,
-        e1=contract.e1,
-        metric=contract.distance_metric,
-        higher_is_better=metric_spec.higher_is_better,
-        candidate_count=candidate_count,
-        scored_count=len(scored),
+        limit=limit,
         provider_invoked=True,
     )

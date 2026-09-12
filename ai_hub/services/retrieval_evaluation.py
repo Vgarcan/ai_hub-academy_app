@@ -167,6 +167,28 @@ class PromotionDecision:
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class PolicyConfigurationGap:
+    """Why a policy is not a usable promotion STANDARD at all.
+
+    Kept separate from evidence sufficiency on purpose. "There is no standard"
+    and "there is not enough evidence" are different answers, and reporting a
+    misconfiguration as a sentence about missing data would send somebody to
+    collect more cases when the problem is that nothing was being asked of them.
+    """
+
+    #: `evaluate_pgvector_suite` was called without naming a policy.
+    ABSENT = "no_promotion_policy_supplied"
+    #: Every quality gate the policy declares is empty or a zero floor, so each
+    #: check iterates nothing and approves by default.
+    NO_QUALITY_THRESHOLD = "policy_declares_no_quality_threshold"
+
+
+#: Evidence sufficiency, NOT policy configuration: the suite ran and every case
+#: was explained, but none produced a comparable measurement, so no threshold
+#: has anything real to read. A suite of pure refusals lands here.
+NO_MEASURED_CASE = "no_case_produced_comparable_measurements"
+
+
 class EvaluationError(RuntimeError):
     """A refusal from the evaluator itself. Bounded category, no content."""
 
@@ -486,6 +508,32 @@ class PromotionPolicy:
     maximum_catastrophic_misses: int = 0
     minimum_mean_ndcg: dict = field(default_factory=dict)
     minimum_mean_mrr: float = 0.0
+
+    def configuration_gaps(self) -> tuple:
+        """Why this policy may never authorize a promotion. Empty means usable.
+
+        A policy is a STANDARD, and a standard that forbids nothing is not a
+        lenient standard - it is the absence of one. Every quality check in
+        `_decide` either iterates a threshold collection or compares against a
+        floor, so a policy with empty collections and a zero floor turns all of
+        them into no-ops and `eligible` becomes the default answer for evidence
+        nobody measured.
+
+        `maximum_catastrophic_misses` deliberately does NOT count as
+        configuration. It caps how often something may be PRESENT, so a suite
+        that measured nothing satisfies it trivially - which is precisely the
+        shape this guard exists to refuse.
+        """
+        declares_quality = bool(
+            self.minimum_mean_oracle_recall
+            or self.minimum_worst_oracle_recall
+            or self.minimum_prefix_match_rate
+            or self.minimum_mean_ndcg
+            or self.minimum_mean_mrr > 0.0
+        )
+        if not declares_quality:
+            return (PolicyConfigurationGap.NO_QUALITY_THRESHOLD,)
+        return ()
 
 
 #: The strict expectation for the deterministic S-25 regression corpus. These
@@ -864,7 +912,15 @@ def evaluate_pgvector_suite(
     request, and that separation is the point: promotion has to be a decision
     somebody makes, not a side effect of a test passing.
     """
-    policy = policy or PromotionPolicy()
+    if policy is None:
+        # No silent default. A promotion verdict is meaningless unless it names
+        # the standard it was judged against, and the bare `PromotionPolicy()`
+        # this line used to construct gates nothing at all - it would have
+        # returned `eligible` for a suite in which every case refused.
+        raise EvaluationError(
+            PolicyConfigurationGap.ABSENT,
+            "A promotion evaluation must be given an explicit policy.",
+        )
     cases = tuple(cases)
     results = tuple(
         evaluate_pgvector_candidate(
@@ -893,6 +949,10 @@ def evaluate_pgvector_suite(
     # and `completed + refused` for the count, so a suite of legitimate refusal
     # parity could be reported complete while failing the guard.
     accounted = completed + refused + invalid + failed
+    # `accounted` says a case was EXPLAINED; `measured` says a case was
+    # COMPARED. A suite of legitimate refusals is fully accounted for and has
+    # measured nothing, and no average may be read as evidence about it.
+    measured = tuple(r for r in completed if r.parity)
 
     cutoffs = sorted({
         entry.cutoff
@@ -954,6 +1014,7 @@ def evaluate_pgvector_suite(
         results=results,
         accounted=accounted,
         completed=completed,
+        measured=measured,
         invalid=invalid,
         failed=failed,
         hard_failures=hard_failures,
@@ -995,16 +1056,20 @@ def evaluate_pgvector_suite(
 
 
 def _decide(
-    *, policy, cases, results, accounted, completed, invalid, failed,
+    *, policy, cases, results, accounted, completed, measured, invalid, failed,
     hard_failures,
     mean_oracle_recall, worst_oracle_recall, prefix_match_rate, catastrophic,
     mean_ndcg, mean_mrr,
 ):
-    """Hard invariants first, then evidence sufficiency, then quality.
+    """Hard invariants, then the policy itself, then evidence, then quality.
 
     Order matters. A structural failure must never be reachable by
     `insufficient_evidence`, and no quality average may be consulted while one
     stands - that is what "zero tolerance" has to mean operationally.
+
+    The policy is checked BEFORE any evidence is weighed but AFTER the
+    structural failures, so a backend violation is still reported as the
+    backend's problem rather than masked by a configuration one.
     """
     reasons = []
 
@@ -1021,6 +1086,13 @@ def _decide(
             (HardInvariant.SOURCE_CHANGED_DURING_EVALUATION,),
         )
 
+    # The STANDARD, before any evidence is weighed. A verdict only means
+    # something relative to a policy, so a policy that gates nothing can never
+    # return `eligible` however good the evidence looks.
+    gaps = policy.configuration_gaps()
+    if gaps:
+        return PromotionDecision.NOT_ELIGIBLE, gaps
+
     # Evidence sufficiency. A controlled fixture proves the implementation is
     # correct; it can never stand in for a judged representative corpus, and no
     # perfect metric may buy its way past this.
@@ -1032,6 +1104,11 @@ def _decide(
         reasons.append("insufficient_case_count")
     if len(qualifying) != len(cases):
         reasons.append("mixed_or_insufficient_evidence_class")
+    if not measured:
+        # Every case was accounted for and not one was comparable. Without a
+        # single measurement the thresholds below read nothing real, so the
+        # suite cannot support an eligibility claim in either direction.
+        reasons.append(NO_MEASURED_CASE)
     if reasons:
         return PromotionDecision.INSUFFICIENT_EVIDENCE, tuple(reasons)
     if len(accounted) != len(cases):

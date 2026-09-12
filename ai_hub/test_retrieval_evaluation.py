@@ -63,7 +63,9 @@ from ai_hub.services.retrieval_evaluation import (
     EvidenceClass,
     GoldenQueryCase,
     GoldenRelevanceJudgment,
+    NO_MEASURED_CASE,
     HardInvariant,
+    PolicyConfigurationGap,
     PromotionDecision,
     PromotionPolicy,
     RefusalKind,
@@ -1774,4 +1776,209 @@ class NoMigrationTests(TestCase):
         self.assertEqual(names[-1], "0030_pgvector_ann_foundation")
         self.assertEqual(
             [name for name in names if name.startswith("0031")], []
+        )
+
+
+# ---------------------------------------------------------------------------
+# The promotion gate must fail CLOSED
+# ---------------------------------------------------------------------------
+
+class PromotionGateFailClosedTests(InjectedBackendMixin, TestCase):
+    """An absent or unconfigured policy may never produce `eligible`.
+
+    The foundation audit found the opposite. `evaluate_pgvector_suite` silently
+    constructed a bare `PromotionPolicy()` whose empty threshold collections
+    turned every quality check into a no-op, so a suite in which every case
+    REFUSED still returned `eligible` with no reasons at all. A gate whose
+    unconfigured default approves is worse than no gate, because it produces a
+    verdict somebody may go on to quote.
+
+    Three things stay deliberately distinct here, each with its own tests: the
+    policy being ABSENT, the policy being UNCONFIGURED, and the evidence having
+    MEASURED nothing.
+    """
+
+    def perfect_cases(self, count, *, evidence_class):
+        return [
+            (
+                self.case(
+                    case_id=f"case-{index:03d}",
+                    judgments=(GoldenRelevanceJudgment(chunk_id=1, grade=3),),
+                    evidence_class=evidence_class,
+                ),
+                self.exact_result([1, 2, 3]),
+                self.ann_result([1, 2, 3]),
+            )
+            for index in range(count)
+        ]
+
+    def refused_suite(self, cases, *, policy):
+        """Both backends refuse identically: refusal parity, zero measurement."""
+        error = SemanticRetrievalError("unscorable_zero_vector", "x")
+
+        def refuse(*args, **kwargs):
+            raise error
+
+        with mock.patch.object(
+            retrieval_evaluation, "rank_semantic_vector_with_scope", refuse
+        ):
+            with mock.patch.object(
+                retrieval_evaluation, "search_pgvector_ann_with_scope", refuse
+            ):
+                return evaluate_pgvector_suite(
+                    self._Scope(), cases,
+                    embedding_model_config=self._Config(), policy=policy,
+                )
+
+    # -- the policy is ABSENT ----------------------------------------------
+
+    def test_an_omitted_policy_is_refused_rather_than_defaulted(self):
+        """No silent `PromotionPolicy()`. A verdict must name its standard."""
+        with self.assertRaises(EvaluationError) as caught:
+            self.suite(
+                self.perfect_cases(3, evidence_class=EvidenceClass.CONTROLLED)
+            )
+        self.assertEqual(
+            caught.exception.category, PolicyConfigurationGap.ABSENT
+        )
+
+    # -- the policy is UNCONFIGURED ----------------------------------------
+
+    def test_an_unconfigured_policy_cannot_be_eligible_on_perfect_evidence(self):
+        """Perfect representative metrics, and still not eligible."""
+        summary = self.suite(
+            self.perfect_cases(60, evidence_class=EvidenceClass.REPRESENTATIVE),
+            policy=PromotionPolicy(),
+        )
+        # The evidence really is perfect; the refusal is about the STANDARD.
+        self.assertEqual(summary.mean_oracle_recall[5], 1.0)
+        self.assertEqual(summary.mean_ndcg[5], 1.0)
+        self.assertEqual(summary.mean_mrr, 1.0)
+        self.assertNotEqual(summary.decision, PromotionDecision.ELIGIBLE)
+        self.assertEqual(summary.decision, PromotionDecision.NOT_ELIGIBLE)
+        self.assertEqual(
+            summary.decision_reasons,
+            (PolicyConfigurationGap.NO_QUALITY_THRESHOLD,),
+        )
+
+    def test_an_unconfigured_policy_cannot_be_eligible_on_zero_metrics(self):
+        cases = [
+            (
+                self.case(
+                    case_id=f"case-{index:03d}",
+                    judgments=(GoldenRelevanceJudgment(chunk_id=99, grade=3),),
+                    evidence_class=EvidenceClass.REPRESENTATIVE,
+                ),
+                self.exact_result([1, 2, 3]),
+                self.ann_result([7, 8, 9]),
+            )
+            for index in range(60)
+        ]
+        summary = self.suite(cases, policy=PromotionPolicy())
+        self.assertEqual(summary.mean_oracle_recall[5], 0.0)
+        self.assertEqual(summary.mean_mrr, 0.0)
+        self.assertEqual(summary.decision, PromotionDecision.NOT_ELIGIBLE)
+        self.assertEqual(
+            summary.decision_reasons,
+            (PolicyConfigurationGap.NO_QUALITY_THRESHOLD,),
+        )
+
+    def test_a_catastrophic_ceiling_alone_is_not_a_configured_policy(self):
+        """The subtle shape the audit example relied on.
+
+        `maximum_catastrophic_misses` caps how often something may be PRESENT,
+        so on a suite that measured nothing it is satisfied trivially. It must
+        never, on its own, make a policy look like a standard.
+        """
+        policy = PromotionPolicy(
+            required_evidence_class=EvidenceClass.CONTROLLED,
+            maximum_catastrophic_misses=0,
+        )
+        self.assertEqual(
+            policy.configuration_gaps(),
+            (PolicyConfigurationGap.NO_QUALITY_THRESHOLD,),
+        )
+        summary = self.suite(
+            self.perfect_cases(3, evidence_class=EvidenceClass.CONTROLLED),
+            policy=policy,
+        )
+        self.assertEqual(summary.decision, PromotionDecision.NOT_ELIGIBLE)
+
+    def test_one_real_threshold_is_enough_to_be_a_configured_policy(self):
+        """The guard refuses unconfigured policies, not every policy."""
+        policy = PromotionPolicy(
+            required_evidence_class=EvidenceClass.CONTROLLED,
+            minimum_prefix_match_rate={1: 1.0},
+        )
+        self.assertEqual(policy.configuration_gaps(), ())
+        summary = self.suite(
+            self.perfect_cases(3, evidence_class=EvidenceClass.CONTROLLED),
+            policy=policy,
+        )
+        self.assertEqual(summary.decision, PromotionDecision.ELIGIBLE)
+
+    # -- the evidence MEASURED nothing -------------------------------------
+
+    def test_all_refused_evidence_cannot_become_eligible(self):
+        """Fully accounted for, and not one comparable observation."""
+        cases = [
+            self.case(
+                case_id=f"case-{index:03d}",
+                evidence_class=EvidenceClass.REPRESENTATIVE,
+            )
+            for index in range(60)
+        ]
+        summary = self.refused_suite(
+            cases, policy=REPRESENTATIVE_POLICY_TEMPLATE
+        )
+        self.assertEqual(summary.completed_case_count, 60)
+        self.assertEqual(summary.hard_invariant_failures, ())
+        self.assertEqual(
+            summary.decision, PromotionDecision.INSUFFICIENT_EVIDENCE
+        )
+        self.assertIn(NO_MEASURED_CASE, summary.decision_reasons)
+
+        # And under an unconfigured policy it is refused one stage earlier.
+        bare = self.refused_suite(cases, policy=PromotionPolicy())
+        self.assertEqual(bare.decision, PromotionDecision.NOT_ELIGIBLE)
+        self.assertEqual(
+            bare.decision_reasons,
+            (PolicyConfigurationGap.NO_QUALITY_THRESHOLD,),
+        )
+
+    # -- nothing already proven may regress --------------------------------
+
+    def test_an_explicit_controlled_policy_still_behaves_as_intended(self):
+        summary = self.suite(
+            self.perfect_cases(3, evidence_class=EvidenceClass.CONTROLLED),
+            policy=CONTROLLED_POLICY,
+        )
+        self.assertEqual(summary.decision, PromotionDecision.ELIGIBLE)
+        self.assertEqual(summary.decision_reasons, ())
+        self.assertEqual(summary.hard_invariant_failures, ())
+        self.assertEqual(CONTROLLED_POLICY.configuration_gaps(), ())
+
+    def test_evidence_class_separation_survives_the_hardening(self):
+        """The S-25 headline property, re-asserted after the contract change."""
+        summary = self.suite(
+            self.perfect_cases(100, evidence_class=EvidenceClass.CONTROLLED),
+            policy=REPRESENTATIVE_POLICY_TEMPLATE,
+        )
+        self.assertEqual(
+            summary.decision, PromotionDecision.INSUFFICIENT_EVIDENCE
+        )
+        self.assertIn(
+            "mixed_or_insufficient_evidence_class", summary.decision_reasons
+        )
+        self.assertEqual(summary.controlled_case_count, 100)
+        self.assertEqual(summary.representative_case_count, 0)
+
+    def test_the_representative_template_is_still_only_a_shape(self):
+        """Hardening must not have promoted the template to approved numbers."""
+        self.assertEqual(
+            REPRESENTATIVE_POLICY_TEMPLATE.required_evidence_class,
+            EvidenceClass.REPRESENTATIVE,
+        )
+        self.assertEqual(
+            REPRESENTATIVE_POLICY_TEMPLATE.version, PROMOTION_POLICY_VERSION
         )

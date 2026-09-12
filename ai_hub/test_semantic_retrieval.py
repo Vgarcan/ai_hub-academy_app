@@ -55,6 +55,7 @@ from ai_hub.services.semantic_retrieval import (
     cosine_similarity,
     dot_product_similarity,
     euclidean_distance,
+    rank_semantic_vector_with_scope,
     resolve_metric_scorer,
     semantic_search_knowledge_local,
 )
@@ -1585,3 +1586,112 @@ class SemanticRetrievalOwnsNoSchemaTests(TestCase):
             "update_or_create", "delete", "atomic", "select_for_update",
         ):
             self.assertNotIn(forbidden, attributes)
+
+
+class OracleRuntimeEquivalenceTests(RetrievalFixtureMixin, TestCase):
+    """The retriever and the S-25 exact oracle must RANK IDENTICALLY.
+
+    `SharedOracleTests` in `test_retrieval_evaluation.py` proves structurally
+    that both entry points call `rank_semantic_candidates`. That is a statement
+    about syntax, and it stays green if a future change makes one caller pass a
+    different limit, a different metric spec, a different target set, different
+    query values or a differently ordered candidate list. Every S-25 parity
+    number is measured against this oracle, so the agreement is locked
+    behaviourally here as well.
+
+    The ranking is never recomputed in this test. Both entry points are asked
+    for a real answer over the same corpus and the same query vector, and the
+    two answers are compared to each other.
+    """
+
+    QUERY = (1.0, 0.0, 0.0, 0.0)
+
+    def both_paths(self, *, metric, normalization, limit, collection, expected):
+        """Run BOTH entry points over one corpus; return their real results."""
+        self.build_corpus(metric=metric, normalization=normalization)
+        collection_id = getattr(self, collection).pk if collection else None
+
+        transport = self.transport_returning(self.QUERY)
+        retrieved = self.search(
+            transport, limit=limit, collection_id=collection_id
+        )
+
+        # The SAME authorization decision the retriever ran under, and the SAME
+        # vector the provider handed it - put through the S-18 normalizer here
+        # because the oracle deliberately does not normalize: its contract is
+        # that the caller hands every backend contract-conformant values.
+        scope = resolve_effective_knowledge_scope(self.agent_a)
+        oracle = rank_semantic_vector_with_scope(
+            scope,
+            query_values=embedding_vector.normalize_embedding_vector(
+                self.QUERY, normalization=self.config.normalization
+            ),
+            embedding_model_config=self.config,
+            collection_id=collection_id,
+            limit=limit,
+        )
+
+        # Comparing two empty rankings would prove nothing, so the shape of the
+        # answer is pinned before the two are compared to each other.
+        self.assertEqual(len(retrieved.matches), expected)
+        self.assertEqual(len(oracle.matches), expected)
+        return retrieved, oracle
+
+    def test_the_retriever_and_the_oracle_produce_the_same_ranking(self):
+        """Ordered identity, position and score - over four different shapes.
+
+        The corpus contains a deliberate tie (`a2` and `a4` both score 0.0
+        under cosine), so comparing the full ordered list is sensitive to the
+        tie-breaking inputs and not only to the scores.
+        """
+        scenarios = (
+            # label, metric, normalization, limit, collection, expected
+            ("every authorized chunk",
+             METRIC.COSINE, NORMALIZATION.NONE, 5, None, 4),
+            ("limit truncates the ranking",
+             METRIC.COSINE, NORMALIZATION.NONE, 2, None, 2),
+            ("narrowed to one collection",
+             METRIC.COSINE, NORMALIZATION.NONE, 5, "coll_a1", 3),
+            ("a distance metric, not a similarity",
+             METRIC.EUCLIDEAN, NORMALIZATION.NONE, 5, None, 4),
+            ("l2-normalized vector space",
+             METRIC.COSINE, NORMALIZATION.L2, 5, None, 4),
+        )
+        for label, metric, norm, limit, collection, expected in scenarios:
+            with self.subTest(scenario=label):
+                retrieved, oracle = self.both_paths(
+                    metric=metric, normalization=norm, limit=limit,
+                    collection=collection, expected=expected,
+                )
+                self.assertEqual(
+                    [(m.chunk_id, m.rank, m.metric_value)
+                     for m in retrieved.matches],
+                    [(m.chunk_id, m.rank, m.metric_value)
+                     for m in oracle.matches],
+                    "the retriever and the exact oracle ranked differently",
+                )
+                # The same search, not merely the same answer: both must have
+                # resolved the same targets and the same vector space.
+                self.assertEqual(
+                    retrieved.collection_ids, oracle.collection_ids
+                )
+                self.assertEqual(retrieved.e1, oracle.e1)
+                self.assertEqual(retrieved.metric, oracle.metric)
+                self.assertEqual(
+                    retrieved.higher_is_better, oracle.higher_is_better
+                )
+                self.assertEqual(
+                    retrieved.candidate_count, oracle.candidate_count
+                )
+
+    def test_only_the_retriever_reports_that_a_provider_ran(self):
+        """`provider_invoked` asserted on the RESULT, not in the source text."""
+        retrieved, oracle = self.both_paths(
+            metric=METRIC.COSINE, normalization=NORMALIZATION.NONE,
+            limit=5, collection=None, expected=4,
+        )
+        self.assertTrue(retrieved.provider_invoked)
+        self.assertFalse(oracle.provider_invoked)
+        # And the oracle really did reach no transport: the retriever's fake
+        # was called exactly once, by the retriever.
+        self.assertEqual(len(self.transport.calls), 1)

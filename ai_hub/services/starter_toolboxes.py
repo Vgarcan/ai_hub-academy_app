@@ -12,6 +12,7 @@ from ai_hub.models import (
     Toolbox,
     ToolboxTool,
 )
+from ai_hub.services.application_scope import require_single_active_scope
 
 
 @dataclass(frozen=True)
@@ -452,6 +453,7 @@ def seed_starter_toolboxes(*, force_update: bool = False, model_config: ModelCon
             "output_contract": {"required": ["agent", "llm", "tools"]},
             "is_active": True,
         }
+        agent_defaults["application_scope"] = require_single_active_scope()
         agent, created = AgentProfile.objects.get_or_create(name=role_name, defaults=agent_defaults)
         if created:
             stats["agents_created"] += 1

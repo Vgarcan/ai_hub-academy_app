@@ -13,6 +13,17 @@ from ai_hub.models import (
     ModelConfig,
     ProviderConfig,
 )
+from ai_hub.services.application_scope import require_single_active_scope
+
+
+def _scope():
+    """The application scope these seeded resources belong to.
+
+    Academy is a consumer of Core and defines no scope concept of its own.
+    Resolving through Core's helper means this command refuses - rather than
+    guessing - once an installation hosts more than one application.
+    """
+    return require_single_active_scope()
 
 
 def _get_or_create_provider():
@@ -51,6 +62,7 @@ def _get_or_create_doc_assistant(model):
     agent, created = AgentProfile.objects.get_or_create(
         name="AI Hub Documentation Assistant",
         defaults={
+            "application_scope": _scope(),
             "role": "Documentation answering agent",
             "system_prompt": (
                 "You are the AI Hub Documentation Assistant.\n\n"
@@ -76,6 +88,7 @@ def _get_or_create_normalizer(model):
     agent, created = AgentProfile.objects.get_or_create(
         name="Input Normalizer",
         defaults={
+            "application_scope": _scope(),
             "role": "Normalise and validate incoming data",
             "system_prompt": (
                 "You are an Input Normalizer. Your job is to clean and validate incoming data "
@@ -118,6 +131,7 @@ def _get_or_create_classifier(model):
     agent, created = AgentProfile.objects.get_or_create(
         name="Ticket Classifier",
         defaults={
+            "application_scope": _scope(),
             "role": "Classify support tickets by category and priority",
             "system_prompt": (
                 "You are a Support Ticket Classifier.\n\n"
@@ -147,6 +161,7 @@ def _get_or_create_knowledge():
     collection, created = KnowledgeCollection.objects.get_or_create(
         name="AI Hub Official Docs",
         defaults={
+            "application_scope": _scope(),
             "description": "Official AI Hub documentation imported from Markdown source files.",
             "is_active": True,
         },

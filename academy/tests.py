@@ -25,6 +25,7 @@ from academy.models import (
 from academy.services.documentation_search import search_documentation
 from academy.tools.doc_sync import sync_all_docs
 from ai_hub.models import AgentProfile, ExecutionSession, ModelConfig, ProviderConfig
+from ai_hub.test_application_scope_helpers import test_scope
 
 User = get_user_model()
 
@@ -239,6 +240,7 @@ class DocumentationSyncCommandTests(TestCase):
         provider = ProviderConfig.objects.create(name="docs-provider", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="docs-model")
         AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Documentation Sync Agent",
             role="Documentation sync",
             model_config=model,
@@ -259,6 +261,7 @@ class DocumentationSyncCommandTests(TestCase):
         provider = ProviderConfig.objects.create(name="startup-docs-provider", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="startup-docs-model")
         AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Documentation Sync Agent",
             role="Documentation sync",
             model_config=model,
@@ -286,6 +289,7 @@ class OllamaSeedCommandTests(TestCase):
     def test_seed_output_points_to_the_real_assistant_route(self):
         stdout = StringIO()
 
+        test_scope()  # the seed requires an existing scope
         call_command(
             "seed_ollama_agents",
             "--base-url",
@@ -306,11 +310,13 @@ class OllamaSeedCommandTests(TestCase):
             model_name="training/assistant",
         )
         assistant = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="AI Hub Documentation Assistant",
             role="Documentation assistant",
             model_config=training_model,
         )
 
+        test_scope()  # the seed requires an existing scope
         call_command(
             "seed_ollama_agents",
             "--base-url",
@@ -497,6 +503,7 @@ class TutorialTest(TestCase):
 class AcademySeedCommandTests(TestCase):
     def test_seed_force_update_refreshes_existing_mission_text(self):
         with patch("builtins.print"):
+            test_scope()  # the seed requires an existing scope
             call_command("seed_academy_training_data", stdout=StringIO())
 
         mission = TutorialMission.objects.get(slug="enter-the-control-room")
@@ -504,6 +511,7 @@ class AcademySeedCommandTests(TestCase):
         mission.save(update_fields=["instructions_markdown"])
 
         with patch("builtins.print"):
+            test_scope()  # the seed requires an existing scope
             call_command("seed_academy_training_data", "--force-update", stdout=StringIO())
 
         mission.refresh_from_db()
@@ -589,6 +597,7 @@ class TrainingProviderTest(TestCase):
             is_active=True,
         )
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Test Classifier",
             role="Classify",
             system_prompt="Classify the ticket.",

@@ -50,11 +50,15 @@ jobs:
         run: python manage.py test --verbosity=2
 
   postgresql:
-    name: PostgreSQL 16 / concurrency tests (Python 3.12)
+    name: PostgreSQL 16 + pgvector 0.8.6 / concurrency tests (Python 3.12)
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        # PostgreSQL 16 with the pgvector extension preinstalled. Pinned to an
+        # exact patch version, never `latest`: the S-24 backend asserts a
+        # minimum pgvector version and its HNSW behaviour is validated against
+        # this one, so a floating tag would silently change what CI proves.
+        image: pgvector/pgvector:0.8.6-pg16
         env:
           POSTGRES_DB: ai_hub_ci
           POSTGRES_USER: postgres

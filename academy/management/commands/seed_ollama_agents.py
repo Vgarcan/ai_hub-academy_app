@@ -14,6 +14,7 @@ import os
 from django.core.management.base import BaseCommand
 
 from ai_hub.models import AgentProfile, ModelConfig, ProviderConfig, ToolDefinition
+from ai_hub.services.application_scope import require_single_active_scope
 
 
 DOC_SYNC_SYSTEM_PROMPT = """\
@@ -104,6 +105,16 @@ Formatting rules for final_answer:
 - Do NOT output raw monospace-aligned text or ASCII tables — use proper Markdown tables instead.
 - Keep the answer focused. One table or list is better than multiple walls of text.
 """
+
+
+def _scope():
+    """The application scope these seeded agents belong to.
+
+    Academy is a consumer of Core and defines no scope concept of its own.
+    Resolving through Core's helper means this command refuses - rather than
+    guessing - once an installation hosts more than one application.
+    """
+    return require_single_active_scope()
 
 
 class Command(BaseCommand):
@@ -239,6 +250,7 @@ class Command(BaseCommand):
         sync_agent, created = AgentProfile.objects.get_or_create(
             name="Documentation Sync Agent",
             defaults={
+                "application_scope": _scope(),
                 "role": "Autonomous documentation database sync agent",
                 "system_prompt": DOC_SYNC_SYSTEM_PROMPT,
                 "model_config": sync_model,
@@ -263,6 +275,7 @@ class Command(BaseCommand):
         assistant_agent, created = AgentProfile.objects.get_or_create(
             name="AI Hub Documentation Assistant",
             defaults={
+                "application_scope": _scope(),
                 "role": "Documentation Q&A assistant",
                 "system_prompt": DOC_ASSISTANT_SYSTEM_PROMPT,
                 "model_config": chat_model,

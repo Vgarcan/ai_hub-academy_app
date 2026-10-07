@@ -121,6 +121,29 @@ def search_knowledge(payload: dict, config: dict) -> dict:
     )
 
 
+def search_knowledge_hybrid(payload: dict, config: dict) -> dict:
+    # Imported here so the six Path 1 adapters never load the semantic stack.
+    from ai_hub.services import hybrid_knowledge_search
+
+    return hybrid_knowledge_search.search_knowledge_hybrid(
+        _agent_from_payload(payload),
+        query=payload.get("query", ""),
+        collection_id=payload.get("collection_id"),
+        limit=_bounded_int(
+            payload.get("limit") or config.get("limit"),
+            default=hybrid_knowledge_search.DEFAULT_LIMIT,
+            minimum=1,
+            maximum=hybrid_knowledge_search.MAX_LIMIT,
+        ),
+        max_excerpt_chars=_bounded_int(
+            config.get("max_excerpt_chars"),
+            default=hybrid_knowledge_search.DEFAULT_MAX_EXCERPT_CHARS,
+            minimum=100,
+            maximum=4000,
+        ),
+    )
+
+
 def read_knowledge_chunk(payload: dict, config: dict) -> dict:
     return _bounded_read_result(
         knowledge_retrieval.read_knowledge_chunk(

@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 
 from ai_hub.models import AgentProfile, AgentToolGrant, ToolDefinition, ToolboxTool
 from ai_hub.services.knowledge_tooling import (
+    HYBRID_KNOWLEDGE_SEARCH_TOOL_NAME,
     KNOWLEDGE_RETRIEVAL_TOOL_CALLABLES,
     KNOWLEDGE_RETRIEVAL_TOOL_NAMES,
     is_bound_knowledge_tool,
@@ -173,6 +174,15 @@ def resolve_agent_tools(agent: AgentProfile, workspace=None, execution_context=N
     execution remains in the runtime/dispatcher layers.
     """
     resolved: dict[int, ResolvedTool] = {}
+    # S-28: the hybrid search tool is GATED. Decided once per resolution and
+    # applied below to every path a tool can arrive by - knowledge binding,
+    # toolbox, legacy direct assignment and grant - so no assignment can
+    # reintroduce it where the gate says no.
+    from ai_hub.services.hybrid_knowledge_search import hybrid_search_offered
+
+    hybrid_offered = hybrid_search_offered(
+        agent, workspace=workspace, execution_context=execution_context
+    )
 
     if agent.knowledge_collections.filter(is_active=True).exists():
         knowledge_tools = ToolDefinition.objects.filter(
@@ -184,6 +194,8 @@ def resolve_agent_tools(agent: AgentProfile, workspace=None, execution_context=N
             if not is_bound_knowledge_tool(tool):
                 continue
             if (tool.config or {}).get("callable") != KNOWLEDGE_RETRIEVAL_TOOL_CALLABLES[tool.name]:
+                continue
+            if tool.name == HYBRID_KNOWLEDGE_SEARCH_TOOL_NAME and not hybrid_offered:
                 continue
             _add_tool(
                 resolved,
@@ -242,6 +254,14 @@ def resolve_agent_tools(agent: AgentProfile, workspace=None, execution_context=N
             )
         else:
             resolved.pop(grant.tool_id, None)
+
+    if not hybrid_offered:
+        for tool_id in [
+            tool_id
+            for tool_id, resolved_tool in resolved.items()
+            if resolved_tool.tool.name == HYBRID_KNOWLEDGE_SEARCH_TOOL_NAME
+        ]:
+            resolved.pop(tool_id)
 
     tools = tuple(sorted(resolved.values(), key=lambda resolved_tool: resolved_tool.tool.name))
     return AgentToolResolution(agent=agent, tools=tools)

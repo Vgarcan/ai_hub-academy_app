@@ -16,6 +16,7 @@ from ai_hub.models import (
 )
 from ai_hub.services.execution_runner import run_execution_session
 from ai_hub.services.litellm_client import ProviderExecutionError
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 CALLABLE_PATH = "ai_hub.test_ffpr_003_legacy_tool_audit.record_side_effect"
@@ -54,6 +55,7 @@ class FFPR003LegacyToolAuditTests(TestCase):
             model_name=f"ffpr-003-model-{suffix}",
         )
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name=f"ffpr-003-agent-{suffix}",
             role="Legacy Tool audit regression",
             model_config=model,

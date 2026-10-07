@@ -16,6 +16,10 @@ from ai_hub.services.agent_runtime import (
 )
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
+from ai_hub.services.knowledge_authorization import (
+    PipelineScopeError,
+    require_coherent_pipeline_scope,
+)
 from ai_hub.services.tools_runtime import TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY
 
 
@@ -952,6 +956,15 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
         raise ValidationError("Execution sessions require a pipeline before they can run.")
     if not session.pipeline.is_active:
         raise ValidationError("Pipeline must be active before it can run.")
+    # Authoritative scope check, BEFORE any agent, provider, tool or Knowledge
+    # call - so a cross-scope pipeline never reaches a provider at all.
+    # Repeated here rather than trusted from configuration time, because raw ORM
+    # bypasses full_clean() and a pipeline can be edited after the session that
+    # references it was created.
+    try:
+        require_coherent_pipeline_scope(session.pipeline)
+    except PipelineScopeError as exc:
+        raise ValidationError(str(exc)) from exc
     if session.step_runs.exists():
         raise ValidationError("Execution session already has step runs.")
 

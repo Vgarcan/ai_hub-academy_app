@@ -29,6 +29,7 @@ from ai_hub.models import (
     ToolDefinition,
     ToolExecutionRun,
 )
+from ai_hub.test_application_scope_helpers import test_scope
 
 
 class SafeAdminJSONFieldTests(SimpleTestCase):
@@ -89,6 +90,7 @@ class SafeAdminJSONIntegrationTests(TestCase):
             model_name="ollama/json-test",
         )
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="json-agent",
             role="JSON tester",
             model_config=self.model,
@@ -200,7 +202,7 @@ class SafeAdminJSONIntegrationTests(TestCase):
         self.assertContains(response, "Enter a JSON object at the top level.")
 
     def test_game_memory_change_form_builds_with_active_status_display(self):
-        workspace = GameWorkspace.objects.create(name="JSON memory workspace")
+        workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="JSON memory workspace")
         memory = GameMemoryEntry.objects.create(
             workspace=workspace,
             scope_type=GameMemoryEntry.ScopeType.WORKSPACE,
@@ -215,7 +217,7 @@ class SafeAdminJSONIntegrationTests(TestCase):
         self.assertContains(response, "Active")
 
     def test_goal_and_plan_audit_json_is_redacted(self):
-        workspace = GameWorkspace.objects.create(name="JSON audit workspace")
+        workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="JSON audit workspace")
         goal = GameGoal.objects.create(
             workspace=workspace,
             title="JSON audit goal",

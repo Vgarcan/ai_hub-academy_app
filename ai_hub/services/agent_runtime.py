@@ -10,6 +10,10 @@ from django.utils import timezone
 from ai_hub.models import AgentProfile, ToolExecutionRun
 from ai_hub.services.contracts import validate_payload
 from ai_hub.services.litellm_client import completion_call
+from ai_hub.services.knowledge_authorization import (
+    authorized_collections,
+    resolve_effective_knowledge_scope,
+)
 from ai_hub.services.knowledge_tooling import KNOWLEDGE_RETRIEVAL_TOOL_NAMES
 from ai_hub.services.provider_registry import resolve_model_config
 from ai_hub.services.tool_resolution import resolve_agent_tools
@@ -78,10 +82,24 @@ def _bounded_knowledge_tags(tags) -> list[str]:
 
 
 def build_agent_knowledge_context(agent: AgentProfile, *, workspace=None) -> dict:
+    """Assemble what the MODEL is told about available Knowledge.
+
+    This path is as security-critical as `search_knowledge`, and for a while it
+    was the easier one to forget: it used to read `agent.knowledge_collections`
+    directly, so fixing retrieval alone would still have leaked a cross-scope
+    collection's NAME, DESCRIPTION, DOCUMENT TITLES, TAGS and COUNTS into the
+    prompt - and, under the legacy eager path, its full body text.
+
+    Both modes below now start from the same effective scope. The model must not
+    even learn that an inaccessible collection exists.
+    """
     max_chars = max(agent.knowledge_max_chars or 0, 0)
     documents = []
     remaining = max_chars
-    collections = agent.knowledge_collections.filter(is_active=True).prefetch_related("documents")
+    # Workspace is passed through so execution coherence restricts the prompt
+    # exactly as it restricts retrieval.
+    scope = resolve_effective_knowledge_scope(agent, workspace=workspace)
+    collections = authorized_collections(scope).prefetch_related("documents")
 
     if not getattr(settings, "AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", False):
         collection_data = []

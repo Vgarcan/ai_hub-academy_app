@@ -109,6 +109,9 @@ def validate_goal_execution_policy(workspace, goal, session) -> None:
     if effective_agent is None:
         return
 
+    # Scope coherence is not optional and is not gated on the allow-list.
+    validate_workspace_agent_scope(workspace, effective_agent)
+
     agent_entries = GameWorkspaceAgent.objects.filter(workspace=workspace)
     if not agent_entries.exists():
         return
@@ -254,13 +257,58 @@ def get_session_workspace(session):
 _get_workspace = get_session_workspace
 
 
-def validate_agent_for_workspace(workspace, agent) -> None:
-    """Raise PolicyViolationError if the agent is not enabled for this workspace.
+def validate_workspace_agent_scope(workspace, agent) -> None:
+    """Refuse unless workspace and agent belong to the SAME ApplicationScope.
 
-    When no GameWorkspaceAgent entries exist the allow-list is open (legacy compat).
-    When entries exist only explicitly-enabled agents are permitted.
+    This is checked BEFORE the legacy allow-list below, and it is deliberately
+    not subject to it. The legacy rule "no GameWorkspaceAgent rows -> allow all"
+    is GAME execution compatibility; it is NOT an ApplicationScope rule, and it
+    must never be able to bridge two applications. A workspace in Scope B with
+    zero allow-list rows refuses a Scope A agent, always.
+
+    Also refuses an inactive workspace and an inactive scope: a deactivated
+    application or environment authorizes nothing, and the check lives here
+    rather than in the Admin because hiding a row is not a boundary.
+    """
+    if workspace is None or agent is None:
+        raise PolicyViolationError("GAME execution requires a workspace and an agent.")
+
+    if not getattr(workspace, "is_active", False):
+        raise PolicyViolationError(
+            f"Workspace '{workspace.name}' is not active."
+        )
+
+    workspace_scope_id = getattr(workspace, "application_scope_id", None)
+    agent_scope_id = getattr(agent, "application_scope_id", None)
+    if workspace_scope_id is None or agent_scope_id is None:
+        raise PolicyViolationError(
+            "GAME execution requires both the workspace and the agent to belong "
+            "to an application scope."
+        )
+    if workspace_scope_id != agent_scope_id:
+        # Deliberately does not name the other scope: an execution refusal must
+        # not become a way to enumerate applications (ADR-N5 in spirit).
+        raise PolicyViolationError(
+            f"Agent '{agent.name}' is not enabled for workspace '{workspace.name}'."
+        )
+
+    scope = getattr(workspace, "application_scope", None)
+    if scope is not None and not scope.is_active:
+        raise PolicyViolationError(
+            f"Workspace '{workspace.name}' is not active."
+        )
+
+
+def validate_agent_for_workspace(workspace, agent) -> None:
+    """Raise PolicyViolationError if the agent may not run in this workspace.
+
+    ApplicationScope coherence first and unconditionally; only then the legacy
+    allow-list, whose empty-means-open behaviour is preserved unchanged INSIDE
+    a single scope.
     """
     from ai_hub.models import GameWorkspaceAgent
+
+    validate_workspace_agent_scope(workspace, agent)
 
     agent_entries = GameWorkspaceAgent.objects.filter(workspace=workspace)
     if not agent_entries.exists():

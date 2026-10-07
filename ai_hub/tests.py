@@ -86,6 +86,7 @@ from ai_hub.services.tools_runtime import (
     get_game_tool_category,
 )
 from _core.database_config import build_database_config
+from ai_hub.test_application_scope_helpers import test_scope
 # DreamPost was the original host-app model; replaced with User for portability
 
 
@@ -236,6 +237,7 @@ class HubModelValidationTests(TestCase):
         provider = ProviderConfig.objects.create(name="p2", provider_type="openai")
         model = ModelConfig.objects.create(provider=provider, model_name="gpt-y")
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="agent-2",
             role="extractor",
             model_config=model,
@@ -258,6 +260,7 @@ class HubModelValidationTests(TestCase):
         provider = ProviderConfig.objects.create(name="p3", provider_type="openai")
         model = ModelConfig.objects.create(provider=provider, model_name="gpt-z")
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="agent-knowledge",
             role="reader",
             model_config=model,
@@ -265,8 +268,8 @@ class HubModelValidationTests(TestCase):
             output_contract={"required": ["agent"]},
             knowledge_max_chars=20,
         )
-        active_collection = KnowledgeCollection.objects.create(name="Symbols")
-        inactive_collection = KnowledgeCollection.objects.create(name="Hidden", is_active=False)
+        active_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Symbols")
+        inactive_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Hidden", is_active=False)
         KnowledgeDocument.objects.create(
             collection=active_collection,
             title="Active doc",
@@ -318,7 +321,7 @@ class HubModelValidationTests(TestCase):
     def test_toolbox_can_group_tools_and_be_assigned_to_agent(self):
         provider = ProviderConfig.objects.create(name="toolbox-provider", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="training")
-        agent = AgentProfile.objects.create(name="toolbox-agent", role="Toolbox tester", model_config=model)
+        agent = AgentProfile.objects.create(application_scope=test_scope(), name="toolbox-agent", role="Toolbox tester", model_config=model)
         tool = ToolDefinition.objects.create(
             name="grouped_read_tool",
             label="Grouped read tool",
@@ -350,7 +353,7 @@ class HubModelValidationTests(TestCase):
         )
         provider = ProviderConfig.objects.create(name="admin-tool-provider", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="training")
-        agent = AgentProfile.objects.create(name="admin-tool-agent", role="Tool manifest tester", model_config=model)
+        agent = AgentProfile.objects.create(application_scope=test_scope(), name="admin-tool-agent", role="Tool manifest tester", model_config=model)
         tool = ToolDefinition.objects.create(
             name="admin_safe_tool",
             label="Admin safe tool",
@@ -377,7 +380,7 @@ class HubModelValidationTests(TestCase):
     def test_agent_toolbox_assignment_can_be_disabled(self):
         provider = ProviderConfig.objects.create(name="toolbox-provider-disabled", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="training")
-        agent = AgentProfile.objects.create(name="toolbox-agent-disabled", role="Toolbox tester", model_config=model)
+        agent = AgentProfile.objects.create(application_scope=test_scope(), name="toolbox-agent-disabled", role="Toolbox tester", model_config=model)
         toolbox = Toolbox.objects.create(name="Core Foundation", slug="core-foundation", label="Core Foundation")
 
         assignment = AgentToolboxAssignment.objects.create(agent=agent, toolbox=toolbox, is_enabled=False)
@@ -387,7 +390,7 @@ class HubModelValidationTests(TestCase):
     def test_agent_tool_grant_can_allow_or_deny_specific_tool(self):
         provider = ProviderConfig.objects.create(name="grant-provider", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="training")
-        agent = AgentProfile.objects.create(name="grant-agent", role="Grant tester", model_config=model)
+        agent = AgentProfile.objects.create(application_scope=test_scope(), name="grant-agent", role="Grant tester", model_config=model)
         allowed_tool = ToolDefinition.objects.create(
             name="create_draft",
             tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO,
@@ -423,7 +426,7 @@ class HubModelValidationTests(TestCase):
     def test_duplicate_agent_toolbox_assignment_is_rejected(self):
         provider = ProviderConfig.objects.create(name="duplicate-assignment-provider", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="training")
-        agent = AgentProfile.objects.create(name="duplicate-assignment-agent", role="Tester", model_config=model)
+        agent = AgentProfile.objects.create(application_scope=test_scope(), name="duplicate-assignment-agent", role="Tester", model_config=model)
         toolbox = Toolbox.objects.create(
             name="Duplicate Assignment",
             slug="duplicate-assignment",
@@ -437,7 +440,7 @@ class HubModelValidationTests(TestCase):
     def test_duplicate_agent_tool_grant_is_rejected(self):
         provider = ProviderConfig.objects.create(name="duplicate-grant-provider", provider_type="training")
         model = ModelConfig.objects.create(provider=provider, model_name="training")
-        agent = AgentProfile.objects.create(name="duplicate-grant-agent", role="Tester", model_config=model)
+        agent = AgentProfile.objects.create(application_scope=test_scope(), name="duplicate-grant-agent", role="Tester", model_config=model)
         tool = ToolDefinition.objects.create(name="duplicate-grant-tool", tool_kind=ToolDefinition.ToolKind.PROMPT_MACRO)
         AgentToolGrant.objects.create(agent=agent, tool=tool)
 
@@ -488,6 +491,7 @@ class ToolResolutionTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="resolver-provider", provider_type="training")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="training")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="resolver-agent",
             role="Resolver tester",
             model_config=self.model,
@@ -683,6 +687,7 @@ class ToolResolutionTests(TestCase):
         for tool in (allowed, blocked, absent):
             self.agent.tools.add(tool)
         workspace = GameWorkspace.objects.create(
+            application_scope=test_scope(),
             name="resolver-workspace",
             default_policy={
                 "allowed_tools": ["allowed-tool", "blocked-tool"],
@@ -701,7 +706,7 @@ class ToolResolutionTests(TestCase):
             operation_mode=ToolDefinition.OperationMode.EXTERNAL_WRITE,
         )
         self.agent.tools.add(read_tool, external_tool)
-        workspace = GameWorkspace.objects.create(name="resolver-external-workspace")
+        workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="resolver-external-workspace")
 
         resolution = resolve_agent_tools(self.agent, workspace=workspace)
 
@@ -712,6 +717,7 @@ class ToolResolutionTests(TestCase):
         high_tool = self.make_tool("high-tool", risk_level=ToolDefinition.RiskLevel.HIGH)
         self.agent.tools.add(medium_tool, high_tool)
         workspace = GameWorkspace.objects.create(
+            application_scope=test_scope(),
             name="resolver-approval-workspace",
             default_policy={
                 "safety": {
@@ -819,6 +825,7 @@ class RetrievalFoundationMigrationTests(TestCase):
 
 class StarterToolboxSeedTests(TestCase):
     def test_seed_creates_starter_toolboxes_roles_and_assignments(self):
+        test_scope()  # the seed requires an existing scope
         stats = seed_starter_toolboxes()
 
         self.assertEqual(Toolbox.objects.count(), 5)
@@ -844,6 +851,7 @@ class StarterToolboxSeedTests(TestCase):
         self.assertGreater(stats["assignments_created"], 0)
 
     def test_seed_is_idempotent(self):
+        test_scope()  # the seed requires an existing scope
         first = seed_starter_toolboxes()
         second = seed_starter_toolboxes()
 
@@ -856,6 +864,7 @@ class StarterToolboxSeedTests(TestCase):
         self.assertEqual(AgentProfile.objects.filter(name__in=ROLE_TOOLBOXES.keys()).count(), 5)
 
     def test_knowledge_retrieval_toolbox_uses_real_read_only_callables(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
 
         toolbox = Toolbox.objects.get(slug="knowledge-discovery-retrieval")
@@ -886,6 +895,7 @@ class StarterToolboxSeedTests(TestCase):
         )
 
     def test_knowledge_access_resolves_system_retrieval_tools_without_manual_toolbox(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         provider = ProviderConfig.objects.create(
             name="automatic-knowledge-provider",
@@ -893,11 +903,12 @@ class StarterToolboxSeedTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="automatic-knowledge-agent",
             role="Knowledge reader",
             model_config=model,
         )
-        collection = KnowledgeCollection.objects.create(name="Automatic knowledge")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Automatic knowledge")
         agent.knowledge_collections.add(collection)
 
         resolution = resolve_agent_tools(agent)
@@ -916,6 +927,7 @@ class StarterToolboxSeedTests(TestCase):
         self.assertTrue(all(item.source == "knowledge_retrieval" for item in resolution.tools))
 
     def test_automatic_knowledge_tools_obey_grants_and_workspace_policy(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         provider = ProviderConfig.objects.create(
             name="governed-knowledge-provider",
@@ -923,15 +935,17 @@ class StarterToolboxSeedTests(TestCase):
         )
         model = ModelConfig.objects.create(provider=provider, model_name="training")
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="governed-knowledge-agent",
             role="Governed knowledge reader",
             model_config=model,
         )
-        collection = KnowledgeCollection.objects.create(name="Governed knowledge")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Governed knowledge")
         agent.knowledge_collections.add(collection)
         search_tool = ToolDefinition.objects.get(name="search_knowledge")
         AgentToolGrant.objects.create(agent=agent, tool=search_tool, is_enabled=False)
         workspace = GameWorkspace.objects.create(
+            application_scope=test_scope(),
             name="governed-knowledge-workspace",
             default_policy={"blocked_tools": ["read_knowledge_chunk"]},
         )
@@ -943,6 +957,7 @@ class StarterToolboxSeedTests(TestCase):
         self.assertIn("browse_knowledge_index", resolution.tool_names())
 
     def test_seed_command_runs(self):
+        test_scope()  # the seed requires an existing scope
         call_command("seed_ai_hub_starter_toolboxes", verbosity=0)
 
         self.assertTrue(Toolbox.objects.filter(slug="core-foundation").exists())
@@ -951,6 +966,7 @@ class StarterToolboxSeedTests(TestCase):
 
 class StarterDemoSeedTests(TestCase):
     def test_demo_seed_creates_safe_workspace_knowledge_and_approval_action(self):
+        test_scope()  # the seed requires an existing scope
         stats = seed_starter_demo()
 
         workspace = GameWorkspace.objects.get(name="AI Hub Starter GAME Workspace")
@@ -984,6 +1000,7 @@ class StarterDemoSeedTests(TestCase):
         self.assertFalse(workspace.default_policy["safety"]["allow_external_writes"])
 
     def test_demo_seed_is_idempotent(self):
+        test_scope()  # the seed requires an existing scope
         first = seed_starter_demo()
         second = seed_starter_demo()
 
@@ -997,6 +1014,7 @@ class StarterDemoSeedTests(TestCase):
         self.assertEqual(second["workspace_agents_created"], 0)
 
     def test_demo_seed_command_runs(self):
+        test_scope()  # the seed requires an existing scope
         call_command("seed_ai_hub_starter_demo", verbosity=0)
 
         self.assertTrue(GameWorkspace.objects.filter(name="AI Hub Starter GAME Workspace").exists())
@@ -1008,16 +1026,18 @@ class KnowledgeRetrievalTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="knowledge-provider", provider_type="training")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="training")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="knowledge-agent",
             role="Knowledge tester",
             model_config=self.model,
             knowledge_max_chars=50,
         )
         self.collection = KnowledgeCollection.objects.create(
+            application_scope=test_scope(),
             name="Policies",
             description="Approved support policies.",
         )
-        self.other_collection = KnowledgeCollection.objects.create(name="Private policies")
+        self.other_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Private policies")
         self.agent.knowledge_collections.add(self.collection)
         self.document = KnowledgeDocument.objects.create(
             collection=self.collection,
@@ -1251,6 +1271,7 @@ class KnowledgeRetrievalTests(TestCase):
 
     def test_retrieval_is_not_required_without_attached_collections(self):
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="knowledge-free-agent",
             role="No knowledge",
             model_config=self.model,
@@ -1304,6 +1325,7 @@ class KnowledgeRetrievalTests(TestCase):
         self.assertEqual(result["results"][0]["chunk_id"], self.chunk.pk)
 
     def test_bound_knowledge_tools_limit_read_search_and_browse_outputs(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         self.chunk.content = "x" * 9000
         self.chunk.metadata = {"oversized": "m" * 3000}
@@ -1366,8 +1388,10 @@ class KnowledgeRetrievalTests(TestCase):
     )
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_resolved_runner_retrieves_all_stages_with_server_bound_agent(self, mocked_call):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         private_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="private-knowledge-agent",
             role="Must not be impersonated",
             model_config=self.model,
@@ -1532,6 +1556,7 @@ class DeliberateToolRuntimeTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="deliberate-provider", provider_type="training")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="training")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="deliberate-agent",
             role="Deliberate runtime tester",
             model_config=self.model,
@@ -1697,6 +1722,7 @@ class DeliberateToolRuntimeTests(TestCase):
     def test_legacy_runtime_honours_workspace_effective_approval(self, mocked_call):
         self.make_prompt_tool(risk_level=ToolDefinition.RiskLevel.MEDIUM)
         workspace = GameWorkspace.objects.create(
+            application_scope=test_scope(),
             name="legacy-approval-workspace",
             default_policy={
                 "safety": {"require_approval_for_medium_risk": True},
@@ -1804,7 +1830,7 @@ class DeliberateToolRuntimeTests(TestCase):
 
 class GameWorkspaceGoalTests(TestCase):
     def setUp(self):
-        self.workspace = create_workspace(name="Academy GAME", description="Test workspace")
+        self.workspace = create_workspace(application_scope=test_scope(), name="Academy GAME", description="Test workspace")
 
     def make_goal(self, title, **kwargs):
         return create_goal(
@@ -1844,7 +1870,7 @@ class GameWorkspaceGoalTests(TestCase):
             add_goal_dependency(goal, goal)
 
     def test_goal_cannot_depend_on_goal_in_another_workspace(self):
-        other_workspace = create_workspace(name="Other GAME")
+        other_workspace = create_workspace(application_scope=test_scope(), name="Other GAME")
         goal = self.make_goal("Local")
         other_goal = self.make_goal("Remote", workspace=other_workspace)
 
@@ -1943,7 +1969,7 @@ class GameWorkspaceGoalTests(TestCase):
 
 class GameSchedulerTests(TestCase):
     def setUp(self):
-        self.workspace = create_workspace(name="Scheduler GAME")
+        self.workspace = create_workspace(application_scope=test_scope(), name="Scheduler GAME")
         self.now = timezone.now().replace(microsecond=0)
 
     def make_goal(self, title, **kwargs):
@@ -2088,7 +2114,7 @@ class GameSchedulerConcurrencyTests(TransactionTestCase):
         if not connection.features.has_select_for_update:
             self.skipTest("SQLite cannot validate select_for_update locking semantics; run this test on PostgreSQL CI.")
 
-        workspace = create_workspace(name="Concurrent GAME")
+        workspace = create_workspace(application_scope=test_scope(), name="Concurrent GAME")
         goal = create_goal(workspace=workspace, title="Only goal", description="Claim once")
 
         def claim():
@@ -2109,12 +2135,14 @@ class GameSchedulerConcurrencyTests(TransactionTestCase):
 class GameGoalExecutionTests(TestCase):
     def setUp(self):
         self.workspace = create_workspace(
+            application_scope=test_scope(),
             name="Goal execution GAME",
             default_runtime_config={"max_iterations": 5, "shared": "workspace"},
         )
         self.provider = ProviderConfig.objects.create(name="goal-provider", provider_type="training")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="goal-model")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="goal-agent",
             role="Goal runner",
             model_config=self.model,
@@ -2399,6 +2427,7 @@ class OrchestratorFallbackTests(TestCase):
             model_name="training",
         )
         self.primary = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="fallback-primary",
             role="Primary fallback test agent",
             model_config=self.model,
@@ -2406,6 +2435,7 @@ class OrchestratorFallbackTests(TestCase):
             output_contract={"required": ["agent", "llm", "tools"]},
         )
         self.fallback = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="fallback-secondary",
             role="Secondary fallback test agent",
             model_config=self.model,
@@ -2660,8 +2690,8 @@ class OrchestratorFallbackTests(TestCase):
             pipeline.full_clean()
 
     def test_fallback_C_does_not_inherit_primary_knowledge(self):
-        primary_collection = KnowledgeCollection.objects.create(name="Primary-only knowledge")
-        fallback_collection = KnowledgeCollection.objects.create(name="Fallback-only knowledge")
+        primary_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Primary-only knowledge")
+        fallback_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Fallback-only knowledge")
         self.primary.knowledge_collections.add(primary_collection)
         self.fallback.knowledge_collections.add(fallback_collection)
         pipeline, _step = self._create_pipeline()
@@ -2949,6 +2979,7 @@ class OrchestratorFallbackTests(TestCase):
 
     def test_step_preparation_failure_does_not_reuse_previous_step_payload(self):
         second_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="preparation-failure-agent",
             role="Preparation failure probe",
             model_config=self.model,
@@ -3006,6 +3037,7 @@ class HubExecutionSessionTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="session-provider", provider_type="openai")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="session-model")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="session-agent",
             role="Generic entry agent",
             model_config=self.model,
@@ -3111,6 +3143,7 @@ class HubExecutionSessionTests(TestCase):
         )
         self.agent.tools.add(orchestrator_action)
         second_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="session-agent-2",
             role="Second generic agent",
             model_config=self.model,
@@ -3226,6 +3259,7 @@ class HubExecutionSessionTests(TestCase):
         ToolboxTool.objects.create(toolbox=toolbox, tool=context_tool, display_order=1)
         ToolboxTool.objects.create(toolbox=toolbox, tool=action_tool, display_order=2)
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="resolved-game-agent",
             role="Resolved GAME runner",
             model_config=self.model,
@@ -3356,6 +3390,7 @@ class HubExecutionSessionTests(TestCase):
         ToolboxTool.objects.create(toolbox=toolbox, tool=tool)
 
         orchestrator_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="resolved-training-orchestrator",
             role="Resolved training smoke",
             model_config=model,
@@ -3384,6 +3419,7 @@ class HubExecutionSessionTests(TestCase):
         )
 
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="resolved-training-game",
             role="Resolved GAME smoke",
             model_config=model,
@@ -3485,6 +3521,7 @@ class HubExecutionSessionTests(TestCase):
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_run_game_execution_session_stops_when_agent_finishes(self, mocked_call):
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3524,6 +3561,7 @@ class HubExecutionSessionTests(TestCase):
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_run_game_execution_session_stops_at_max_iterations(self, mocked_call):
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-max",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3555,6 +3593,7 @@ class HubExecutionSessionTests(TestCase):
 
     def test_run_game_execution_session_requires_goal(self):
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-no-goal",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3579,6 +3618,7 @@ class HubExecutionSessionTests(TestCase):
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_run_game_execution_session_strict_contract_rejects_plain_text(self, mocked_call):
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-strict-contract",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3611,6 +3651,7 @@ class HubExecutionSessionTests(TestCase):
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_run_game_execution_session_strict_contract_requires_complete_true_to_finish(self, mocked_call):
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-strict-finish",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3653,6 +3694,7 @@ class HubExecutionSessionTests(TestCase):
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_run_game_execution_session_preserves_reserved_payload_keys_after_input_mapping(self, mocked_call):
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-mapped-payload",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3694,6 +3736,7 @@ class HubExecutionSessionTests(TestCase):
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_run_game_execution_session_preserves_partial_context_on_failure(self, mocked_call):
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-partial-failure",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3742,6 +3785,7 @@ class HubExecutionSessionTests(TestCase):
             config={"template": "unknown"},
         )
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-tools-safe",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -3777,6 +3821,7 @@ class HubExecutionSessionTests(TestCase):
             config={"template": "legacy", "game_tool_category": "action_tool"},
         )
         game_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="game-agent-tools-opt-in",
             role="Autonomous goal runner",
             model_config=self.model,
@@ -4681,6 +4726,7 @@ class HubAdminControlCenterTests(TestCase):
         )
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="ollama/qwen3:8b")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="visual-agent",
             role="Visual test agent",
             model_config=self.model,
@@ -4935,6 +4981,7 @@ class HubAdminControlCenterTests(TestCase):
         """IA Step 4: GameWorkspace change page renders the composed workspace shell."""
         from ai_hub.models import GameWorkspace
         workspace = GameWorkspace.objects.create(
+            application_scope=test_scope(),
             name="Composed WS",
             default_policy={"allowed_actions": ["submit_for_approval"], "safety": {"allow_external_writes": False}},
         )
@@ -4949,7 +4996,7 @@ class HubAdminControlCenterTests(TestCase):
     def test_goal_detail_change_page_is_composed(self):
         """IA Step 4: GameGoal change page renders the composed goal-detail shell."""
         from ai_hub.models import GameWorkspace, GameGoal
-        workspace = GameWorkspace.objects.create(name="Goal WS")
+        workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="Goal WS")
         goal = GameGoal.objects.create(workspace=workspace, title="Composed goal", description="desc")
         client = Client()
         client.force_login(self.user)
@@ -4995,7 +5042,7 @@ class HubAdminControlCenterTests(TestCase):
     def test_knowledge_collection_change_page_is_composed(self):
         """IA Step 6: KnowledgeCollection change page renders the composed Library shell."""
         from ai_hub.models import KnowledgeCollection, KnowledgeDocument
-        collection = KnowledgeCollection.objects.create(name="Support rules", is_active=True)
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Support rules", is_active=True)
         KnowledgeDocument.objects.create(
             collection=collection, title="Refund policy", status=KnowledgeDocument.Status.ACTIVE
         )
@@ -5013,7 +5060,7 @@ class HubAdminControlCenterTests(TestCase):
     def test_knowledge_collection_save_still_works(self):
         """IA Step 6: inlines wrapped in a tab panel must still submit (document formset)."""
         from ai_hub.models import KnowledgeCollection
-        collection = KnowledgeCollection.objects.create(name="Editable collection", is_active=True)
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Editable collection", is_active=True)
         client = Client()
         client.force_login(self.user)
         data = {
@@ -5169,6 +5216,7 @@ class HubAdminControlCenterTests(TestCase):
 
     def test_game_workspace_shows_game_sessions(self):
         game_ready_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="goal-runner",
             role="Autonomous GAME goal runner",
             model_config=self.model,
@@ -5474,6 +5522,7 @@ class HubAdminControlCenterTests(TestCase):
             is_active=True,
         )
         hidden_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Hidden engine agent",
             role="hidden",
             model_config=hidden_model,
@@ -5534,6 +5583,7 @@ class HubAdminControlCenterTests(TestCase):
 
     def test_build_wizard_rejects_inactive_pipeline_step_agent(self):
         inactive_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="Inactive step agent",
             role="inactive",
             model_config=self.model,
@@ -5703,6 +5753,7 @@ class HubExecutionSessionEndpointTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="provider", provider_type="openai")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="model-a")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="a1",
             role="extract",
             model_config=self.model,
@@ -5940,10 +5991,11 @@ from ai_hub.services.game_action_dispatcher import execute_game_action  # noqa: 
 
 class GameActionDispatcherTests(TestCase):
     def setUp(self):
-        self.workspace = create_workspace(name="Dispatcher workspace")
+        self.workspace = create_workspace(application_scope=test_scope(), name="Dispatcher workspace")
         self.provider = ProviderConfig.objects.create(name="dispatcher-provider", provider_type="training")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="dispatcher-model")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="dispatcher-agent",
             role="Dispatcher goal runner",
             model_config=self.model,
@@ -5981,7 +6033,7 @@ class GameActionDispatcherTests(TestCase):
             action_type=GameActionDefinition.ActionType.CONTEXT_TOOL,
         )
         # Knowledge for search/read tests
-        self.collection = KnowledgeCollection.objects.create(name="Dispatcher collection")
+        self.collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Dispatcher collection")
         self.agent.knowledge_collections.add(self.collection)
         self.document = KnowledgeDocument.objects.create(
             collection=self.collection,
@@ -6151,7 +6203,7 @@ class GameActionDispatcherTests(TestCase):
         )
 
     def test_dispatch_read_document_blocked_outside_agent_collections(self):
-        other_collection = KnowledgeCollection.objects.create(name="Dispatcher other collection")
+        other_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Dispatcher other collection")
         other_doc = KnowledgeDocument.objects.create(
             collection=other_collection,
             title="Hidden doc",
@@ -6417,6 +6469,7 @@ class GameActionDispatcherTests(TestCase):
     @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
     def test_pipeline_game_uses_first_step_agent_for_tool_resolution_and_audit(self):
         pipeline_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="pipeline-dispatcher-agent",
             role="Pipeline dispatcher",
             model_config=self.model,
@@ -6447,6 +6500,7 @@ class GameActionDispatcherTests(TestCase):
     @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
     def test_pipeline_game_rejects_tool_not_granted_to_effective_agent(self):
         pipeline_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="pipeline-restricted-agent",
             role="Restricted pipeline dispatcher",
             model_config=self.model,
@@ -6498,13 +6552,15 @@ class GameActionDispatcherTests(TestCase):
 
     @override_settings(AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=True)
     def test_pipeline_game_bound_tool_ignores_model_supplied_agent_identity(self):
+        test_scope()  # the seed requires an existing scope
         seed_starter_toolboxes()
         pipeline_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="pipeline-bound-agent",
             role="Bound pipeline dispatcher",
             model_config=self.model,
         )
-        pipeline_collection = KnowledgeCollection.objects.create(name="Pipeline agent library")
+        pipeline_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Pipeline agent library")
         pipeline_agent.knowledge_collections.add(pipeline_collection)
         pipeline = PipelineDefinition.objects.create(name="GAME bound agent pipeline")
         PipelineStep.objects.create(pipeline=pipeline, agent=pipeline_agent, order=1)
@@ -6536,11 +6592,12 @@ class GameActionDispatcherTests(TestCase):
 
     def test_pipeline_game_context_actions_use_effective_agent_knowledge(self):
         pipeline_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="pipeline-knowledge-agent",
             role="Pipeline knowledge reader",
             model_config=self.model,
         )
-        pipeline_collection = KnowledgeCollection.objects.create(name="Pipeline private library")
+        pipeline_collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Pipeline private library")
         pipeline_agent.knowledge_collections.add(pipeline_collection)
         pipeline_document = KnowledgeDocument.objects.create(
             collection=pipeline_collection,
@@ -6791,11 +6848,12 @@ from ai_hub.services.game_memory_compaction import compact_goal_memory  # noqa: 
 
 class GameMemoryTests(TestCase):
     def setUp(self):
-        self.workspace = create_workspace(name="Memory workspace")
-        self.other_workspace = create_workspace(name="Other memory workspace")
+        self.workspace = create_workspace(application_scope=test_scope(), name="Memory workspace")
+        self.other_workspace = create_workspace(application_scope=test_scope(), name="Other memory workspace")
         self.provider = ProviderConfig.objects.create(name="memory-provider", provider_type="training")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="memory-model")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="memory-agent",
             role="Memory goal runner",
             model_config=self.model,
@@ -7006,10 +7064,11 @@ from ai_hub.services.game_resume import (  # noqa: E402
 class GamePauseApprovalResumeTests(TestCase):
     def setUp(self):
         User = get_user_model()
-        self.workspace = create_workspace(name="Pause workspace")
+        self.workspace = create_workspace(application_scope=test_scope(), name="Pause workspace")
         self.provider = ProviderConfig.objects.create(name="pause-provider", provider_type="training")
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="pause-model")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="pause-agent",
             role="Pause goal runner",
             model_config=self.model,
@@ -8419,11 +8478,12 @@ class GamePoliciesTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="p-policy", provider_type="openai")
         self.model_cfg = ModelConfig.objects.create(provider=self.provider, model_name="gpt-policy")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="policy-agent",
             role="policy-runner",
             model_config=self.model_cfg,
         )
-        self.workspace = GameWorkspace.objects.create(name="policy-ws")
+        self.workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="policy-ws")
         self.goal = GameGoal.objects.create(
             workspace=self.workspace,
             title="Policy test goal",
@@ -8480,6 +8540,7 @@ class GamePoliciesTests(TestCase):
 
     def test_workspace_policy_uses_pipeline_effective_agent(self):
         pipeline_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="policy-pipeline-agent",
             role="Pipeline policy agent",
             model_config=self.model_cfg,
@@ -8630,11 +8691,12 @@ class GamePrePhase10StabilizationTests(TestCase):
             model_name="stabilization-model",
         )
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="stabilization-agent",
             role="stabilization",
             model_config=self.model_cfg,
         )
-        self.workspace = GameWorkspace.objects.create(name="stabilization-workspace")
+        self.workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="stabilization-workspace")
 
     def make_goal(self, title="Stabilization goal"):
         return create_goal(
@@ -8656,6 +8718,7 @@ class GamePrePhase10StabilizationTests(TestCase):
 
     def test_workspace_agent_allow_list_is_closed_when_configured(self):
         other_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="other-stabilization-agent",
             role="other",
             model_config=self.model_cfg,
@@ -8740,7 +8803,7 @@ class GamePrePhase10StabilizationTests(TestCase):
     def test_session_memory_rejects_cross_workspace_session(self):
         goal = self.make_goal()
         session = create_goal_execution_session(goal=goal, entry_agent=self.agent)
-        other_workspace = GameWorkspace.objects.create(name="other-memory-workspace")
+        other_workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="other-memory-workspace")
         entry = GameMemoryEntry(
             workspace=other_workspace,
             session=session,
@@ -9012,11 +9075,12 @@ class GameApprovalConcurrencyTests(TransactionTestCase):
         provider = ProviderConfig.objects.create(name="approval-lock-provider", provider_type="training")
         model_cfg = ModelConfig.objects.create(provider=provider, model_name="approval-lock-model")
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="approval-lock-agent",
             role="approval-lock",
             model_config=model_cfg,
         )
-        workspace = GameWorkspace.objects.create(name="approval-lock-workspace")
+        workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="approval-lock-workspace")
         goal = create_goal(
             workspace=workspace,
             title="Approval locking",
@@ -9087,12 +9151,14 @@ class GameApprovalExpiryConcurrencyTests(TransactionTestCase):
             model_name="approval-expiry-race-model",
         )
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="approval-expiry-race-agent",
             role="approval expiry race",
             model_config=model_cfg,
         )
         self.workspace = GameWorkspace.objects.create(
-            name="approval-expiry-race-workspace"
+            application_scope=test_scope(),
+            name="approval-expiry-race-workspace",
         )
         self.goal = create_goal(
             workspace=self.workspace,
@@ -9324,16 +9390,18 @@ class GamePlansAndDelegationTests(TestCase):
             provider=self.provider, model_name="gpt-plans"
         )
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="plans-parent-agent",
             role="coordinator",
             model_config=self.model_cfg,
         )
         self.target_agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="plans-target-agent",
             role="specialist",
             model_config=self.model_cfg,
         )
-        self.workspace = GameWorkspace.objects.create(name="plans-ws")
+        self.workspace = GameWorkspace.objects.create(application_scope=test_scope(), name="plans-ws")
         self.goal = GameGoal.objects.create(
             workspace=self.workspace,
             title="Plans test goal",
@@ -9406,7 +9474,8 @@ class GamePlansAndDelegationTests(TestCase):
     def test_delegation_requires_allowed_target_agent(self):
         # Workspace has an entry for a *different* agent — allow-list is now closed.
         other_agent = AgentProfile.objects.create(
-            name="plans-other-agent", role="other", model_config=self.model_cfg
+            application_scope=test_scope(),
+            name="plans-other-agent", role="other", model_config=self.model_cfg,
         )
         GameWorkspaceAgent.objects.create(
             workspace=self.workspace, agent=other_agent, is_enabled=True
@@ -9622,9 +9691,10 @@ class GameAdminOperationalUXTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="ux-prov", provider_type="openai")
         self.model_cfg = ModelConfig.objects.create(provider=self.provider, model_name="gpt-ux")
         self.agent = AgentProfile.objects.create(
-            name="ux-agent", role="r", model_config=self.model_cfg
+            application_scope=test_scope(),
+            name="ux-agent", role="r", model_config=self.model_cfg,
         )
-        self.workspace = create_workspace(name="ux-ws", description="test")
+        self.workspace = create_workspace(application_scope=test_scope(), name="ux-ws", description="test")
         self.goal = create_goal(
             workspace=self.workspace,
             title="UX goal",
@@ -9632,7 +9702,7 @@ class GameAdminOperationalUXTests(TestCase):
         )
 
     def test_workspace_dashboard_scopes_data_to_workspace(self):
-        other_ws = create_workspace(name="ux-other-ws", description="other")
+        other_ws = create_workspace(application_scope=test_scope(), name="ux-other-ws", description="other")
         create_goal(workspace=other_ws, title="Other goal", description="d")
 
         ctx = build_workspace_dashboard_context(self.workspace)
@@ -9955,9 +10025,10 @@ class GameFeatureFlagTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="ff-prov", provider_type="openai")
         self.model_cfg = ModelConfig.objects.create(provider=self.provider, model_name="gpt-ff")
         self.agent = AgentProfile.objects.create(
-            name="ff-agent", role="r", model_config=self.model_cfg
+            application_scope=test_scope(),
+            name="ff-agent", role="r", model_config=self.model_cfg,
         )
-        self.workspace = create_workspace(name="ff-ws", description="test")
+        self.workspace = create_workspace(application_scope=test_scope(), name="ff-ws", description="test")
 
     def test_create_goal_blocked_when_flag_disabled(self):
         with override_settings(AI_HUB_GAME_GOALS_ENABLED=False):
@@ -10099,12 +10170,14 @@ class GamePostPhase12StabilizationTests(TestCase):
             provider=self.provider, model_name="post12-model"
         )
         self.parent_agent = AgentProfile.objects.create(
-            name="post12-parent", role="parent", model_config=self.model_cfg
+            application_scope=test_scope(),
+            name="post12-parent", role="parent", model_config=self.model_cfg,
         )
         self.target_agent = AgentProfile.objects.create(
-            name="post12-target", role="target", model_config=self.model_cfg
+            application_scope=test_scope(),
+            name="post12-target", role="target", model_config=self.model_cfg,
         )
-        self.workspace = create_workspace(name="post12-workspace")
+        self.workspace = create_workspace(application_scope=test_scope(), name="post12-workspace")
         self.goal = create_goal(
             workspace=self.workspace, title="Post-12 goal", description="stabilize"
         )
@@ -10431,9 +10504,10 @@ class GameDelegationBudgetConcurrencyTests(TransactionTestCase):
 
         provider = ProviderConfig.objects.create(name="delegation-lock-provider", provider_type="training")
         model_cfg = ModelConfig.objects.create(provider=provider, model_name="delegation-lock-model")
-        parent = AgentProfile.objects.create(name="delegation-lock-parent", role="p", model_config=model_cfg)
-        target = AgentProfile.objects.create(name="delegation-lock-target", role="t", model_config=model_cfg)
+        parent = AgentProfile.objects.create(application_scope=test_scope(), name="delegation-lock-parent", role="p", model_config=model_cfg)
+        target = AgentProfile.objects.create(application_scope=test_scope(), name="delegation-lock-target", role="t", model_config=model_cfg)
         workspace = GameWorkspace.objects.create(
+            application_scope=test_scope(),
             name="delegation-lock-workspace",
             default_policy={"budget": {"max_sub_agent_runs_per_goal": 1}},
         )
@@ -10506,6 +10580,7 @@ class GameVerticalSliceRegressionTests(TestCase):
     @patch("ai_hub.services.agent_runtime.completion_call")
     def test_vertical_slice_complete_chain_and_no_external_write(self, mocked_call):
         workspace = create_workspace(
+            application_scope=test_scope(),
             name="Vertical slice workspace",
             default_runtime_config={"max_iterations": 4},
             default_policy={
@@ -10523,11 +10598,12 @@ class GameVerticalSliceRegressionTests(TestCase):
             provider=provider, model_name="vertical-slice-model"
         )
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="vertical-slice-agent",
             role="GAME documentation analyst",
             model_config=model,
         )
-        collection = KnowledgeCollection.objects.create(name="Vertical slice docs")
+        collection = KnowledgeCollection.objects.create(application_scope=test_scope(), name="Vertical slice docs")
         document = KnowledgeDocument.objects.create(
             collection=collection,
             title="GAME architecture",
@@ -10658,9 +10734,10 @@ class GameOrphanedGoalCleanupTests(TestCase):
         self.provider = ProviderConfig.objects.create(name="orphan-prov", provider_type="training")
         self.model_cfg = ModelConfig.objects.create(provider=self.provider, model_name="training")
         self.agent = AgentProfile.objects.create(
-            name="orphan-agent", role="r", model_config=self.model_cfg
+            application_scope=test_scope(),
+            name="orphan-agent", role="r", model_config=self.model_cfg,
         )
-        self.workspace = create_workspace(name="orphan-ws", description="test")
+        self.workspace = create_workspace(application_scope=test_scope(), name="orphan-ws", description="test")
 
     def _running_goal(self, title):
         goal = create_goal(workspace=self.workspace, title=title, description="d")
@@ -10748,7 +10825,7 @@ class GameOrphanedGoalCleanupTests(TestCase):
 
     def test_cleanup_scoped_to_workspace(self):
         goal = self._running_goal("in-scope")
-        other_ws = create_workspace(name="orphan-other-ws", description="d")
+        other_ws = create_workspace(application_scope=test_scope(), name="orphan-other-ws", description="d")
         other_goal = create_goal(workspace=other_ws, title="out-of-scope", description="d")
         other_goal = transition_goal_status(other_goal, GameGoal.Status.RUNNING, reason="test")
 
@@ -10806,11 +10883,12 @@ class GameOrphanedGoalCleanupConcurrencyTests(TransactionTestCase):
             model_name="training",
         )
         agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="orphan-race-agent",
             role="orphan race",
             model_config=model_cfg,
         )
-        workspace = create_workspace(name="orphan-race-workspace")
+        workspace = create_workspace(application_scope=test_scope(), name="orphan-race-workspace")
         goal = create_goal(
             workspace=workspace,
             title="Orphan serialization",
@@ -10889,6 +10967,7 @@ class HubHealthEvaluatorTests(TestCase):
         )
         self.model = ModelConfig.objects.create(provider=self.provider, model_name="ollama/qwen3:8b")
         self.agent = AgentProfile.objects.create(
+            application_scope=test_scope(),
             name="health-agent",
             role="r",
             model_config=self.model,

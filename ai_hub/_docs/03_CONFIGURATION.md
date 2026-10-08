@@ -242,7 +242,27 @@ For a temporary compatibility rollback, set
 `runtime_config.agent_tool_runtime="legacy_preexecute"` on a session or set
 `AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME=legacy_preexecute` for the host. That mode
 sees only direct `AgentProfile.tools` attachments and executes the allowed set
-before the model call. It is not the target architecture.
+before the model call. Its execution order is:
+
+```text
+Agent validation
+-> input validation
+-> current Model/Provider validation
+-> Tool resolution/authorization
+-> allowed Tool execution
+-> Provider call
+```
+
+Therefore an inactive or invalid Model/Provider stops a session-backed legacy
+call before any Tool execution and before any `ToolExecutionRun` is created.
+Grant and workspace policy remain authoritative, and approval-requiring Tools
+are excluded. Every Tool actually attempted through an `ExecutionSession` is
+durably represented by a `ToolExecutionRun` linked to its current session and
+step. Filtered or unattempted Tools do not receive execution records.
+
+`resolved` is the normal/default runtime. `legacy_preexecute` is a compatibility
+runtime for temporary rollback; it is not the target architecture and should
+not be selected for new integrations.
 
 Common fields:
 

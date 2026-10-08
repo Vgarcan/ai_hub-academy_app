@@ -10,6 +10,10 @@ portable.
 
 ## Current Foundation
 
+The reusable Core Foundation baseline is **GREEN / CLOSED** at
+`67f139140f846693af015a4f97643df819373d2a`; see
+[`17_FOUNDATION_BASELINE.md`](17_FOUNDATION_BASELINE.md).
+
 AI Hub already has the core platform pieces:
 
 - Provider configuration.
@@ -133,8 +137,9 @@ allowed-hosts), GET/HEAD read semantics, bounded redirects, toolbox/grant
 resolution, model-facing manifest redaction, default deliberate runner
 integration, session/step-linked tool audit via `ToolExecutionRun`, tool/action
 audit logs via `GameActionRun`, context-only GAME manifests, an explicit legacy
-pre-execution shim, effective approval enforcement in optional unified GAME
-dispatch, starter toolboxes, and timeout clamping.
+pre-execution shim with durable per-attempt Tool audit when session-backed,
+effective approval enforcement in optional unified GAME dispatch, starter
+toolboxes, and timeout clamping.
 
 Still recommended:
 

@@ -7,6 +7,9 @@ memory and execution modes.
 The source of truth remains code plus tests. Update this page whenever a runtime
 path changes.
 
+The verified Core closure baseline is recorded in
+[`17_FOUNDATION_BASELINE.md`](17_FOUNDATION_BASELINE.md).
+
 ## Status Vocabulary
 
 - **CURRENT** — implemented, exercised by the current runtime or directly usable
@@ -143,6 +146,17 @@ path changes.
   selects `execute_agent()`, which pre-executes only direct tools still allowed
   by effective grant/workspace resolution and excludes approval-requiring
   capabilities before the model call.
+- Current Model/Provider state is validated before Tool resolution or
+  execution. Inactive or invalid configuration therefore produces no Tool
+  attempt and no misleading `ToolExecutionRun`.
+- Tool grants and workspace resolution remain authoritative, and
+  approval-requiring Tools remain excluded.
+- Each Tool actually attempted under an `ExecutionSession` receives a
+  Session/Step-linked `ToolExecutionRun`. Success is persisted before the later
+  Provider result is known and remains success if that Provider call fails.
+- Tool failures are persisted as failed before the error propagates. Multiple
+  Tool outcomes remain independent; filtered or never-attempted Tools receive
+  no execution record.
 - `allow_legacy_game_action_tools=True` has an effect only in that legacy mode
   and remains restricted to trusted host integrations.
 

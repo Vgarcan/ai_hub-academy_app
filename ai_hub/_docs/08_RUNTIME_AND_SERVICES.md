@@ -119,11 +119,33 @@ decoder keep their contracts; the raw tool-protocol response remains in
 `tool_protocol_llm`.
 
 `agent_tool_runtime="legacy_preexecute"` selects the old `execute_agent()` shim.
-It sees only active direct `AgentProfile.tools`, intersects them with current
-grant/workspace resolution, excludes every Tool whose effective policy requires
-approval, pre-executes the remaining set and injects all results into one model
-call. This exists for rollback while legacy prompts and demos migrate; new
-integrations should not select it.
+It validates the Agent and input, then validates the current Model/Provider
+before resolving or executing Tools. It sees only active direct
+`AgentProfile.tools`, intersects them with current grant/workspace resolution,
+excludes every Tool whose effective policy requires approval, pre-executes the
+remaining set and injects all results into one model call. This exists for
+rollback while legacy prompts and demos migrate; new integrations should not
+select it.
+
+When that compatibility runtime is called by an `ExecutionSession`, it creates
+a `ToolExecutionRun` before each actual Tool attempt. The run is linked to the
+current session and step, stores the effective input, and transitions to
+`success` with result/timing or `failed` with error/timing before the error
+propagates. This Tool lifecycle finishes before the later Provider result is
+known:
+
+```text
+Tool SUCCESS
+-> ToolExecutionRun SUCCESS persisted
+-> Provider later fails
+-> Step/Session may be FAILED
+-> ToolExecutionRun remains SUCCESS
+```
+
+Multiple attempts remain independent. For example, Tool 1 success followed by
+Tool 2 failure produces one successful Tool run and one failed Tool run; the
+second outcome does not rewrite the first. Filtered or never-attempted Tools
+create no `ToolExecutionRun`.
 
 ## Tool Resolution And Execution
 
@@ -142,11 +164,18 @@ enforce the resolved permission and effective approval decision before invoking
 and kind-specific runtime safety; it is not a replacement for capability
 resolution.
 
-`ToolExecutionRun` records deliberate reusable tool calls and links them to the
-owning execution session and step. GAME selected actions continue to record
-`GameActionRun`; when a GAME action is linked to a `ToolDefinition`, the adapter
-can additionally route through the unified tool runtime behind
-`AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED`.
+`ToolExecutionRun` records reusable Tool attempts made by the deliberate
+runtime, session-backed `legacy_preexecute`, and applicable unified GAME Tool
+execution. It links to the owning execution session and step when that context
+exists. GAME selected actions continue to record `GameActionRun`; when a GAME
+action is linked to a `ToolDefinition`, the adapter can additionally route
+through the unified tool runtime behind `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED`.
+
+Calling the low-level `execute_tool()` directly does not create audit by itself.
+Likewise, a standalone compatibility call without Session/Step execution
+context does not gain Session/Step-linked audit merely by calling
+`execute_agent()`. Normal host integrations should use the
+`ExecutionSession` boundary.
 
 The resolver is the single source of normal runtime capability and is also used
 by the Agent Admin manifest, Control Center graph and unified GAME wrappers.

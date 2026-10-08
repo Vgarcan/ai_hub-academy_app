@@ -147,6 +147,9 @@ retrieval-first Knowledge. Legacy direct-tool pre-execution and eager document
 injection remain available only through explicit compatibility settings. See
 [`ai_hub/_docs/15_RUNTIME_STATUS.md`](ai_hub/_docs/15_RUNTIME_STATUS.md) for the
 CURRENT / LEGACY / TARGET / NOT IMPLEMENTED matrix.
+The independently reviewed **GREEN / CLOSED** Core Foundation baseline and its
+validation evidence are summarized in
+[`ai_hub/_docs/17_FOUNDATION_BASELINE.md`](ai_hub/_docs/17_FOUNDATION_BASELINE.md).
 
 ![HUB-Graph](assets/readme-pics/hub-graph.png)
 

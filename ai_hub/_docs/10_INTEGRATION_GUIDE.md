@@ -109,6 +109,10 @@ Recommended pattern:
 4. Worker or staff action runs the session.
 5. Host project renders the final result.
 
+Using the normal `ExecutionSession` boundary also supplies the Session/Step
+context used for durable `ToolExecutionRun` audit. Direct low-level runtime
+calls should not be the normal host integration boundary.
+
 ## Product Persistence
 
 `ai_hub` stores execution state.
@@ -196,9 +200,12 @@ governed boundaries.
 
 If a host must roll back an existing flow temporarily, set the session
 `runtime_config.agent_tool_runtime` to `legacy_preexecute`. Do not use that mode
-for new integrations. Approval-requiring generic tools need a host-owned
-checkpoint/resume implementation; for GAME, use a governed selected action
-instead. See `15_RUNTIME_STATUS.md`.
+for new integrations. In a session-backed rollback, every attempted legacy Tool
+is audited through `ToolExecutionRun`; grant/workspace filtering remains
+authoritative, approval-requiring Tools remain excluded, and the compatibility
+ordering remains Tool execution followed by the Provider call. Approval-
+requiring generic tools need a host-owned checkpoint/resume implementation; for
+GAME, use a governed selected action instead. See `15_RUNTIME_STATUS.md`.
 
 ## Knowledge Integration
 

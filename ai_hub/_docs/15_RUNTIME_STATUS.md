@@ -202,6 +202,11 @@ path changes.
   in the audit boundary.
 - PostgreSQL pgvector/HNSW is a shadow backend only. Runtime search continues to
   use the exact reference semantic backend.
+- `knowledge_retrieval_evaluate` validates a controlled suite by default and
+  runs lexical/hybrid evaluation only with `--execute`. It refuses target drift
+  and degraded hybrid cases instead of emitting an aggregate. Its evidence class
+  is `controlled_candidate` only; it cannot produce representative or
+  ANN-promotion evidence.
 
 ### LEGACY
 

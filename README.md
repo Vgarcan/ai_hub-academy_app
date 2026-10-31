@@ -226,6 +226,8 @@ python manage.py runserver
 | `python manage.py embed_docs --force` | Re-generate active chunks even when they already have an embedding |
 | `python manage.py knowledge_embedding_index --scope <slug|id> --embedding-config <name|id>` | Report governed Core Knowledge embedding coverage without writing |
 | `python manage.py knowledge_embedding_index --scope <slug|id> --embedding-config <name|id> --execute` | Index missing/stale Core Knowledge chunks through the governed local embedding path |
+| `python manage.py knowledge_retrieval_evaluate --suite <path> --agent <name|id>` | Validate a controlled retrieval-quality suite against its exact corpus and vector coverage without calling a provider |
+| `python manage.py knowledge_retrieval_evaluate --suite <path> --agent <name|id> --execute [--json]` | Run lexical and hybrid retrieval over the suite and report content-free metrics; fails closed on drift or degraded hybrid |
 | `python manage.py seed_demo_data` | Seed the support-demo tickets and training configuration |
 | `python manage.py test` | Run the full test suite |
 | `python manage.py createsuperuser` | Create an admin user interactively |

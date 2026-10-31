@@ -10,6 +10,10 @@ from django.core.management.base import CommandError
 from django.test import TestCase
 
 from ai_hub.models import KnowledgeChunkEmbedding
+from ai_hub.services.embedding_client import (
+    EmbeddingProviderExecutionError,
+    ErrorCategory,
+)
 from ai_hub.services.retrieval_quality import (
     CONTROLLED_CANDIDATE,
     QUALITY_CONTRACT_VERSION,
@@ -217,6 +221,43 @@ class PreflightAndExecutionTests(RetrievalQualityFixture, TestCase):
             ):
                 with self.assertRaisesMessage(RetrievalQualityError, "suite_snapshot_changed"):
                     execute_suite(preflight)
+
+    def test_execution_refuses_a_degraded_hybrid_instead_of_reporting_lexical_as_hybrid(self):
+        preflight = preflight_suite(self.suite, self.agent_a.pk)
+        calls = []
+
+        def unreachable(*, provider, contract, text):
+            calls.append(text)
+            raise EmbeddingProviderExecutionError(
+                ErrorCategory.PROVIDER_UNREACHABLE, "provider detail"
+            )
+
+        with mock.patch(TRANSPORT_PATH, return_value=unreachable):
+            with self.assertRaisesMessage(RetrievalQualityError, "hybrid_degraded"):
+                execute_suite(preflight)
+        # Fails on the first degraded case; no further query is dispatched.
+        self.assertEqual(len(calls), 1)
+
+    def test_agent_reference_with_non_decimal_digits_is_a_bounded_refusal(self):
+        with self.assertRaisesMessage(RetrievalQualityError, "agent_not_found"):
+            preflight_suite(self.suite, "²")
+
+    def test_command_execute_reports_hits_and_no_answer_false_positives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "suite.json"
+            path.write_text(json.dumps(self.payload), encoding="utf-8")
+            output = __import__("io").StringIO()
+            with mock.patch(TRANSPORT_PATH, return_value=self.transport_returning()):
+                call_command(
+                    "knowledge_retrieval_evaluate",
+                    suite=str(path), agent=str(self.agent_a.pk), execute=True,
+                    stdout=output,
+                )
+        text = output.getvalue()
+        self.assertIn("hybrid: top1=", text)
+        self.assertIn("hit @1=", text)
+        self.assertIn("no-answer false positives @1=", text)
+        self.assertNotIn("alpha widget", text)
 
     def test_command_is_report_only_by_default(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -220,6 +220,9 @@ class TargetResolutionTests(WorldMixin, TestCase):
              TargetErrorCategory.SCOPE_NOT_FOUND),
             ({"scope_ref": self.scope.slug, "embedding_config_ref": "nope"},
              TargetErrorCategory.EMBEDDING_CONFIG_NOT_FOUND),
+            # A non-decimal digit is a name, never an int() traceback.
+            ({"scope_ref": "²", "embedding_config_ref": self.config.name},
+             TargetErrorCategory.SCOPE_NOT_FOUND),
         ):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(IndexTargetError) as caught:

@@ -120,6 +120,32 @@ The remediation order is snapshot integrity, no-answer metric semantics,
 input-size bound, then the representative adapter. Re-run the controlled suite
 and the full matrix after each implementation change.
 
+## S-32 Controlled Evaluation Integrity — 2026-10-31
+
+S-32 closes the three implementation findings in S-31 without changing runtime
+retrieval behavior; it does not enable a threshold or relabel controlled
+evidence.
+
+- Execution now takes a fresh, content-free target snapshot before query
+  dispatch and again after all cases. It revalidates the exact corpus against
+  the supplied suite plus scope authorization, collection, embedding contract
+  and coverage facts. Any difference fails closed as
+  `suite_snapshot_changed`; no aggregate report is emitted.
+- No-answer case output no longer includes relevance metrics (`MRR`, Recall,
+  NDCG, Precision or Hit). It explicitly records emptiness and false-positive
+  counts overall and at each cutoff. Aggregate answerable metrics continue to
+  exclude no-answer cases.
+- Suite loading reads at most 48 MiB plus one byte before JSON decoding, then
+  returns `suite_too_large`. The bound accommodates the schema's maximum
+  Unicode payload while avoiding an unbounded operator-file read.
+- Focused verification: 14 `ai_hub.test_retrieval_quality` tests passed with
+  Django 6.1, including drift before dispatch, drift after queries, no-answer
+  output and bounded input coverage.
+
+S-32 does **not** establish an abstention policy: the existing controlled run
+remains 0/5 correctly empty. It also does not create a representative-data
+adapter or constitute ANN-promotion evidence.
+
 ## Shipped
 
 - Governed Knowledge lifecycle, explicit collection attachment and
@@ -185,8 +211,9 @@ Before broad production enablement:
    package following
    [`RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md`](RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md),
    including noisy natural language and cross-scope isolation attempts.
-2. Repair S-31 snapshot and no-answer-metric findings before treating a
-   controlled run as a stable regression baseline.
+2. Re-run the controlled suite after S-32 in a quiescent target and retain its
+   content-free report as a stable regression baseline; it remains controlled
+   candidate evidence only.
 3. Measure exact/hybrid/ANN behavior with the existing golden-query evaluator.
 4. Decide lexical semantics and no-answer thresholds from those results.
 5. Re-run the evaluation after any lexical change.

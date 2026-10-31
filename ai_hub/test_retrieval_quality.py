@@ -15,6 +15,7 @@ from ai_hub.services.retrieval_quality import (
     QUALITY_CONTRACT_VERSION,
     RetrievalQualityError,
     execute_suite,
+    load_suite,
     preflight_as_dict,
     preflight_suite,
     suite_from_dict,
@@ -115,6 +116,14 @@ class SuiteValidationTests(TestCase):
         with self.assertRaisesMessage(RetrievalQualityError, "no_answer_case_has_judgments"):
             suite_from_dict(payload)
 
+    def test_loader_refuses_a_file_above_its_bounded_read_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "large-suite.json"
+            path.write_bytes(b"{}")
+            with mock.patch("ai_hub.services.retrieval_quality.MAX_SUITE_BYTES", 1):
+                with self.assertRaisesMessage(RetrievalQualityError, "suite_too_large"):
+                    load_suite(path)
+
 
 class PreflightAndExecutionTests(RetrievalQualityFixture, TestCase):
     def setUp(self):
@@ -160,6 +169,54 @@ class PreflightAndExecutionTests(RetrievalQualityFixture, TestCase):
         self.assertNotIn("alpha widget", encoded)
         self.assertNotIn(self.a1.content, encoded)
         self.assertNotIn('"query":', encoded)
+
+        no_answer = next(
+            case for case in payload["cases"] if case["query_class"] == "no_answer"
+        )
+        for path in ("lexical", "hybrid"):
+            result = no_answer[path]
+            self.assertNotIn("mrr", result)
+            self.assertNotIn("first_relevant_rank", result)
+            self.assertNotIn("recall", result["no_answer"])
+            self.assertEqual(
+                result["returned_count"], result["no_answer"]["false_positive_count"]
+            )
+            self.assertIn("false_positive_count", result["no_answer"]["cutoffs"]["1"])
+        self.assertIn(
+            "no_answer_false_positive_at_k_count",
+            payload["metrics"]["hybrid"],
+        )
+
+    def test_execution_refuses_drift_before_any_provider_dispatch(self):
+        preflight = preflight_suite(self.suite, self.agent_a.pk)
+        self.a1.content = "changed after preflight"
+        self.a1.save(update_fields=["content"])
+        transport = self.transport_returning()
+        with mock.patch(TRANSPORT_PATH, return_value=transport):
+            with self.assertRaisesMessage(RetrievalQualityError, "suite_snapshot_changed"):
+                execute_suite(preflight)
+        self.assertEqual(transport.calls, [])
+
+    def test_execution_refuses_drift_after_cases_instead_of_emitting_an_aggregate(self):
+        preflight = preflight_suite(self.suite, self.agent_a.pk)
+        transport = self.transport_returning()
+        original_hybrid = __import__(
+            "ai_hub.services.retrieval_quality", fromlist=["search_hybrid_with_scope"]
+        ).search_hybrid_with_scope
+
+        def mutate_config_after_search(*args, **kwargs):
+            result = original_hybrid(*args, **kwargs)
+            self.config.request_timeout_seconds += 1
+            self.config.save(update_fields=["request_timeout_seconds"])
+            return result
+
+        with mock.patch(TRANSPORT_PATH, return_value=transport):
+            with mock.patch(
+                "ai_hub.services.retrieval_quality.search_hybrid_with_scope",
+                side_effect=mutate_config_after_search,
+            ):
+                with self.assertRaisesMessage(RetrievalQualityError, "suite_snapshot_changed"):
+                    execute_suite(preflight)
 
     def test_command_is_report_only_by_default(self):
         with tempfile.TemporaryDirectory() as directory:

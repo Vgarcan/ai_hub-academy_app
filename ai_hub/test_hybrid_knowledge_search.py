@@ -164,6 +164,27 @@ class GateTests(HybridFixtureMixin, TestCase):
             execute_tool(self.tool, {"query": QUERY}, agent=self.agent_b)
         self.assertEqual(RetrievalRun.objects.count(), 0)
 
+    @ON
+    def test_execution_rechecks_game_context_after_resolution(self):
+        game = mock.Mock(runtime_kind=ExecutionSession.RuntimeKind.GAME)
+
+        with self.assertRaisesMessage(ValidationError, NOT_AVAILABLE_MESSAGE):
+            execute_tool(
+                self.tool,
+                {"query": QUERY},
+                agent=self.agent_a,
+                execution_context={"session": game},
+            )
+        with self.assertRaisesMessage(ValidationError, NOT_AVAILABLE_MESSAGE):
+            execute_tool(
+                self.tool,
+                {"query": QUERY},
+                agent=self.agent_a,
+                workspace=mock.Mock(default_policy={}),
+            )
+
+        self.assertEqual(RetrievalRun.objects.count(), 0)
+
 
 # ---------------------------------------------------------------------------
 # Identity, authorization, audit

@@ -154,8 +154,10 @@ Agents can use tools only when the app, model and runtime all allow it.
 
 ## Priority 5: Better Knowledge And RAG
 
-Current knowledge supports curated text plus retrieval chunks and read-only
-retrieval tools. The next step is stronger automated indexing and ranking.
+Current Knowledge includes governed local embeddings, exact semantic retrieval,
+hybrid rank fusion, durable retrieval audit and a default-off Agent tool. The
+next step is representative quality evidence and controlled rollout, not more
+retrieval substrate.
 
 Delivered:
 
@@ -166,15 +168,21 @@ Delivered:
 - Automatic canonical read-only retrieval capabilities for agents with attached
   active collections.
 - Server-bound agent identity and bounded prompt/tool outputs.
+- Application-scoped embedding egress, vector-space and persistence contracts.
+- Report-first operator indexing through `knowledge_embedding_index`.
+- Exact semantic retrieval, governed hybrid fusion and reference-first audit.
+- A default-off, non-GAME `search_knowledge_hybrid` Agent capability.
+- A PostgreSQL pgvector/HNSW shadow backend and golden-query evaluation gate.
 
 Still recommended:
 
-- Embedding provider configuration.
-- Retrieval query logs.
 - Per-agent retrieval limits.
-- Knowledge freshness status.
 - Admin preview of injected context.
-- Automated file ingestion and semantic/hybrid retrieval.
+- A representative, judged query corpus with no-answer and relevance policy.
+- Lexical precision improvements measured against that corpus.
+- A prompt-injection trust boundary for retrieved content.
+- Production ANN promotion only after representative evidence.
+- Automated file ingestion and GAME/Path 1 retrieval convergence.
 
 Target outcome:
 

@@ -22,6 +22,7 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 14. [`14_CHANGELOG.md`](14_CHANGELOG.md) - notable app and documentation changes.
 15. [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md) - canonical CURRENT / LEGACY / TARGET / NOT IMPLEMENTED runtime status.
 16. [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) - Build Console wizard: step-by-step guide for the guided GAME and Orchestrator creation wizard.
+17. [`RAG_RETRIEVAL_STATUS.md`](RAG_RETRIEVAL_STATUS.md) - shipped RAG retrieval capabilities, activation steps, boundaries, and next evidence gates.
 
 ## Current Product Shape
 
@@ -39,6 +40,8 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 - **composed change pages** (tabbed Overview + Configuration) for the root entities and Foundation hubs,
 - guided forms with examples and placeholders, with supporting/bridge tables demoted from the index behind a "Show supporting tables" toggle,
 - reusable provider/model/agent/tool/knowledge configuration,
+- governed local Knowledge embeddings and a default-off audited hybrid Agent
+  search capability,
 - generic execution sessions and step telemetry,
 - staff-only execution endpoints.
 

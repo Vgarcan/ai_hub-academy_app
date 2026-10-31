@@ -88,6 +88,11 @@ ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=False
 # AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=False
 # AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME=resolved
 # AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=False
+# Agent-facing hybrid Knowledge search. Off by default. Enabling this flag is
+# not sufficient by itself: each ApplicationScope must select an active
+# retrieval_embedding_model_config, and its corpus must be indexed explicitly.
+# The capability remains unavailable to GAME until retrieval convergence.
+# AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED=False
 # AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL=3
 # AI_HUB_MAX_TOOL_OBSERVATION_CHARS=12000
 # Restrict live Ollama health probes in production (comma-separated hosts).

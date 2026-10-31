@@ -11,6 +11,7 @@ from ai_hub.services.contracts import validate_payload
 from ai_hub.services.credential_safety import is_sensitive_credential_name
 from ai_hub.services.knowledge_tooling import (
     BIND_AGENT_CONTEXT_CONFIG_KEY,
+    HYBRID_KNOWLEDGE_SEARCH_TOOL_NAME,
     is_bound_knowledge_tool,
 )
 from ai_hub.services.http_tool_policy import (
@@ -231,10 +232,57 @@ def bind_tool_runtime_context(tool: ToolDefinition, payload: dict, *, agent=None
     return effective_payload
 
 
-def execute_tool(tool: ToolDefinition, payload: dict, *, agent=None) -> dict:
+def _enforce_execution_context_gate(
+    tool: ToolDefinition,
+    *,
+    agent=None,
+    workspace=None,
+    execution_context=None,
+) -> None:
+    """Re-check context-sensitive gates at the final execution boundary.
+
+    Resolution normally prevents the S-28 hybrid Knowledge tool from reaching
+    GAME. This second check protects direct calls and capabilities resolved
+    before their execution context changed. The import stays lazy so the
+    generic Tool runtime does not load the semantic retrieval stack for other
+    tools.
+    """
+    if (
+        tool.name != HYBRID_KNOWLEDGE_SEARCH_TOOL_NAME
+        or not is_bound_knowledge_tool(tool)
+    ):
+        return
+
+    from ai_hub.services.hybrid_knowledge_search import (
+        NOT_AVAILABLE_MESSAGE,
+        hybrid_search_offered,
+    )
+
+    if not hybrid_search_offered(
+        agent,
+        workspace=workspace,
+        execution_context=execution_context,
+    ):
+        raise ValidationError(NOT_AVAILABLE_MESSAGE)
+
+
+def execute_tool(
+    tool: ToolDefinition,
+    payload: dict,
+    *,
+    agent=None,
+    workspace=None,
+    execution_context=None,
+) -> dict:
     if tool.tool_kind not in ALLOWED_TOOL_KINDS:
         raise ValidationError(f"Tool kind '{tool.tool_kind}' is not allowed.")
     payload = bind_tool_runtime_context(tool, payload, agent=agent)
+    _enforce_execution_context_gate(
+        tool,
+        agent=agent,
+        workspace=workspace,
+        execution_context=execution_context,
+    )
     validate_payload(payload, tool.input_schema or {}, f"Tool '{tool.name}' input")
 
     if tool.tool_kind == ToolDefinition.ToolKind.PYTHON_CALLABLE:
@@ -251,7 +299,15 @@ def execute_tool(tool: ToolDefinition, payload: dict, *, agent=None) -> dict:
     return _ensure_json_serializable(tool_result, tool.name)
 
 
-def execute_tools(tools, payload: dict, *, policy: str = TOOL_POLICY_ALL, agent=None) -> dict:
+def execute_tools(
+    tools,
+    payload: dict,
+    *,
+    policy: str = TOOL_POLICY_ALL,
+    agent=None,
+    workspace=None,
+    execution_context=None,
+) -> dict:
     if policy not in {TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY}:
         raise ValidationError(f"Unknown tool execution policy '{policy}'.")
 
@@ -259,5 +315,11 @@ def execute_tools(tools, payload: dict, *, policy: str = TOOL_POLICY_ALL, agent=
     for tool in tools:
         if policy == TOOL_POLICY_GAME_CONTEXT_ONLY and get_game_tool_category(tool) != GAME_CONTEXT_TOOL:
             continue
-        output[tool.name] = execute_tool(tool, payload, agent=agent)
+        output[tool.name] = execute_tool(
+            tool,
+            payload,
+            agent=agent,
+            workspace=workspace,
+            execution_context=execution_context,
+        )
     return output

@@ -187,6 +187,21 @@ path changes.
   retaining active document/collection and Agent collection filters.
 - Build Console text documents and migration `0019` receive an initial chunk
   when none exists.
+- `ApplicationScope` is the isolation root for embedding egress and selects at
+  most one active retrieval `EmbeddingModelConfig` for Agent search.
+- `knowledge_embedding_index` reports coverage by default and writes only with
+  `--execute`, through the governed local chunk-embedding service.
+- Exact semantic retrieval, reciprocal-rank hybrid fusion and reference-first
+  `RetrievalRun`/`RetrievalHit` audit are implemented.
+- `search_knowledge_hybrid` is a separate, default-off Agent tool. It is offered
+  only for a configured scope when
+  `AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED=True`, and is rejected for GAME at
+  both resolution and final execution.
+- The Agent receives bounded excerpts, citations, branch mode/degradation and
+  indexed/searchable coverage. Scores and provider/configuration details remain
+  in the audit boundary.
+- PostgreSQL pgvector/HNSW is a shadow backend only. Runtime search continues to
+  use the exact reference semantic backend.
 
 ### LEGACY
 
@@ -195,16 +210,23 @@ path changes.
 
 ### TARGET
 
-- A small index in the prompt, followed by model-selected search/read/citation
-  calls for relevant chunks.
-- Knowledge models, retrieval services and tool adapters remain separate layers.
+- Keep Knowledge models, authorization, retrieval services, audit and tool
+  adapters as separate layers.
 - Replace the compatibility eager path only after deployed callers have
   migrated.
+- Establish representative relevance/no-answer evidence, then decide lexical
+  behavior and any ANN promotion.
+- Converge GAME and ordinary Agent Knowledge retrieval without weakening scope
+  or workspace coherence.
 
 ### NOT IMPLEMENTED
 
-- Core vector or hybrid search.
-- Reranking and retrieval query audit.
+- Representative judged retrieval evidence, no-answer thresholds and reranking.
+- Production routing to the pgvector/HNSW backend.
+- External embedding-provider execution; current embedding execution is local.
+- GAME access to the hybrid Agent tool and convergence of the two retrieval
+  paths.
+- A retrieved-content prompt-injection trust boundary.
 - Automatic file chunking/embedding pipelines in the reusable Core. The
   one-chunk curated-text fallback is not a semantic ingestion pipeline. Academy
   embedding features are host-specific and do not change Core behavior.

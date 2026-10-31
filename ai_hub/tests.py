@@ -7638,6 +7638,7 @@ class GamePauseApprovalResumeTests(TestCase):
         dispatch_resolution_count = 0
         mutated = False
         executed_configs = []
+        executed_contexts = []
         external_execution_atomic_depths = []
         baseline_atomic_depth = len(connection.atomic_blocks)
 
@@ -7656,8 +7657,21 @@ class GamePauseApprovalResumeTests(TestCase):
                     mutated = True
             return agent, resolved_tool
 
-        def execute_resolved_tool(executed_tool, payload, *, agent=None):
+        def execute_resolved_tool(
+            executed_tool,
+            payload,
+            *,
+            agent=None,
+            workspace=None,
+            execution_context=None,
+        ):
             executed_configs.append(dict(executed_tool.config or {}))
+            executed_contexts.append(
+                (
+                    getattr(workspace, "pk", None),
+                    getattr((execution_context or {}).get("session"), "pk", None),
+                )
+            )
             external_execution_atomic_depths.append(len(connection.atomic_blocks))
             return {"result": "executed reviewed capability"}
 
@@ -7679,6 +7693,9 @@ class GamePauseApprovalResumeTests(TestCase):
         self.assertEqual(approved.status, GameActionRun.Status.SUCCESS)
         self.assertEqual(dispatch_resolution_count, 1)
         self.assertEqual(executed_configs, [reviewed_config])
+        self.assertEqual(len(executed_contexts), 1)
+        self.assertIsNotNone(executed_contexts[0][0])
+        self.assertEqual(executed_contexts[0][1], action_run.session_id)
         self.assertEqual(external_execution_atomic_depths, [baseline_atomic_depth])
 
     def test_approval_rejects_input_payload_tampering_before_dispatch(self):

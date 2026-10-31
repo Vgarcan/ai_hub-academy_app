@@ -68,6 +68,7 @@ from ai_hub.services.retrieval_audit import (
     AuditFailureCategory,
     AuditedRetrievalRefused,
     RetrievalAuditError,
+    _audited_hybrid_search_with_scope,
     audited_hybrid_search_knowledge_local,
     read_retrieval_evidence,
 )
@@ -467,15 +468,29 @@ class RunCreationBoundaryTests(AuditFixtureMixin, TestCase):
                 self.assertEqual(self.counts(), before)
 
     def test_validation_precedes_authorization_in_source(self):
-        source = inspect.getsource(audited_hybrid_search_knowledge_local)
-        tree = ast.parse(source.lstrip())
-        lines = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                lines.setdefault(node.func.id, node.lineno)
-        self.assertLess(lines["validate_hybrid_request"], lines[RESOLVER])
-        self.assertLess(lines[RESOLVER], lines["_start_run"])
-        self.assertLess(lines["_start_run"], lines["search_hybrid_with_scope"])
+        """validate -> resolve ONCE -> start the run -> retrieve.
+
+        S-28 moved steps 3-7 into `_audited_hybrid_search_with_scope` so a
+        caller can keep one scope for a whole operation. The ordering is now
+        asserted across both functions, and the internal one must never
+        resolve a scope of its own.
+        """
+        def call_lines(function):
+            tree = ast.parse(inspect.getsource(function).lstrip())
+            lines = {}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    lines.setdefault(node.func.id, node.lineno)
+            return lines
+
+        public = call_lines(audited_hybrid_search_knowledge_local)
+        self.assertLess(public["validate_hybrid_request"], public[RESOLVER])
+        self.assertLess(public[RESOLVER], public["_audited_hybrid_search_with_scope"])
+
+        internal = call_lines(_audited_hybrid_search_with_scope)
+        self.assertNotIn(RESOLVER, internal)
+        self.assertLess(internal["validate_hybrid_request"], internal["_start_run"])
+        self.assertLess(internal["_start_run"], internal["search_hybrid_with_scope"])
 
     def test_deny_all_creates_no_run_at_all(self):
         """No trusted namespace means no namespace to scope evidence to."""
@@ -699,11 +714,15 @@ class TransactionBoundaryTests(AuditFixtureMixin, TestCase):
         self.assertEqual(RetrievalHit.objects.filter(retrieval_run=run).count(), 0)
 
     def test_the_audited_operation_catches_no_broad_exception(self):
-        tree = ast.parse(
-            inspect.getsource(audited_hybrid_search_knowledge_local).lstrip()
-        )
+        # Both halves of the operation since S-28's behaviour-preserving split.
         handlers = [
-            node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)
+            node
+            for function in (
+                audited_hybrid_search_knowledge_local,
+                _audited_hybrid_search_with_scope,
+            )
+            for node in ast.walk(ast.parse(inspect.getsource(function).lstrip()))
+            if isinstance(node, ast.ExceptHandler)
         ]
         self.assertTrue(handlers)
         for handler in handlers:

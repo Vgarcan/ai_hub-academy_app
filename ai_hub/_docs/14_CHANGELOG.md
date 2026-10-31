@@ -9,6 +9,22 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+#### RAG retrieval operationalization
+
+- Added governed, report-first corpus embedding coverage and execution through
+  `knowledge_embedding_index`; no provider call or vector write occurs without
+  `--execute`.
+- Added a default-off `search_knowledge_hybrid` system tool backed by the exact
+  semantic oracle, reciprocal-rank fusion and durable retrieval audit.
+- Added one retrieval embedding configuration per `ApplicationScope`, with
+  inactive/unconfigured scopes failing closed and no implicit configuration.
+- Kept the six existing lexical Knowledge tools unchanged and kept pgvector
+  HNSW shadow-only.
+- Added bounded hydrated excerpts, citations, changed-since-ranking protection
+  and indexed/searchable coverage without exposing scores or provider details.
+- Excluded the hybrid tool from GAME at both capability resolution and final
+  execution; the feature flag defaults to disabled.
+
 #### Foundation boundary closure
 
 - HTTP Tool redirects and protected approval/audit representations now share

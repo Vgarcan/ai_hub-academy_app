@@ -963,16 +963,19 @@ class MigrationContractTests(TestCase):
             / "migrations" / "0030_pgvector_ann_foundation.py"
         ).read_text(encoding="utf-8")
 
-    def test_the_current_leaf_is_the_pgvector_foundation(self):
+    def test_the_pgvector_foundation_is_the_only_0030(self):
+        """S-24 owns 0030. It no longer claims to be the leaf: a leaf assertion
+        belongs to the slice that owns the leaf, and S-28 added 0031/0032."""
         from django.db.migrations.loader import MigrationLoader
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
         migrations = sorted(
             name for app, name in loader.disk_migrations if app == "ai_hub"
         )
-        self.assertEqual(migrations[-1], "0030_pgvector_ann_foundation")
+        self.assertIn("0030_pgvector_ann_foundation", migrations)
         self.assertEqual(
-            len([name for name in migrations if name.startswith("0030")]), 1
+            [name for name in migrations if name.startswith("0030")],
+            ["0030_pgvector_ann_foundation"],
         )
 
     def test_the_parent_is_the_retrieval_audit_foundation(self):

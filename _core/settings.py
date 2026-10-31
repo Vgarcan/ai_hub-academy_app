@@ -131,7 +131,10 @@ AI_HUB_ALLOWED_TOOL_CALLABLES = tuple(
         "ai_hub.tools.knowledge.search_knowledge,"
         "ai_hub.tools.knowledge.read_knowledge_chunk,"
         "ai_hub.tools.knowledge.read_document_section,"
-        "ai_hub.tools.knowledge.cite_knowledge_source",
+        "ai_hub.tools.knowledge.cite_knowledge_source,"
+        # S-28. Allow-listed here but still gated by
+        # AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED and the scope configuration.
+        "ai_hub.tools.knowledge.search_knowledge_hybrid",
     ).split(",")
     if item.strip()
 )
@@ -186,6 +189,10 @@ if AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME not in {"resolved", "legacy_preexecute"}:
         "AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME must be 'resolved' or 'legacy_preexecute'."
     )
 AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED = _env_bool("AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", False)
+# S-28: offer Agents the audited hybrid Knowledge search tool. Off by default.
+# Even when on, an application scope without a retrieval embedding
+# configuration is never offered the tool, and GAME contexts never are.
+AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED = _env_bool("AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED", False)
 AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL = _env_int(
     "AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL",
     3,

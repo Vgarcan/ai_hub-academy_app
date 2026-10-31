@@ -746,6 +746,14 @@ class ApplicationScopeAdmin(AIHubListPageMixin, admin.ModelAdmin):
                 "can never be broader than the corpus setting above."
             ),
         },
+        "retrieval_embedding_model_config": {
+            "help": _(
+                "The embedding configuration this application's agents search with when "
+                "hybrid knowledge search is enabled. Leave empty for no semantic search. "
+                "Index the corpus first with `manage.py knowledge_embedding_index`; "
+                "provider grants and egress rules still apply to every search."
+            ),
+        },
     }
 
 

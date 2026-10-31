@@ -1767,15 +1767,20 @@ class SkipAccountingTests(TestCase):
 
 class NoMigrationTests(TestCase):
     def test_this_slice_adds_no_migration(self):
+        """S-25 persists nothing. Asserted by CONTENT, not by the leaf: the
+        leaf belongs to whichever later slice owns it (S-28 added 0031/0032)."""
         from django.db.migrations.loader import MigrationLoader
 
         loader = MigrationLoader(None, ignore_no_migrations=True)
         names = sorted(
             name for app, name in loader.disk_migrations if app == "ai_hub"
         )
-        self.assertEqual(names[-1], "0030_pgvector_ann_foundation")
         self.assertEqual(
-            [name for name in names if name.startswith("0031")], []
+            [
+                name for name in names
+                if any(word in name for word in ("evaluation", "promotion", "golden"))
+            ],
+            [],
         )
 
 

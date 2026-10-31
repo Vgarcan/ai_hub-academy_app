@@ -560,7 +560,13 @@ def execute_agent_deliberate(
         tool_run.save(update_fields=["started_at"])
         start = time.perf_counter()
         try:
-            tool_result = execute_tool(resolved_tool.tool, arguments, agent=agent)
+            tool_result = execute_tool(
+                resolved_tool.tool,
+                arguments,
+                agent=agent,
+                workspace=workspace,
+                execution_context=execution_context,
+            )
             tool_run.status = ToolExecutionRun.Status.SUCCESS
             tool_run.output_payload = tool_result
             prompt_observation = _bounded_tool_observation(tool_name, tool_result)
@@ -623,6 +629,7 @@ def _execute_legacy_tools(
     *,
     tool_policy: str,
     agent: AgentProfile,
+    workspace=None,
     execution_context=None,
 ) -> dict:
     if execution_context is None:
@@ -631,6 +638,8 @@ def _execute_legacy_tools(
             payload,
             policy=tool_policy,
             agent=agent,
+            workspace=workspace,
+            execution_context=execution_context,
         )
     if tool_policy not in {TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY}:
         raise ValidationError(f"Unknown tool execution policy '{tool_policy}'.")
@@ -661,7 +670,13 @@ def _execute_legacy_tools(
         tool_run.save(update_fields=["started_at"])
         start = time.perf_counter()
         try:
-            tool_result = execute_tool(tool, effective_payload, agent=agent)
+            tool_result = execute_tool(
+                tool,
+                effective_payload,
+                agent=agent,
+                workspace=workspace,
+                execution_context=execution_context,
+            )
         except Exception as exc:
             tool_run.status = ToolExecutionRun.Status.FAILED
             tool_run.error_detail = str(exc)
@@ -707,7 +722,11 @@ def execute_agent(
     direct_tool_ids = set(
         agent.tools.filter(is_active=True).values_list("pk", flat=True)
     )
-    resolution = resolve_agent_tools(agent, workspace=workspace)
+    resolution = resolve_agent_tools(
+        agent,
+        workspace=workspace,
+        execution_context=execution_context,
+    )
     executable_direct_tools = [
         resolved
         for resolved in resolution.tools
@@ -718,6 +737,7 @@ def execute_agent(
         payload,
         tool_policy=tool_policy,
         agent=agent,
+        workspace=workspace,
         execution_context=execution_context,
     )
 

@@ -334,6 +334,7 @@ AI_HUB_GAME_DELEGATION_ENABLED=False
 | `AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED` | `False` | Enables GAME actions linked to reusable `ToolDefinition` records. |
 | `AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME` | `resolved` | Selects the normal Orchestrator/GAME agent-call path. Allowed values: `resolved` and temporary `legacy_preexecute`. |
 | `AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED` | `False` | Compatibility switch for bounded eager document injection. Retrieval-first indexes and tools are the default. |
+| `AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED` | `False` | Offers the audited `search_knowledge_hybrid` tool to eligible non-GAME Agents. A configured scope and indexed corpus are also required. |
 | `AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL` | `3` | Caps deliberate tool-call loops per agent call. |
 | `AI_HUB_MAX_TOOL_OBSERVATION_CHARS` | `12000` | Caps each tool result copied into the model prompt; the complete result remains in `ToolExecutionRun`. |
 
@@ -343,6 +344,32 @@ kill-switch; it does not choose the normal agent-call runtime. A session-level
 rollback explicit and testable. Explicitly disable legacy eager knowledge when
 testing retrieval-first behavior; enable it only while migrating a caller that
 still depends on injected document bodies.
+
+### Hybrid Knowledge Search
+
+Hybrid retrieval is opt-in and fail-closed. To make it available to an Agent:
+
+1. Configure an active local embedding provider and `EmbeddingModelConfig`.
+2. Grant the Agent's `ApplicationScope` permission to use that provider.
+3. Select the configuration in
+   `ApplicationScope.retrieval_embedding_model_config`.
+4. Inspect coverage, then explicitly index the corpus:
+
+   ```text
+   python manage.py knowledge_embedding_index --scope <slug|id> --embedding-config <name|id>
+   python manage.py knowledge_embedding_index --scope <slug|id> --embedding-config <name|id> --execute
+   ```
+
+5. Set `AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED=True` and restart the runtime.
+
+The tool is offered only when the flag, scope configuration, provider and
+embedding configuration are active. Resolution and final execution both reject
+GAME contexts. If a deployment overrides `AI_HUB_ALLOWED_TOOL_CALLABLES`, it
+must include `ai_hub.tools.knowledge.search_knowledge_hybrid` explicitly.
+
+The current production route uses the exact reference semantic backend.
+PostgreSQL pgvector/HNSW exists only as a shadow evaluator backend and is never
+selected by this flag.
 
 ## Provider Health Check Policy
 

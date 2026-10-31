@@ -760,7 +760,16 @@ def _dispatch_unified_tool_action(
     )
     start = time.perf_counter()
     try:
-        result = execute_tool(tool, effective_payload, agent=agent)
+        result = execute_tool(
+            tool,
+            effective_payload,
+            agent=agent,
+            workspace=dispatch.workspace,
+            execution_context={
+                "session": dispatch.session,
+                "step_run": action_run.step_run,
+            },
+        )
     except Exception as exc:
         tool_run.status = ToolExecutionRun.Status.FAILED
         tool_run.error_detail = str(exc)

@@ -51,6 +51,20 @@ class ApplicationScope(models.Model):
     # permission AND can never be broader than the corpus permission - see the
     # constraint below, which is enforced in the database, not just in `clean`.
     allow_external_embedding_query_egress = models.BooleanField(default=False)
+    # --- Agent-facing semantic retrieval (S-28) ------------------------------
+    # The ONE vector space this application's Agents search in. A scope already
+    # owns the storage namespace of every vector and the egress policy, so one
+    # `e1` per application is one index of that application's Knowledge.
+    # NULL means "no semantic retrieval for this application": the hybrid
+    # search tool is then not offered to its Agents at all. Configuring this
+    # grants nothing - S-17 grants and egress still decide every provider call.
+    retrieval_embedding_model_config = models.ForeignKey(
+        "EmbeddingModelConfig",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="retrieval_scopes",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

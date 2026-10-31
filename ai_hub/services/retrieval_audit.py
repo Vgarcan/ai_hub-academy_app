@@ -448,6 +448,35 @@ def audited_hybrid_search_knowledge_local(
     # -- 2. AUTHORIZATION. Resolved EXACTLY ONCE, and never again -----------
     scope = resolve_effective_knowledge_scope(agent, workspace=workspace)
 
+    return _audited_hybrid_search_with_scope(
+        scope,
+        query=query,
+        embedding_model_config=embedding_model_config,
+        collection_id=collection_id,
+        limit=limit,
+    )
+
+
+def _audited_hybrid_search_with_scope(
+    scope,
+    *,
+    query,
+    embedding_model_config,
+    collection_id=None,
+    limit=5,
+) -> AuditedHybridRetrievalResult:
+    """Steps 3-7 of the audited operation, inside an ALREADY-RESOLVED scope.
+
+    INTERNAL. Exists so a caller that must do more with the same authorization
+    answer - S-28 hydrates the returned chunks - can hold ONE
+    `EffectiveKnowledgeScope` for the whole user-visible operation instead of
+    resolving a second one. It never resolves a scope itself.
+
+    Re-runs the caller-only validation, which is pure, so a direct internal
+    caller cannot skip it.
+    """
+    validate_hybrid_request(query=query, limit=limit)
+
     # -- 3. is there a trusted namespace to scope evidence to? --------------
     if scope.application_scope_id is None or scope.agent_id is None:
         # S-15's canonical DENY_ALL. There is no namespace this evidence could

@@ -173,6 +173,9 @@ Delivered:
 - Exact semantic retrieval, governed hybrid fusion and reference-first audit.
 - A default-off, non-GAME `search_knowledge_hybrid` Agent capability.
 - A PostgreSQL pgvector/HNSW shadow backend and golden-query evaluation gate.
+- A report-first controlled retrieval-quality harness
+  (`knowledge_retrieval_evaluate`) with a versioned candidate suite and a
+  representative-evidence protocol for data owners.
 
 Still recommended:
 

@@ -24,6 +24,14 @@ Host-project features should be documented in the host project, not here.
   and indexed/searchable coverage without exposing scores or provider details.
 - Excluded the hybrid tool from GAME at both capability resolution and final
   execution; the feature flag defaults to disabled.
+- Added the report-first `knowledge_retrieval_evaluate` operator command and
+  the versioned `s29-policy-candidate-v1` controlled suite. Execution compares
+  lexical and hybrid ranking with content-free metrics and persists nothing.
+- Evaluation fails closed on target drift during a run
+  (`suite_snapshot_changed`), on oversized suite files (`suite_too_large`) and
+  on any degraded hybrid case (`hybrid_degraded`), so a lexical fallback can
+  never be reported as hybrid evidence. No-answer cases report false positives
+  instead of relevance metrics.
 
 #### Foundation boundary closure
 

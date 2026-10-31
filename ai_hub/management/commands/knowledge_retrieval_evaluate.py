@@ -65,8 +65,16 @@ class Command(BaseCommand):
             return
         for path in ("lexical", "hybrid"):
             metrics = payload["metrics"][path]
+            hits = ", ".join(
+                f"@{k}={count}" for k, count in metrics["hit_at_k_count"].items()
+            )
+            false_positives = ", ".join(
+                f"@{k}={count}"
+                for k, count in metrics["no_answer_false_positive_at_k_count"].items()
+            )
             self.stdout.write(
                 f"  {path}: top1={metrics['top1_count']}/{metrics['answerable_cases']}; "
-                f"MRR={metrics['mean_reciprocal_rank']:.4f}; "
-                f"no-answer empty={metrics['no_answer_empty_count']}/{metrics['no_answer_cases']}"
+                f"MRR={metrics['mean_reciprocal_rank']:.4f}; hit {hits}; "
+                f"no-answer empty={metrics['no_answer_empty_count']}/{metrics['no_answer_cases']}; "
+                f"no-answer false positives {false_positives}"
             )

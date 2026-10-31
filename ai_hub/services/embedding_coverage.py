@@ -190,7 +190,9 @@ def _lookup(model, ref, *, text_field, category, label):
     text = str(ref if ref is not None else "").strip()
     if not text:
         raise IndexTargetError(category, f"A {label} is required.")
-    lookup = {"pk": int(text)} if text.isdigit() else {text_field: text}
+    # ``isdecimal`` rather than ``isdigit``: superscripts are digits that
+    # ``int()`` rejects, which would escape as an unbounded traceback.
+    lookup = {"pk": int(text)} if text.isdecimal() else {text_field: text}
     try:
         return model.objects.get(**lookup)
     except model.DoesNotExist as exc:

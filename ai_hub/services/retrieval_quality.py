@@ -284,7 +284,9 @@ def resolve_agent(agent_ref) -> AgentProfile:
     text = str(agent_ref if agent_ref is not None else "").strip()
     if not text:
         raise RetrievalQualityError("agent_required")
-    lookup = {"pk": int(text)} if text.isdigit() else {"name": text}
+    # ``isdecimal`` rather than ``isdigit``: superscripts are digits that
+    # ``int()`` rejects, which would escape as an unbounded traceback.
+    lookup = {"pk": int(text)} if text.isdecimal() else {"name": text}
     try:
         return AgentProfile.objects.select_related(
             "application_scope", "application_scope__retrieval_embedding_model_config",
@@ -563,6 +565,12 @@ def execute_suite(preflight: RetrievalQualityPreflight) -> dict:
             limit=suite.limit,
             target_ids=(preflight.collection.pk,),
         ).result
+        if hybrid.degraded:
+            # A degraded operation is governed hybrid's lexical fallback, not a
+            # hybrid measurement.  Aggregating it would publish lexical ranks as
+            # hybrid evidence, so the whole run fails closed and stops before
+            # dispatching further queries.
+            raise RetrievalQualityError("hybrid_degraded")
         hybrid_ids = [match.chunk_id for match in hybrid.matches]
         item = {
             "case_id": case.case_id,

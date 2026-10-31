@@ -14,11 +14,13 @@ retrieval. Historical design notes are not an operational source of truth.
 - A live operator-controlled Ollama endpoint was revalidated with
   `bge-m3:latest`: 1,024 dimensions and the declared L2-normalized contract.
   Endpoint-specific details remain outside versioned documentation.
-- **Current work:** S-29 now has a versioned controlled-candidate corpus and a
-  report-first evaluation harness. S-30 supplies the representative-evidence
-  protocol; the private corpus and independent judgments are still required.
-  No lexical behavior, no-answer threshold or ANN routing change is authorized
-  by this checkpoint.
+- S-29 (controlled harness), S-30 (representative-evidence protocol), S-31
+  (audit) and S-32 (evaluation integrity) are merged to `main`. S-33 below
+  records the post-S-32 live revalidation and one further fail-closed fix.
+- **Current work:** the controlled baseline is reproduced and stable. The
+  blocking input is now external: an independently adjudicated representative
+  package from a data owner, following the S-30 protocol. No lexical behavior,
+  no-answer threshold or ANN routing change is authorized by this checkpoint.
 
 ## S-29 Controlled Live Baseline — 2026-10-31
 
@@ -146,6 +148,59 @@ S-32 does **not** establish an abstention policy: the existing controlled run
 remains 0/5 correctly empty. It also does not create a representative-data
 adapter or constitute ANN-promotion evidence.
 
+## S-33 Post-S-32 Audit and Live Revalidation — 2026-10-31
+
+The controlled suite was re-run after S-32 against a quiescent, freshly
+provisioned target (isolated database, live local Ollama, `bge-m3:latest`,
+10/10 current vectors). It reproduced the S-29 checkpoint exactly, so the
+S-32 integrity changes did not alter ranking:
+
+| Metric | Lexical | Hybrid |
+| --- | ---: | ---: |
+| Top-1 correct, answerable cases | 8/15 | 13/15 |
+| Hit@3 / Hit@5, answerable cases | 11/15, 14/15 | 14/15, 15/15 |
+| Mean reciprocal rank | 0.6656 | 0.9022 |
+| Correctly empty, no-answer cases | 0/5 | 0/5 |
+| No-answer false positives @1 / @3 / @5 | 5 / 13 / 21 | 5 / 15 / 25 |
+
+This is the stable controlled regression baseline. It remains
+`controlled_candidate` evidence only.
+
+**Fixed — degraded hybrid reported as hybrid evidence (high).** With the
+embedding provider unreachable, governed hybrid retrieval correctly degrades to
+its lexical ranking, but the harness aggregated those cases as hybrid metrics
+and exited successfully: the live run printed hybrid `8/15, MRR 0.6656`,
+identical to lexical. Execution now fails closed with `hybrid_degraded` on the
+first degraded case, emits no aggregate and dispatches no further query.
+
+**Fixed — operator references (low).** Agent, scope and configuration
+references made of non-decimal Unicode digits (for example `²`) raised an
+unbounded `ValueError`; they are now treated as names and refused with the
+bounded not-found category. The human-readable report also shows Hit@k and
+no-answer false positives, matching the published tables.
+
+**Live Agent observations** (non-GAME Agent, hybrid flag enabled, local
+`qwen3.5:9b`; candidate observations, not evidence):
+
+- Two answerable paraphrases were answered correctly with citations after one
+  `search_knowledge_hybrid` call each.
+- For a near-topic no-answer question the model abstained correctly after
+  reading the closest document. For another, it repeated hybrid searches until
+  `max_tool_rounds`: every search returns a full result page, so nothing tells
+  the model the corpus cannot answer.
+- The model invented a `collection_id` from a collection *name*: neither
+  `search_knowledge` nor `search_knowledge_hybrid` results carry the id that
+  their own filters and `browse_knowledge_index` accept. The unauthorized id
+  correctly yielded an empty index without confirming existence.
+- Tool output exposed no provider, model, `e1`, endpoint, score or run id; all
+  eight searches were recorded as completed `RetrievalRun`s.
+
+**Measured lexical defects (for the ADR-N7 decision, not changed here).**
+Query tokens keep trailing punctuation and there is no stop-word handling.
+`What is forbidden by SEC-USB?` never retrieves the `SEC-USB` document
+lexically (the token is `sec-usb?`); without the question mark it ranks 4th,
+behind documents matched only by substrings of `is` and `what`.
+
 ## Shipped
 
 - Governed Knowledge lifecycle, explicit collection attachment and
@@ -211,9 +266,9 @@ Before broad production enablement:
    package following
    [`RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md`](RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md),
    including noisy natural language and cross-scope isolation attempts.
-2. Re-run the controlled suite after S-32 in a quiescent target and retain its
-   content-free report as a stable regression baseline; it remains controlled
-   candidate evidence only.
+2. Done in S-33: the post-S-32 controlled rerun reproduced the baseline and is
+   retained as the regression baseline. Re-run it after any retrieval change;
+   it remains controlled candidate evidence only.
 3. Measure exact/hybrid/ANN behavior with the existing golden-query evaluator.
 4. Decide lexical semantics and no-answer thresholds from those results.
 5. Re-run the evaluation after any lexical change.

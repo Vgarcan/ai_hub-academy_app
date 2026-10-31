@@ -23,6 +23,7 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 15. [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md) - canonical CURRENT / LEGACY / TARGET / NOT IMPLEMENTED runtime status.
 16. [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) - Build Console wizard: step-by-step guide for the guided GAME and Orchestrator creation wizard.
 17. [`RAG_RETRIEVAL_STATUS.md`](RAG_RETRIEVAL_STATUS.md) - shipped RAG retrieval capabilities, activation steps, boundaries, and next evidence gates.
+18. [`RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md`](RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md) - private-corpus handoff and independent-adjudication requirements before representative retrieval evidence.
 
 ## Current Product Shape
 

@@ -15,9 +15,10 @@ retrieval. Historical design notes are not an operational source of truth.
   `bge-m3:latest`: 1,024 dimensions and the declared L2-normalized contract.
   Endpoint-specific details remain outside versioned documentation.
 - **Current work:** S-29 now has a versioned controlled-candidate corpus and a
-  report-first evaluation harness. Representative evidence still requires an
-  independently adjudicated corpus. No lexical behavior, no-answer threshold
-  or ANN routing change is authorized by this checkpoint.
+  report-first evaluation harness. S-30 supplies the representative-evidence
+  protocol; the private corpus and independent judgments are still required.
+  No lexical behavior, no-answer threshold or ANN routing change is authorized
+  by this checkpoint.
 
 ## S-29 Controlled Live Baseline — 2026-10-31
 
@@ -141,9 +142,10 @@ to the model.
 
 Before broad production enablement:
 
-1. Replace controlled-candidate evidence with an independently adjudicated,
-   representative corpus including noisy natural language and cross-scope
-   isolation attempts.
+1. Have the data owner prepare an independently adjudicated representative
+   package following
+   [`RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md`](RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md),
+   including noisy natural language and cross-scope isolation attempts.
 2. Measure exact/hybrid/ANN behavior with the existing golden-query evaluator.
 3. Decide lexical semantics and no-answer thresholds from those results.
 4. Re-run the evaluation after any lexical change.

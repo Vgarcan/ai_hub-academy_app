@@ -1,0 +1,193 @@
+{
+  "schema_version": "retrieval-quality1",
+  "suite_id": "s29-policy-candidate-v1",
+  "evidence_class": "controlled_candidate",
+  "key_metadata_field": "evaluation_key",
+  "target_collection_name": "S29 Representative Candidate Policies",
+  "limit": 5,
+  "cutoffs": [1, 3, 5],
+  "documents": [
+    {
+      "key": "expense",
+      "title": "Expense reimbursement policy",
+      "content": "EXP-30. Employees must submit business travel expense claims within 30 calendar days after returning. Itemized receipts are required for hotels, rail, airfare and meals. Claims are filed in the finance portal; approved reimbursements are paid in the next payroll cycle.",
+      "tags": ["expense", "policy", "s29"]
+    },
+    {
+      "key": "leave",
+      "title": "Annual leave policy",
+      "content": "LEAVE-14. Employees request annual leave in the HR portal at least fourteen days before the first day away. Managers approve according to team coverage. Unused entitlement follows the published carry-over limit.",
+      "tags": ["leave", "policy", "s29"]
+    },
+    {
+      "key": "password",
+      "title": "Password reset procedure",
+      "content": "PASS-SELF. Use the self-service identity portal to reset a forgotten password. If multi-factor verification is unavailable, contact the IT service desk and verify your employee identity. Never ask a colleague to share credentials.",
+      "tags": ["password", "policy", "s29"]
+    },
+    {
+      "key": "incident",
+      "title": "Customer incident response",
+      "content": "INC-P1. For a customer-facing outage or severe production degradation, call the incident hotline immediately, open a priority-one incident and notify the on-call incident commander. Do not wait for the next business day.",
+      "tags": ["incident", "policy", "s29"]
+    },
+    {
+      "key": "data",
+      "title": "Removable media and customer data",
+      "content": "SEC-USB. Customer files, exports and personal data must not be copied to USB drives or other removable media. Use the approved encrypted collaboration service and report accidental transfers to Security.",
+      "tags": ["data", "policy", "s29"]
+    },
+    {
+      "key": "equipment",
+      "title": "Work equipment requests",
+      "content": "EQUIP-REQ. Request laptops, monitors, headsets and ergonomic accessories through the procurement catalogue. A manager must approve non-standard equipment before the order is placed.",
+      "tags": ["equipment", "policy", "s29"]
+    },
+    {
+      "key": "remote",
+      "title": "Remote working policy",
+      "content": "REMOTE-3. Eligible employees may work remotely up to three days per week with manager agreement. The team calendar must show remote days, and confidential calls require a private location.",
+      "tags": ["remote", "policy", "s29"]
+    },
+    {
+      "key": "parental",
+      "title": "Parental leave guidance",
+      "content": "FAMILY-LEAVE. Employees expecting a child or adopting should contact People Operations to plan statutory and enhanced parental leave. Notice dates and pay options depend on the expected placement or birth date.",
+      "tags": ["parental", "policy", "s29"]
+    },
+    {
+      "key": "procurement",
+      "title": "Software and vendor purchasing",
+      "content": "BUY-SOFT. New software subscriptions and vendor purchases require a procurement request, security review and budget-owner approval before accepting terms or entering payment details.",
+      "tags": ["procurement", "policy", "s29"]
+    },
+    {
+      "key": "phishing",
+      "title": "Phishing and suspicious messages",
+      "content": "PHISH-REPORT. Do not open links or attachments in a suspicious message asking for credentials or payment. Use the mail client's Report Phishing button, then contact Security if any information was entered.",
+      "tags": ["phishing", "policy", "s29"]
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "a01-expense-code",
+      "query_class": "answerable",
+      "query": "What does EXP-30 require?",
+      "judgments": [{"document_key": "expense", "grade": 3}]
+    },
+    {
+      "case_id": "a02-expense-paraphrase",
+      "query_class": "answerable",
+      "query": "How soon after returning from a work trip must I claim costs?",
+      "judgments": [{"document_key": "expense", "grade": 3}]
+    },
+    {
+      "case_id": "a03-leave-notice",
+      "query_class": "answerable",
+      "query": "How far in advance should annual leave be requested?",
+      "judgments": [{"document_key": "leave", "grade": 3}]
+    },
+    {
+      "case_id": "a04-password-code",
+      "query_class": "answerable",
+      "query": "Where is the PASS-SELF process described?",
+      "judgments": [{"document_key": "password", "grade": 3}]
+    },
+    {
+      "case_id": "a05-password-paraphrase",
+      "query_class": "answerable",
+      "query": "I forgot my login secret and cannot use the second verification factor. What should I do?",
+      "judgments": [{"document_key": "password", "grade": 3}]
+    },
+    {
+      "case_id": "a06-incident-outage",
+      "query_class": "answerable",
+      "query": "What is the immediate response to a severe customer-facing outage?",
+      "judgments": [{"document_key": "incident", "grade": 3}]
+    },
+    {
+      "case_id": "a07-data-removable",
+      "query_class": "answerable",
+      "query": "May I move a customer export onto a thumb drive?",
+      "judgments": [{"document_key": "data", "grade": 3}]
+    },
+    {
+      "case_id": "a08-equipment-monitor",
+      "query_class": "answerable",
+      "query": "How do I order a non-standard monitor for work?",
+      "judgments": [{"document_key": "equipment", "grade": 3}]
+    },
+    {
+      "case_id": "a09-remote-days",
+      "query_class": "answerable",
+      "query": "How many days each week may an eligible employee work away from the office?",
+      "judgments": [{"document_key": "remote", "grade": 3}]
+    },
+    {
+      "case_id": "a10-parental-paraphrase",
+      "query_class": "answerable",
+      "query": "Who should I speak to about time off and pay when expecting a new baby?",
+      "judgments": [{"document_key": "parental", "grade": 3}]
+    },
+    {
+      "case_id": "a11-software-buy",
+      "query_class": "answerable",
+      "query": "Which approvals are needed before buying a new software subscription?",
+      "judgments": [{"document_key": "procurement", "grade": 3}]
+    },
+    {
+      "case_id": "a12-phishing-link",
+      "query_class": "answerable",
+      "query": "What should I do with a suspicious email link asking for credentials?",
+      "judgments": [{"document_key": "phishing", "grade": 3}]
+    },
+    {
+      "case_id": "a13-data-code",
+      "query_class": "answerable",
+      "query": "What is forbidden by SEC-USB?",
+      "judgments": [{"document_key": "data", "grade": 3}]
+    },
+    {
+      "case_id": "a14-incident-code",
+      "query_class": "answerable",
+      "query": "Explain the INC-P1 escalation.",
+      "judgments": [{"document_key": "incident", "grade": 3}]
+    },
+    {
+      "case_id": "a15-expense-receipts",
+      "query_class": "answerable",
+      "query": "Are itemized hotel and rail receipts needed for reimbursement?",
+      "judgments": [{"document_key": "expense", "grade": 3}]
+    },
+    {
+      "case_id": "n01-dress-code",
+      "query_class": "no_answer",
+      "query": "What is the company dress code policy?",
+      "judgments": []
+    },
+    {
+      "case_id": "n02-company-car",
+      "query_class": "no_answer",
+      "query": "How do I reserve a company car?",
+      "judgments": []
+    },
+    {
+      "case_id": "n03-cafeteria",
+      "query_class": "no_answer",
+      "query": "What is on the cafeteria lunch menu?",
+      "judgments": []
+    },
+    {
+      "case_id": "n04-gym-fees",
+      "query_class": "no_answer",
+      "query": "Can I claim gym membership fees?",
+      "judgments": []
+    },
+    {
+      "case_id": "n05-public-holidays",
+      "query_class": "no_answer",
+      "query": "Which public holidays are the offices closed?",
+      "judgments": []
+    }
+  ]
+}

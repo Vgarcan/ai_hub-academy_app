@@ -3,6 +3,83 @@
 This is the concise, versioned status reference for reusable Core RAG
 retrieval. Historical design notes are not an operational source of truth.
 
+## Current Checkpoint — 2026-10-31
+
+- S-28 Agent-facing hybrid Knowledge search is merged to `main` at `b91aa7c`
+  through PR #15.
+- CI #61 passed SQLite on Django 5.2 LTS, SQLite on current Django, and
+  PostgreSQL 16 with pgvector 0.8.6.
+- The default remains safe: hybrid Agent search is disabled until an operator
+  enables the flag and configures a scope.
+- A live operator-controlled Ollama endpoint was revalidated with
+  `bge-m3:latest`: 1,024 dimensions and the declared L2-normalized contract.
+  Endpoint-specific details remain outside versioned documentation.
+- **Current work:** S-29 now has a versioned controlled-candidate corpus and a
+  report-first evaluation harness. Representative evidence still requires an
+  independently adjudicated corpus. No lexical behavior, no-answer threshold
+  or ANN routing change is authorized by this checkpoint.
+
+## S-29 Controlled Live Baseline — 2026-10-31
+
+This is **controlled candidate evidence**, not representative evidence. It used
+10 synthetic but policy-shaped documents, 15 judged answerable queries and 5
+explicit no-answer queries against live `bge-m3:latest`. All 10 chunks were
+current under one application scope and one 1,024-dimensional cosine/L2
+contract.
+
+| Metric | Lexical | Hybrid |
+| --- | ---: | ---: |
+| Top-1 correct, answerable cases | 7/15 | 11/15 |
+| Hit@3, answerable cases | 12/15 | 13/15 |
+| Hit@5, answerable cases | 13/15 | 14/15 |
+| Mean reciprocal rank | 0.6244 | 0.8022 |
+| Correctly empty, no-answer cases | 0/5 | 0/5 |
+
+This initial ad-hoc result supports continuing hybrid evaluation: ranking improved materially,
+especially for paraphrased travel expense and removable-media questions. It
+also proves that broad production enablement would be premature: neither path
+has an abstention policy, and both returned a full result page for every
+no-answer query. The versioned checkpoint below supersedes this run as the
+reproducible controlled baseline; independent adjudication is still pending.
+
+## S-29 Reproducible Controlled Checkpoint — 2026-10-31
+
+The repository now includes `s29-policy-candidate-v1`, an exact 10-document,
+20-case suite whose evidence class is fixed to `controlled_candidate`. The
+operator command validates suite schema, Agent authorization, exact corpus
+identity and complete current-vector coverage before it can dispatch a query.
+Report mode is the default and performs no provider call or write; execute mode
+uses the existing governed lexical and hybrid services and persists no
+evaluation data.
+
+The first live execution against `bge-m3:latest` produced:
+
+| Metric | Lexical | Hybrid |
+| --- | ---: | ---: |
+| Top-1 correct, answerable cases | 8/15 | 13/15 |
+| Hit@3, answerable cases | 11/15 | 14/15 |
+| Hit@5, answerable cases | 14/15 | 15/15 |
+| Mean reciprocal rank | 0.6656 | 0.9022 |
+| Correctly empty, no-answer cases | 0/5 | 0/5 |
+
+All hybrid cases completed without degradation. The ranking evidence favors
+hybrid retrieval on this controlled suite, but the no-answer result is a hard
+warning: retrieval currently ranks candidates, it does not establish that the
+corpus can answer. These 20 cases do not justify a relevance threshold or broad
+production activation.
+
+Reproduce the checkpoint after provisioning the exact suite corpus and its
+current embeddings:
+
+```text
+python manage.py knowledge_retrieval_evaluate --suite ai_hub/evaluation_corpora/s29_policy_candidate_v1.json --agent <name|id>
+python manage.py knowledge_retrieval_evaluate --suite ai_hub/evaluation_corpora/s29_policy_candidate_v1.json --agent <name|id> --execute --json
+```
+
+Local verification after adding the harness: 2,192 tests passed on the current
+Django line, with 111 environment-specific tests skipped; system checks and the
+missing-migration check also passed.
+
 ## Shipped
 
 - Governed Knowledge lifecycle, explicit collection attachment and
@@ -19,6 +96,8 @@ retrieval. Historical design notes are not an operational source of truth.
 - PostgreSQL pgvector/HNSW provisioning, rebuild and evaluation as a shadow
   backend.
 - Golden-query evaluation and a fail-closed promotion decision contract.
+- Versioned, report-first controlled retrieval-quality evaluation through
+  `knowledge_retrieval_evaluate`.
 
 ## Activation Contract
 
@@ -62,9 +141,9 @@ to the model.
 
 Before broad production enablement:
 
-1. Build a versioned, representative judged corpus including semantic
-   paraphrases, exact identifiers, noisy natural language, no-answer cases and
-   cross-scope isolation attempts.
+1. Replace controlled-candidate evidence with an independently adjudicated,
+   representative corpus including noisy natural language and cross-scope
+   isolation attempts.
 2. Measure exact/hybrid/ANN behavior with the existing golden-query evaluator.
 3. Decide lexical semantics and no-answer thresholds from those results.
 4. Re-run the evaluation after any lexical change.

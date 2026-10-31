@@ -48,6 +48,11 @@ MAX_DOCUMENTS = 200
 MAX_CASES = 500
 MAX_QUERY_CHARS = 1000
 MAX_CONTENT_CHARS = 50_000
+# The declared schema can contain 200 maximum-size UTF-8 documents (up to four
+# bytes per character), tags and 500 maximum-size queries.  Keep a bounded
+# read just above that valid worst case; never ask ``read()`` for an unbounded
+# local operator file before its JSON shape is known.
+MAX_SUITE_BYTES = 48 * 1024 * 1024
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 
 
@@ -262,8 +267,15 @@ def suite_from_dict(payload) -> RetrievalQualitySuite:
 
 def load_suite(path) -> RetrievalQualitySuite:
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        with Path(path).open("rb") as source:
+            raw = source.read(MAX_SUITE_BYTES + 1)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RetrievalQualityError("suite_unreadable") from exc
+    if len(raw) > MAX_SUITE_BYTES:
+        raise RetrievalQualityError("suite_too_large")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise RetrievalQualityError("suite_unreadable") from exc
     return suite_from_dict(payload)
 
@@ -378,6 +390,62 @@ def preflight_as_dict(preflight: RetrievalQualityPreflight) -> dict:
     }
 
 
+def _execution_snapshot(preflight: RetrievalQualityPreflight):
+    """Comparable, content-free facts that must not drift during execution.
+
+    Corpus text is checked afresh by ``preflight_suite()`` against the immutable
+    suite specification.  This snapshot adds the exact target, authorization,
+    embedding contract and coverage facts whose identities alone are not enough
+    to establish a coherent multi-case run.
+    """
+    config = preflight.embedding_model_config
+    provider = config.provider
+    coverage = preflight.coverage
+    return (
+        preflight.agent.pk,
+        preflight.scope.application_scope_id,
+        tuple(sorted(preflight.scope.collection_ids)),
+        preflight.collection.pk,
+        tuple(sorted(preflight.key_to_chunk_id.items())),
+        (
+            config.pk,
+            config.provider_id,
+            config.is_active,
+            config.model_name,
+            config.model_revision,
+            config.vector_dimension,
+            config.distance_metric,
+            config.normalization,
+            config.max_input_chars,
+            config.request_timeout_seconds,
+            provider.is_active,
+            provider.provider_type,
+            provider.base_url,
+            provider.api_key_env_var,
+            provider.declared_locality,
+            provider.default_timeout,
+        ),
+        coverage.preconditions,
+        coverage.chunks,
+    )
+
+
+def _assert_execution_snapshot_unchanged(preflight: RetrievalQualityPreflight):
+    """Fail closed if a suite target is no longer the one preflighted.
+
+    This intentionally creates a fresh preflight rather than refreshing the
+    caller's object: accepting a new state mid-run would turn one report into
+    evidence over several corpora.  It is called before dispatch and after all
+    cases, so a changed target produces no aggregate result.
+    """
+    try:
+        current = preflight_suite(preflight.suite, preflight.agent.pk)
+    except RetrievalQualityError as exc:
+        raise RetrievalQualityError("suite_snapshot_changed") from exc
+    if _execution_snapshot(current) != _execution_snapshot(preflight):
+        raise RetrievalQualityError("suite_snapshot_changed")
+
+
 def _first_relevant_rank(ranked_ids, judgments):
     for rank, chunk_id in enumerate(ranked_ids, start=1):
         if is_relevant(judgments.get(chunk_id, 0)):
@@ -386,6 +454,21 @@ def _first_relevant_rank(ranked_ids, judgments):
 
 
 def _path_case(ranked_ids, judgments, cutoffs):
+    if not judgments:
+        return {
+            "returned_count": len(ranked_ids),
+            "no_answer": {
+                "empty": not ranked_ids,
+                "false_positive_count": len(ranked_ids),
+                "cutoffs": {
+                    str(k): {
+                        "empty": not ranked_ids[:k],
+                        "false_positive_count": len(ranked_ids[:k]),
+                    }
+                    for k in cutoffs
+                },
+            },
+        }
     return {
         "returned_count": len(ranked_ids),
         "first_relevant_rank": _first_relevant_rank(ranked_ids, judgments),
@@ -439,6 +522,16 @@ def _aggregate(case_results, path, cutoffs):
         },
         "no_answer_cases": len(no_answer),
         "no_answer_empty_count": sum(case[path]["returned_count"] == 0 for case in no_answer),
+        "no_answer_false_positive_count": sum(
+            case[path]["no_answer"]["false_positive_count"] for case in no_answer
+        ),
+        "no_answer_false_positive_at_k_count": {
+            str(k): sum(
+                case[path]["no_answer"]["cutoffs"][str(k)]["false_positive_count"]
+                for case in no_answer
+            )
+            for k in cutoffs
+        },
     }
 
 
@@ -446,6 +539,7 @@ def execute_suite(preflight: RetrievalQualityPreflight) -> dict:
     """Run both retrieval paths.  No database writes occur in this service."""
     if not preflight.ready:
         raise RetrievalQualityError("preflight_not_ready")
+    _assert_execution_snapshot_unchanged(preflight)
     suite = preflight.suite
     key_to_id = preflight.key_to_chunk_id
     case_results = []
@@ -479,6 +573,8 @@ def execute_suite(preflight: RetrievalQualityPreflight) -> dict:
             "hybrid_degraded": hybrid.degraded,
         }
         case_results.append(item)
+
+    _assert_execution_snapshot_unchanged(preflight)
 
     payload = preflight_as_dict(preflight)
     payload["executed"] = True

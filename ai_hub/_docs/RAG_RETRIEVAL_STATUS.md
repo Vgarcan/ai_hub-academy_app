@@ -81,6 +81,45 @@ Local verification after adding the harness: 2,192 tests passed on the current
 Django line, with 111 environment-specific tests skipped; system checks and the
 missing-migration check also passed.
 
+## S-31 Audit Findings — 2026-10-31
+
+This is a read-only code audit of the S-29/S-30 evaluation path. It found no
+write call in `retrieval_quality` or its management command, and no examined
+authorization widening. The following findings remain open; none changes
+runtime retrieval behavior today.
+
+1. **High — suite-wide snapshot drift:** S-29 validates corpus identity and
+   vector coverage once before execution, but it does not compare a frozen
+   target/configuration snapshot before and after all cases. A mutation between
+   two cases can therefore produce an aggregate over more than one corpus or
+   retrieval configuration. Treat a run as valid only while the target is
+   quiescent. The next implementation must capture and compare target `k1`,
+   `e1`, scope configuration and authorization facts, then fail closed on any
+   change.
+2. **High — no-answer case metrics are misleading at case level:** the shared
+   relevance conventions define Recall and NDCG as `1.0` where no relevant
+   target exists. S-29 exposes those values per no-answer case even when the
+   path returned candidates. Its aggregate correctly reports
+   `no_answer_empty_count`, but no consumer may use the per-case Recall/NDCG
+   values to assess abstention. The next change should omit undefined relevance
+   metrics for no-answer cases and report an explicit false-positive shape.
+3. **High — no-answer policy is still absent:** controlled live evidence was
+   0/5 correctly empty for both lexical and hybrid. No threshold, reranker or
+   evidence-sufficiency rule may be activated from the current evidence.
+4. **Medium — unbounded raw suite file read:** schema limits apply after
+   `load_suite()` has read and decoded the entire JSON file. Add a conservative
+   byte ceiling before parsing so a malformed local operator file cannot cause
+   avoidable memory pressure.
+5. **Medium — representative adapter remains deliberately unimplemented:** the
+   S-30 protocol specifies a private package, but S-29 accepts only controlled
+   synthetic suites and cannot yield representative or ANN-promotion evidence.
+   Build a separate report-first adapter after the data owner supplies a valid
+   package; do not widen S-29 by relabelling its evidence class.
+
+The remediation order is snapshot integrity, no-answer metric semantics,
+input-size bound, then the representative adapter. Re-run the controlled suite
+and the full matrix after each implementation change.
+
 ## Shipped
 
 - Governed Knowledge lifecycle, explicit collection attachment and
@@ -146,11 +185,13 @@ Before broad production enablement:
    package following
    [`RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md`](RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md),
    including noisy natural language and cross-scope isolation attempts.
-2. Measure exact/hybrid/ANN behavior with the existing golden-query evaluator.
-3. Decide lexical semantics and no-answer thresholds from those results.
-4. Re-run the evaluation after any lexical change.
-5. Promote an ANN backend only through a separate reviewed runtime decision.
-6. Add a retrieved-content trust boundary and complete GAME/Path 1 convergence
+2. Repair S-31 snapshot and no-answer-metric findings before treating a
+   controlled run as a stable regression baseline.
+3. Measure exact/hybrid/ANN behavior with the existing golden-query evaluator.
+4. Decide lexical semantics and no-answer thresholds from those results.
+5. Re-run the evaluation after any lexical change.
+6. Promote an ANN backend only through a separate reviewed runtime decision.
+7. Add a retrieved-content trust boundary and complete GAME/Path 1 convergence
    before making hybrid retrieval a universal default.
 
 ## Verification

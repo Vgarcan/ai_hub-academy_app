@@ -16,10 +16,14 @@ from contextlib import nullcontext
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from academy.services.scope_bootstrap import SETTING_NAME, resolve_seed_scope
+from academy.services.scope_bootstrap import (
+    LAB_EVALUATOR_AGENT_NAME,
+    SETTING_NAME,
+    resolve_seed_scope,
+)
 from ai_hub.models import AgentProfile, ModelConfig, ProviderConfig
 
-EVALUATOR_NAME = "Lab Exercise Evaluator"
+EVALUATOR_NAME = LAB_EVALUATOR_AGENT_NAME
 EVALUATOR_ROLE = "Evaluates student answers for Academy Lab exercises. Do not modify the system prompt."
 
 

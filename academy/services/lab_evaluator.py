@@ -61,10 +61,37 @@ def evaluate_lab_answer(*, exercise, user_input: str, user=None) -> dict:
         from ai_hub.models import AgentProfile, ExecutionSession
         from ai_hub.services.execution_runner import run_execution_session
 
-        agent = AgentProfile.objects.filter(
-            name="Lab Exercise Evaluator",
-            is_active=True,
-        ).first()
+        from academy.services.scope_bootstrap import (
+            LAB_EVALUATOR_AGENT_NAME,
+            active_academy_scope,
+        )
+
+        # Agent names are globally unique, so a name match alone could select
+        # ANOTHER application's agent and hand it the student's answer. Only an
+        # active evaluator owned by Academy's explicitly configured scope may
+        # run; anything else degrades to the `pending` result below, before any
+        # session exists.
+        agent = None
+        scope = active_academy_scope()
+        if scope is None:
+            logger.warning(
+                "Lab evaluation skipped: Academy's ApplicationScope is missing, "
+                "inactive or misconfigured."
+            )
+        else:
+            agent = AgentProfile.objects.filter(
+                name=LAB_EVALUATOR_AGENT_NAME,
+                application_scope=scope,
+                is_active=True,
+            ).first()
+            if agent is None and AgentProfile.objects.filter(
+                name=LAB_EVALUATOR_AGENT_NAME, is_active=True
+            ).exists():
+                logger.warning(
+                    "Lab evaluation skipped: an active '%s' agent exists outside "
+                    "Academy's scope and is not used.",
+                    LAB_EVALUATOR_AGENT_NAME,
+                )
 
         if agent:
             session = ExecutionSession.objects.create(

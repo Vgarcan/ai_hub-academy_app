@@ -179,6 +179,8 @@ The evaluator is created in Academy's own ApplicationScope (see `bootstrap_acade
 - It is safe to repeat. An existing evaluator in Academy's scope keeps its model while that model is still usable, and the command reports "already up to date" when nothing changes.
 - It never calls an AI provider.
 
+The same boundary applies when a student submits an answer. `evaluate_lab_answer()` resolves Academy's configured scope (never created or inferred) and uses only an **active** `Lab Exercise Evaluator` owned by it. If the scope is missing or inactive, or the only evaluator belongs to another scope, no session is created, nothing is sent to it, and the attempt is saved with a `pending` score. `bootstrap_academy_scope` and the seeds also treat an evaluator in another scope as an ownership conflict.
+
 **Management command:**
 
 ```bash

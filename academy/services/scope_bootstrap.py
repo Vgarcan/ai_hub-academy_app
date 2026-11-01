@@ -55,11 +55,17 @@ SETTING_NAME = "ACADEMY_APPLICATION_SCOPE_SLUG"
 # Resources Academy's seed commands create by name. If one already exists in a
 # scope other than Academy's, the seeds would silently reuse it across the
 # boundary, so it is a conflict.
+# The one name shared by `seed_lab_exercises --create-evaluator` (which creates
+# it) and the runtime lookup in `lab_evaluator` (which uses it). It lives here, a
+# module with no Academy imports, so both can import it without a cycle.
+LAB_EVALUATOR_AGENT_NAME = "Lab Exercise Evaluator"
+
 ACADEMY_AGENT_NAMES = (
     "AI Hub Documentation Assistant",
     "Input Normalizer",
     "Ticket Classifier",
     "Documentation Sync Agent",
+    LAB_EVALUATOR_AGENT_NAME,
 )
 ACADEMY_COLLECTION_NAMES = ("AI Hub Official Docs",)
 
@@ -87,6 +93,21 @@ def configured_scope_slug() -> str:
             "(letters, digits, '-' and '_'). Fix it in .env or unset it."
         )
     return slug
+
+
+def active_academy_scope() -> ApplicationScope | None:
+    """Academy's explicitly configured scope if it exists and is active, else None.
+
+    For RUNTIME lookups, where a refusal must degrade rather than raise. It
+    decides nothing the seeds do not: it reads the same configured slug, never
+    creates or reactivates a scope, and never falls back to another one - the
+    number of active scopes is irrelevant. An invalid configuration is "no scope".
+    """
+    try:
+        slug = configured_scope_slug()
+    except ScopeBootstrapError:
+        return None
+    return ApplicationScope.objects.filter(slug=slug, is_active=True).first()
 
 
 def _quoted(slugs) -> str:

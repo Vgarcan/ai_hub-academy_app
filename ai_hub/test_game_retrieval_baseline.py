@@ -99,7 +99,8 @@ NOT_COMPARABLE = "NOT COMPARABLE"
 
 COMPARABILITY = (
     ("authorization scope", SUPPORTED,
-     "Both enforce Agent collections plus active collection/document filters."),
+     "Both enforce the S-15 effective scope (ApplicationScope, Agent "
+     "assignment, workspace coherence) plus active collection/document filters."),
     ("no-answer (returned nothing at all)", SUPPORTED,
      "Both either return results or do not."),
     ("answerable-query hit rate", PARTIAL,

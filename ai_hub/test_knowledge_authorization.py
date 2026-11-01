@@ -17,6 +17,7 @@ semantic or vector code, no provider egress, no workspace Knowledge allow-list.
 """
 
 import json
+from dataclasses import dataclass
 from decimal import Decimal
 from io import StringIO
 from unittest import mock
@@ -28,6 +29,9 @@ from ai_hub.models import (
     AgentProfile,
     ApplicationScope,
     ExecutionSession,
+    GameActionDefinition,
+    GameActionRun,
+    GameGoal,
     GameWorkspace,
     GameWorkspaceAgent,
     KnowledgeCollection,
@@ -41,6 +45,11 @@ from ai_hub.models import (
 )
 from ai_hub.services import knowledge_retrieval
 from ai_hub.services.agent_runtime import build_agent_knowledge_context
+from ai_hub.services.game_action_dispatcher import (
+    _handle_read_document,
+    _handle_search_knowledge,
+    execute_game_action,
+)
 from ai_hub.services.knowledge_authorization import (
     DENY_ALL,
     EffectiveKnowledgeScope,
@@ -679,6 +688,278 @@ class GameWorkspaceScopeTests(ScopedCorpusMixin, TestCase):
         )
         with self.assertRaises(self.PolicyViolationError):
             validate_goal_execution_policy(self.workspace_b, goal, session)
+
+
+# ---------------------------------------------------------------------------
+# GAME compatibility Knowledge actions (Path 2): SEC-1
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ActionRunStub:
+    """The only GameActionRun state the Path 2 handlers read: the session.
+
+    Without `_resolved_effective_agent`, the handler resolves the session's real
+    entry agent, exactly as the Path 2 characterization module does.
+    """
+
+    session: ExecutionSession
+
+
+@override_settings(
+    AI_HUB_GAME_GOALS_ENABLED=True,
+    AI_HUB_GAME_ACTION_DISPATCH_ENABLED=True,
+)
+class GameCompatibilityKnowledgeScopeTests(ScopedCorpusMixin, TestCase):
+    """SEC-1: GAME `search_knowledge` and `read_document` obey the same scope.
+
+    These handlers are GAME's default selected-action Knowledge path. They used
+    to read `entry_agent.knowledge_collections` directly, so THE BAD ROW handed
+    Scope B's curated_text to a Scope A session. Each case is checked at handler
+    level and, where the dispatcher can reach it, through `execute_game_action`.
+    """
+
+    def setUp(self):
+        self.build_corpus()
+        self.document_a = self.collection_a.documents.get()
+        self.document_b = self.collection_b.documents.get()
+        self.workspace_a = GameWorkspace.objects.create(
+            name="WS A", application_scope=self.scope_a
+        )
+        self.workspace_b = GameWorkspace.objects.create(
+            name="WS B", application_scope=self.scope_b
+        )
+        for name in ("search_knowledge", "read_document"):
+            GameActionDefinition.objects.create(
+                name=name,
+                label=name,
+                action_type=GameActionDefinition.ActionType.CONTEXT_TOOL,
+            )
+
+    def _session(self, agent=None, *, workspace=None):
+        goal = None
+        if workspace is not None:
+            goal = GameGoal.objects.create(workspace=workspace, title="sec-1")
+        session = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            runtime_mode=ExecutionSession.RuntimeMode.SYNC,
+            status=ExecutionSession.Status.RUNNING,
+            entry_agent=agent or self.agent_a,
+            goal=goal,
+            goal_text="sec-1",
+        )
+        # Re-read, so no cached agent or scope instance can hide a change.
+        return ExecutionSession.objects.get(pk=session.pk)
+
+    def _search(self, query="widgets", *, session=None, workspace=None):
+        return _handle_search_knowledge(
+            _ActionRunStub(session=session or self._session()),
+            workspace,
+            None,
+            {"query": query},
+        )
+
+    def _read(self, document, *, session=None, workspace=None):
+        return _handle_read_document(
+            _ActionRunStub(session=session or self._session()),
+            workspace,
+            None,
+            {"document_id": document.pk},
+        )
+
+    def assertNoSearchLeakage(self, result, *, label):
+        # `query` echoes the caller's own input, which may be a Scope B marker
+        # used as a probe; everything the handler retrieved is checked.
+        retrieved = {key: value for key, value in result.items() if key != "query"}
+        self.assertNoScopeBLeakage(retrieved, label=label)
+
+    def assertSearchSeesOnlyScopeA(self, result, *, label):
+        self.assertNoSearchLeakage(result, label=label)
+        self.assertEqual(
+            [row["document_id"] for row in result["knowledge_context"]],
+            [self.document_a.pk],
+        )
+        self.assertEqual(result["matched_documents"], 1)
+
+    def assertSearchSeesNothing(self, result, *, label):
+        self.assertNoSearchLeakage(result, label=label)
+        self.assertEqual(result["knowledge_context"], [])
+        self.assertEqual(result["matched_documents"], 0)
+
+    def assertReadRefused(self, document, **kwargs):
+        with self.assertRaisesMessage(ValidationError, "not found or not accessible") as raised:
+            self._read(document, **kwargs)
+        self.assertNoScopeBLeakage(
+            {"message": raised.exception.messages[0]}, label="read refusal"
+        )
+
+    # -- handler level -----------------------------------------------------
+
+    def test_same_scope_collection_remains_searchable_and_readable(self):
+        for workspace in (None, self.workspace_a):
+            with self.subTest(workspace=workspace):
+                result = self._search(workspace=workspace)
+                self.assertSearchSeesOnlyScopeA(result, label="same scope")
+                self.assertEqual(
+                    result["knowledge_context"][0]["snippet"],
+                    self.document_a.curated_text,
+                )
+                read = self._read(self.document_a, workspace=workspace)
+                self.assertEqual(
+                    read,
+                    {
+                        "action_name": "read_document",
+                        "document_id": self.document_a.pk,
+                        "title": "Alpha Doc",
+                        "content": self.document_a.curated_text,
+                    },
+                )
+
+    def test_foreign_scope_assignment_is_not_searchable(self):
+        self.assertSearchSeesOnlyScopeA(self._search(), label="shared term")
+        for query in (B_SECRET, "Beta Doc", "beta-tag"):
+            with self.subTest(query=query):
+                self.assertSearchSeesNothing(self._search(query), label=query)
+
+    def test_foreign_scope_document_cannot_be_read_by_id(self):
+        for workspace in (None, self.workspace_a):
+            with self.subTest(workspace=workspace):
+                self.assertReadRefused(self.document_b, workspace=workspace)
+
+    def test_inactive_scope_grants_no_knowledge(self):
+        self.scope_a.is_active = False
+        self.scope_a.save(update_fields=["is_active"])
+        self.assertSearchSeesNothing(self._search(), label="inactive scope")
+        self.assertReadRefused(self.document_a)
+
+    def test_inactive_agent_grants_no_knowledge(self):
+        self.agent_a.is_active = False
+        self.agent_a.save(update_fields=["is_active"])
+        self.assertSearchSeesNothing(self._search(), label="inactive agent")
+        self.assertReadRefused(self.document_a)
+
+    def test_inactive_collection_remains_inaccessible(self):
+        self.collection_a.is_active = False
+        self.collection_a.save(update_fields=["is_active"])
+        self.assertSearchSeesNothing(self._search(), label="inactive collection")
+        self.assertReadRefused(self.document_a)
+
+    def test_inactive_document_remains_inaccessible(self):
+        for status in (KnowledgeDocument.Status.DRAFT, KnowledgeDocument.Status.ARCHIVED):
+            with self.subTest(status=status):
+                self.document_a.status = status
+                self.document_a.save(update_fields=["status"])
+                self.assertSearchSeesNothing(self._search(), label=status)
+                self.assertReadRefused(self.document_a)
+
+    def test_foreign_or_inactive_workspace_fails_closed(self):
+        self.assertSearchSeesNothing(
+            self._search(workspace=self.workspace_b), label="foreign workspace"
+        )
+        self.assertReadRefused(self.document_a, workspace=self.workspace_b)
+
+        self.workspace_a.is_active = False
+        self.workspace_a.save(update_fields=["is_active"])
+        self.assertSearchSeesNothing(
+            self._search(workspace=self.workspace_a), label="inactive workspace"
+        )
+        self.assertReadRefused(self.document_a, workspace=self.workspace_a)
+
+    def test_empty_effective_scope_is_not_unrestricted(self):
+        """An agent whose ONLY assignment is the bad row resolves to nothing."""
+        lone_agent = self._agent("A Lone Agent", self.scope_a)
+        lone_agent.knowledge_collections.add(self.collection_b)
+        self.assertTrue(resolve_effective_knowledge_scope(lone_agent).is_empty)
+
+        session = self._session(lone_agent)
+        for query in ("widgets", B_SECRET, A_SECRET):
+            with self.subTest(query=query):
+                self.assertSearchSeesNothing(
+                    self._search(query, session=session), label=query
+                )
+        for document in (self.document_a, self.document_b):
+            with self.subTest(document=document.title):
+                self.assertReadRefused(document, session=session)
+
+    def test_path1_and_path2_authorize_the_same_documents(self):
+        path1 = knowledge_retrieval.search_knowledge(self.agent_a, query="widgets", limit=20)
+        path2 = self._search()
+        self.assertEqual(
+            {row["document_id"] for row in path1["results"]},
+            {row["document_id"] for row in path2["knowledge_context"]},
+        )
+
+    # -- through the dispatcher --------------------------------------------
+
+    def test_dispatched_search_returns_only_authorized_knowledge(self):
+        session = self._session(workspace=self.workspace_a)
+        run = execute_game_action(
+            session=session, action_name="search_knowledge",
+            action_input={"query": "widgets"},
+        )
+        self.assertEqual(run.status, GameActionRun.Status.SUCCESS)
+        self.assertSearchSeesOnlyScopeA(run.output_payload, label="dispatch search")
+
+        run = execute_game_action(
+            session=session, action_name="search_knowledge",
+            action_input={"query": B_SECRET},
+        )
+        self.assertEqual(run.status, GameActionRun.Status.SUCCESS)
+        self.assertSearchSeesNothing(run.output_payload, label="dispatch B term")
+
+    def test_dispatched_read_of_an_authorized_document_succeeds(self):
+        run = execute_game_action(
+            session=self._session(workspace=self.workspace_a),
+            action_name="read_document",
+            action_input={"document_id": self.document_a.pk},
+        )
+        self.assertEqual(run.status, GameActionRun.Status.SUCCESS)
+        self.assertEqual(run.output_payload["content"], self.document_a.curated_text)
+
+    def test_dispatched_read_of_a_foreign_document_fails_closed(self):
+        session = self._session(workspace=self.workspace_a)
+        with self.assertRaisesMessage(ValidationError, "not found or not accessible"):
+            execute_game_action(
+                session=session, action_name="read_document",
+                action_input={"document_id": self.document_b.pk},
+            )
+        run = GameActionRun.objects.get(session=session, action_name="read_document")
+        self.assertEqual(run.status, GameActionRun.Status.FAILED)
+        self.assertNoScopeBLeakage(
+            {"output": run.output_payload, "error": run.error_detail},
+            label="dispatch read audit",
+        )
+
+    def test_dispatch_in_a_foreign_workspace_fails_closed(self):
+        session = self._session(workspace=self.workspace_b)
+        with self.assertRaises(ValidationError):
+            execute_game_action(
+                session=session, action_name="search_knowledge",
+                action_input={"query": "widgets"},
+            )
+        run = GameActionRun.objects.get(session=session)
+        self.assertEqual(run.status, GameActionRun.Status.FAILED)
+        self.assertNoScopeBLeakage(
+            {"output": run.output_payload, "error": run.error_detail},
+            label="dispatch foreign workspace",
+        )
+
+    def test_dispatch_without_a_workspace_still_enforces_scope(self):
+        """No goal, so no workspace policy runs: the handler is the only gate."""
+        session = self._session()
+        run = execute_game_action(
+            session=session, action_name="search_knowledge",
+            action_input={"query": B_SECRET},
+        )
+        self.assertSearchSeesNothing(run.output_payload, label="no workspace")
+
+        self.scope_a.is_active = False
+        self.scope_a.save(update_fields=["is_active"])
+        run = execute_game_action(
+            session=self._session(), action_name="search_knowledge",
+            action_input={"query": "widgets"},
+        )
+        self.assertEqual(run.status, GameActionRun.Status.SUCCESS)
+        self.assertSearchSeesNothing(run.output_payload, label="inactive scope")
 
 
 # ---------------------------------------------------------------------------

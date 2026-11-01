@@ -176,6 +176,8 @@ Delivered:
 - A report-first controlled retrieval-quality harness
   (`knowledge_retrieval_evaluate`) with a versioned candidate suite and a
   representative-evidence protocol for data owners.
+- A separate isolated public-document exploratory pilot with unjudged rankings;
+  this does not replace representative evidence.
 
 Still recommended:
 

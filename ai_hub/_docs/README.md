@@ -24,6 +24,7 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 16. [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) - Build Console wizard: step-by-step guide for the guided GAME and Orchestrator creation wizard.
 17. [`RAG_RETRIEVAL_STATUS.md`](RAG_RETRIEVAL_STATUS.md) - shipped RAG retrieval capabilities, activation steps, boundaries, and next evidence gates.
 18. [`RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md`](RAG_REPRESENTATIVE_EVIDENCE_PROTOCOL.md) - private-corpus handoff and independent-adjudication requirements before representative retrieval evidence.
+19. [`RAG_EXPLORATORY_PILOT.md`](RAG_EXPLORATORY_PILOT.md) - isolated public-document exploratory pilot and operator safeguards.
 
 ## Current Product Shape
 

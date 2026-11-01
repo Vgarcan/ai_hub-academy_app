@@ -207,6 +207,9 @@ path changes.
   and degraded hybrid cases instead of emitting an aggregate. Its evidence class
   is `controlled_candidate` only; it cannot produce representative or
   ANN-promotion evidence.
+- `knowledge_exploratory_pilot` is a separate report-first operator command for
+  a marked isolated SQLite fixture and a locally supplied public candidate.
+  Its rankings are unjudged exploratory evidence, not representative evidence.
 
 ### LEGACY
 

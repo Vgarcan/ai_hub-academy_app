@@ -11,6 +11,10 @@ Host-project features should be documented in the host project, not here.
 
 #### RAG retrieval operationalization
 
+- Added the isolated, report-first `knowledge_exploratory_pilot` for an
+  externally supplied public-document candidate. It validates fixture identity,
+  embedding coverage and detected drift before reporting unjudged lexical, exact
+  semantic and hybrid rankings; it does not calculate relevance metrics.
 - Added governed, report-first corpus embedding coverage and execution through
   `knowledge_embedding_index`; no provider call or vector write occurs without
   `--execute`.

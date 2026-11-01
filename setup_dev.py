@@ -13,9 +13,14 @@ What this script does (all automatic):
   3. Installs all packages from requirements.txt
   4. Creates .env from .one-env.example (generates a real SECRET_KEY)
   5. Runs database migrations
-  6. Seeds tutorial and training data
-  7. Imports platform and Academy documentation
-  8. Creates an admin superuser with a generated password
+  6. Creates Academy's ApplicationScope (only if the database has none)
+  7. Seeds tutorial and training data
+  8. Imports platform and Academy documentation
+  9. Creates an admin superuser with a generated password
+
+Every step is safe to repeat. If one fails, fix the cause it reports and run
+`python setup_dev.py` again; nothing that already succeeded is duplicated or
+overwritten.
 
 After it finishes, activate the venv and run the server:
     Windows  :  venv\\Scripts\\activate  &&  python manage.py runserver
@@ -67,12 +72,24 @@ def _abort(msg: str) -> None:
 
 
 def _run(cmd: list, *, env: dict | None = None, allow_failure: bool = False) -> subprocess.CompletedProcess:
-    result = subprocess.run(cmd, env=env, text=True, capture_output=True)
+    # UTF-8 on both sides: on Windows the default console code page cannot
+    # represent every character the seeds and the docs importer print.
+    result = subprocess.run(
+        cmd,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
     if not allow_failure and result.returncode != 0:
         _abort(
             f"Command failed: {' '.join(str(c) for c in cmd)}\n"
             + (result.stdout[-1500:] if result.stdout else "")
             + (result.stderr[-1500:] if result.stderr else "")
+            + "\nSetup is safe to repeat. Fix the problem above, then run "
+            "`python setup_dev.py` again; steps that already succeeded are "
+            "skipped or left unchanged."
         )
     return result
 
@@ -85,8 +102,12 @@ def _venv_python() -> Path:
 
 
 def _django_env() -> dict:
-    """Build an env dict with DJANGO_SETTINGS_MODULE set."""
-    return {**os.environ, "DJANGO_SETTINGS_MODULE": "_core.settings"}
+    """Build an env dict with DJANGO_SETTINGS_MODULE set and UTF-8 child output."""
+    return {
+        **os.environ,
+        "DJANGO_SETTINGS_MODULE": "_core.settings",
+        "PYTHONUTF8": "1",
+    }
 
 
 def _manage(python: Path, *args, extra_env: dict | None = None, allow_failure: bool = False) -> subprocess.CompletedProcess:
@@ -110,11 +131,53 @@ def check_python() -> None:
     _ok(f"Python {v.major}.{v.minor}.{v.micro}")
 
 
+def _interpreter_version(python: Path) -> tuple[int, int, int] | None:
+    """Version of the interpreter at `python`, or None if it cannot run."""
+    try:
+        result = subprocess.run(
+            [str(python), "-c", "import sys; print(*sys.version_info[:3])"],
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        # e.g. WinError 216/193 for an executable built for another system.
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        major, minor, micro = (int(part) for part in result.stdout.split())
+    except ValueError:
+        return None
+    return major, minor, micro
+
+
+def check_existing_venv(python: Path) -> None:
+    """Refuse an existing venv this project cannot run on; never modify it."""
+    version = _interpreter_version(python)
+    if version is None:
+        _abort(
+            f"The existing virtual environment at {VENV_DIR}/ does not run "
+            "(its Python is missing or broken, often because the Python it was "
+            "built from was upgraded or removed).\n"
+            "Rename or delete that folder yourself, then run `python setup_dev.py` "
+            "again. This script will not remove it for you."
+        )
+    if version[:2] < REQUIRED_PYTHON:
+        _abort(
+            f"The existing virtual environment at {VENV_DIR}/ uses Python "
+            f"{version[0]}.{version[1]}, but {REQUIRED_PYTHON[0]}.{REQUIRED_PYTHON[1]}+ "
+            "is required.\n"
+            "Rename or delete that folder yourself, then run `python setup_dev.py` "
+            "with a newer Python. This script will not remove it for you."
+        )
+    _ok(f"venv already exists at {VENV_DIR}/ (Python {version[0]}.{version[1]}.{version[2]})")
+
+
 def create_venv() -> Path:
     _step("Creating virtual environment")
     python = _venv_python()
     if python.exists():
-        _ok(f"venv already exists at {VENV_DIR}/")
+        check_existing_venv(python)
     else:
         _run([sys.executable, "-m", "venv", str(VENV_DIR)])
         _ok(f"Created {VENV_DIR}/")
@@ -150,6 +213,13 @@ def run_migrations(python: Path) -> None:
     _ok("Database is up to date")
 
 
+def bootstrap_scope(python: Path) -> None:
+    _step("Providing Academy's ApplicationScope")
+    result = _manage(python, "bootstrap_academy_scope")
+    first_line = (result.stdout or "").strip().splitlines()
+    _ok(first_line[-1] if first_line else "Application scope ready")
+
+
 def seed_data(python: Path) -> None:
     _step("Seeding training data (providers, agents, tutorials, missions)")
     _manage(python, "seed_academy_training_data")
@@ -177,7 +247,9 @@ def create_admin(python: Path) -> str | None:
     if result.returncode == 0:
         _ok(f"Admin user created:  {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
         return ADMIN_PASSWORD
-    elif "already exists" in output:
+    elif "already taken" in output or "already exists" in output:
+        # Django words a duplicate username "already taken" from createsuperuser
+        # and "already exists" from model validation; either means it is there.
         _ok(f"Admin user '{ADMIN_USERNAME}' already exists — skipping")
     else:
         _warn(f"Could not create superuser automatically. Run: python manage.py createsuperuser")
@@ -239,6 +311,7 @@ def main() -> None:
     install_deps(python)
     setup_env()
     run_migrations(python)
+    bootstrap_scope(python)
     seed_data(python)
     import_docs(python)
     admin_password = create_admin(python)

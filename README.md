@@ -12,9 +12,9 @@ Use it to learn how AI pipelines work, explore live execution telemetry, and und
 
 | Requirement | Minimum | Notes |
 |---|---|---|
-| Python | 3.12+ | [python.org/downloads](https://www.python.org/downloads/) |
+| Python | 3.12+ | [python.org/downloads](https://www.python.org/downloads/). CI runs 3.12; the setup was also run end to end on 3.13 (Windows) |
 | Git | any | to clone the repo |
-| Database | SQLite or PostgreSQL 14+ | SQLite is the local zero-config default |
+| Database | SQLite or PostgreSQL 14+ with the `pgvector` extension | SQLite is the local zero-config default. On PostgreSQL, `migrate` runs `CREATE EXTENSION vector`, so pgvector must be installed on the server and the migrating role allowed to create it |
 
 > **No API keys are needed for the core demo and test suite.** The bundled
 > Training provider returns deterministic responses. Semantic embeddings and
@@ -37,16 +37,24 @@ cd ai_hub-academy_app
 python setup_dev.py
 ```
 
-That's it. The script does everything for you (it takes a few minutes — installing
+The script does everything for you (it takes a few minutes — installing
 the packages is the slow part). It will:
 - create a virtual environment (`venv/` — an isolated, private copy of Python just for this project)
 - install all packages
 - create `.env` with a generated secret key
 - run database migrations
+- create Academy's **ApplicationScope**, but only when the database has no active
+  one (see *The application scope* below)
 - seed tutorial and training data
 - import the reusable docs from `ai_hub/_docs/` and the Academy docs from
   `docs_source/`
 - create an admin superuser (`admin` with a generated password)
+
+Every step is safe to repeat. If one fails, read the message, fix the cause, and
+run `python setup_dev.py` again: finished steps are skipped or left unchanged, and
+your `.env`, database and `venv/` are never deleted or reset. If a `venv/` folder
+already exists, the script checks that its Python runs and is 3.12 or newer; if
+not, it stops and tells you to rename or delete it yourself.
 
 The setup script uses SQLite. For PostgreSQL, configure `DATABASE_URL` or
 `DATABASE_ENGINE=postgresql` plus the `POSTGRES_*` variables from
@@ -85,9 +93,29 @@ Now open **http://localhost:8000/** in your browser.
 
 > **To stop the server:** press `Ctrl + C` in that terminal.
 > **To start it again later:** open a terminal, `cd` into the project, activate the
-> venv (step above), and run `python manage.py runserver` again. You only run
-> `setup_dev.py` normally runs once after cloning. After pulling updates, run
-> the specific migration, seed, or import commands required by that update.
+> venv (step above), and run `python manage.py runserver` again. You normally run
+> `setup_dev.py` once after cloning. After pulling updates, run the specific
+> migration, seed, or import commands required by that update.
+
+#### The application scope
+
+AI Hub keeps every agent, Knowledge collection and GAME workspace inside an
+**ApplicationScope**, the boundary that says which application owns it. AI Hub
+itself never creates one and never guesses: a fresh database has none, and the
+seed commands stop until one exists. Academy supplies its own, explicitly:
+
+```bash
+python manage.py bootstrap_academy_scope
+```
+
+It is safe to repeat and it never changes existing data:
+
+| Database state | What it does |
+|---|---|
+| No scope at all | Creates the `academy` scope (external embedding egress stays denied) |
+| Exactly one active scope | Uses it as it is; nothing is created or modified |
+| Several active scopes | Stops and lists them. In **Admin → Application scopes**, clear *Is active* on the ones that do not belong to this installation, leaving exactly one |
+| An inactive `academy` scope only | Stops. It will not reactivate a scope someone turned off; tick *Is active* yourself if it should be used |
 
 ---
 
@@ -199,16 +227,22 @@ cp .one-env.example .env        # macOS/Linux
 # 4. Migrate
 python manage.py migrate
 
-# 5. Seed data
+# 5. Provide the application scope (the seeds need one; see "The application scope")
+python manage.py bootstrap_academy_scope
+
+# 6. Seed data
 python manage.py seed_academy_training_data
 python manage.py import_academy_docs
 
-# 6. Create admin user
+# 7. Create admin user
 python manage.py createsuperuser
 
-# 7. Start server
+# 8. Start server
 python manage.py runserver
 ```
+
+The manual sequence is the same one `setup_dev.py` runs, and the repository's test
+suite runs it against a disposable database.
 
 ---
 
@@ -217,6 +251,7 @@ python manage.py runserver
 | Command | What it does |
 |---|---|
 | `python manage.py migrate` | Apply all database migrations |
+| `python manage.py bootstrap_academy_scope` | Create Academy's ApplicationScope when the database has no active one; otherwise report the existing one. Idempotent; run before the seeds |
 | `python manage.py seed_academy_training_data` | Create training provider, agents, tutorial modules and missions |
 | `python manage.py import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database |
 | `python manage.py seed_lab_exercises` | Create or update the Academy lab exercises |
@@ -351,6 +386,33 @@ database retains the audit payloads for controlled access and retention.
 
 ## Troubleshooting
 
+**`No active application scope exists` (setup or a seed command stopped)**
+→ The database has no ApplicationScope yet, and AI Hub never creates one for you.
+Nothing is wrong with your data. Run:
+```bash
+python manage.py bootstrap_academy_scope
+```
+then re-run `python setup_dev.py` (or the seed command you were on). The seeds
+check for the scope before writing anything, so a refusal leaves the database as
+it was. If an earlier version of this repository got further and stopped part way,
+its `Academy Training Provider` and model are simply reused, not duplicated.
+
+**`This database has N active application scopes … will not choose`**
+→ More than one scope is active, so setup will not guess. In **Admin → Application
+scopes** clear *Is active* on the scopes that do not belong to this installation,
+leaving exactly one, then run setup again.
+
+**Setup stopped part way (a failed step, a closed window, no network)**
+→ Run `python setup_dev.py` again. It is safe to repeat: it reuses `venv/` and
+`.env`, re-runs `migrate`, keeps the existing scope, seeds and documentation,
+and keeps the existing `admin` account and password. Do not delete `db.sqlite3`
+to "start clean" unless you really want to lose its contents.
+
+**`setup_dev.py` says the existing virtual environment does not run, or uses an old Python**
+→ The `venv/` folder was built for a different or removed Python. The script will
+not delete it for you. Rename or delete `venv/` yourself, then run
+`python setup_dev.py` with Python 3.12 or newer.
+
 **I lost the admin password printed by `setup_dev.py`**
 → Set a new one. Activate the venv, then run `python manage.py changepassword admin`
 and type a new password (the characters stay hidden as you type — that's normal).
@@ -365,7 +427,7 @@ and type a new password (the characters stay hidden as you type — that's norma
 → Make sure you're running from the project root (the folder with `manage.py`)
 
 **Tutorials show no data**
-→ Run `python manage.py seed_academy_training_data`
+→ Run `python manage.py bootstrap_academy_scope`, then `python manage.py seed_academy_training_data`
 
 **Documentation pages missing**
 → Run `python manage.py import_academy_docs`

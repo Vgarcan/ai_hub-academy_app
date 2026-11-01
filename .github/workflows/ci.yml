@@ -49,6 +49,30 @@ jobs:
       - name: Run test suite
         run: python manage.py test --verbosity=2
 
+      # The README's manual installation sequence, with real commands, on a
+      # throwaway database. It covers the interrupted state (a seed refused for
+      # lack of a scope must write nothing), a fresh install, and a repeat.
+      - name: Installation smoke test (documented sequence, disposable database)
+        env:
+          DATABASE_URL: ""
+          DATABASE_ENGINE: sqlite
+          SQLITE_NAME: ${{ runner.temp }}/install-smoke.sqlite3
+          DJANGO_SUPERUSER_PASSWORD: ci-smoke-test-only
+        run: |
+          python manage.py migrate --noinput
+          if python manage.py seed_academy_training_data; then
+            echo "The seed must refuse to run without an ApplicationScope"; exit 1
+          fi
+          python manage.py bootstrap_academy_scope
+          python manage.py seed_academy_training_data
+          python manage.py import_academy_docs
+          python manage.py createsuperuser --noinput --username admin --email admin@example.com
+          # Repeating every step must succeed and must not duplicate anything.
+          python manage.py bootstrap_academy_scope
+          python manage.py seed_academy_training_data
+          python manage.py import_academy_docs
+          python manage.py check
+
   postgresql:
     name: PostgreSQL 16 + pgvector 0.8.6 / concurrency tests (Python 3.12)
     runs-on: ubuntu-latest

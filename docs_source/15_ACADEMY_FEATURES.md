@@ -180,7 +180,8 @@ python manage.py seed_lab_exercises
 
 | Command | What it does | Requires Ollama |
 | --- | --- | --- |
-| `seed_academy_training_data` | Create training provider, models, agents, tutorial modules and missions | No |
+| `bootstrap_academy_scope` | Create Academy's ApplicationScope when the database has no active one; otherwise report the existing one. Idempotent, and it never reactivates, renames or reassigns anything | No |
+| `seed_academy_training_data` | Create training provider, models, agents, tutorial modules and missions (needs exactly one active ApplicationScope) | No |
 | `import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database | No |
 | `embed_docs` | Generate semantic embeddings for all active documentation chunks | Yes (`bge-m3:latest`) |
 | `embed_docs --force` | Re-generate embeddings even for chunks that already have one | Yes (`bge-m3:latest`) |
@@ -191,6 +192,8 @@ python manage.py seed_lab_exercises
 ### Full Setup Order
 
 ```bash
+python manage.py migrate
+python manage.py bootstrap_academy_scope      # the seeds need an ApplicationScope
 python manage.py seed_academy_training_data   # tutorials, training provider
 python manage.py import_academy_docs          # docs into database
 python manage.py seed_ollama_agents           # Ollama provider + agents
@@ -199,7 +202,20 @@ python manage.py seed_lab_exercises --create-evaluator  # labs + AI evaluator
 python manage.py run_doc_sync                 # smoke test
 ```
 
-`setup_dev.py` runs the first two automatically. Ollama is required only for
+`setup_dev.py` runs `migrate` and the first three commands automatically, then
+creates the `admin` user. Every step is safe to repeat.
+
+**Why a scope.** AI Hub Core keeps every agent, Knowledge collection and GAME
+workspace inside an `ApplicationScope` and never creates or guesses one. A fresh
+database has none, so Academy provides its own explicitly with
+`bootstrap_academy_scope`: it creates the `academy` scope only when no scope is
+active, uses a single existing active scope unchanged, and stops with an
+explanation when several are active or the `academy` scope was deactivated. The
+scope it creates grants no external embedding egress. The seed commands check
+for the scope before writing anything, so running them too early leaves the
+database untouched. `seed_ollama_agents` needs the same scope; `seed_lab_exercises
+--create-evaluator` does not yet create its agent inside one (tracked
+separately). Ollama is required only for
 the Ollama-backed agent and embedding commands. Labs can be seeded without it;
 `--create-evaluator` needs any configured non-Training model.
 

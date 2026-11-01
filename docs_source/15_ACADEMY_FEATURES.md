@@ -167,20 +167,28 @@ Coding and concept exercises attached to tutorial modules. Users submit free-tex
 
 **AI evaluation:** `academy.services.lab_evaluator.evaluate_lab_answer()` creates an `ExecutionSession` with the `Lab Exercise Evaluator` agent. The agent returns JSON with `score`, `feedback`, and `follow_up_question`. If no agent is configured, the attempt is saved with a `pending` score.
 
-> **Known limitation.** AI scoring cannot currently be enabled through a documented
-> path. `seed_lab_exercises --create-evaluator` fails to create the evaluator agent
-> because it is created without an ApplicationScope
-> ([issue #26](https://github.com/Vgarcan/ai_hub-academy_app/issues/26)), and the
-> Admin form for agents does not yet offer the scope field
-> ([issue #25](https://github.com/Vgarcan/ai_hub-academy_app/issues/25)). Until
-> they are fixed, lab attempts are saved with a `pending` score; the exercises
-> themselves work without an evaluator.
+**Enabling AI scoring:** lab exercises work without an evaluator; attempts are then saved with a `pending` score. To enable AI scoring, create the evaluator agent once an active non-training model exists (for example after `seed_ollama_agents`):
+
+```bash
+python manage.py seed_lab_exercises --create-evaluator
+```
+
+The evaluator is created in Academy's own ApplicationScope (see `bootstrap_academy_scope`); the scope is never inferred from how many scopes are active. The command is all-or-nothing:
+
+- It validates the scope, the model and any existing `Lab Exercise Evaluator` **before** writing, so a refusal leaves the lab exercises unseeded too, and it exits with a non-zero status. Refusals: Academy's scope is missing or inactive, no active non-training model exists (or the only candidates are inactive), or an agent with that name already exists in a different scope. That agent is never reused, modified or reassigned; rename or remove it deliberately in the Admin.
+- It is safe to repeat. An existing evaluator in Academy's scope keeps its model while that model is still usable, and the command reports "already up to date" when nothing changes.
+- It never calls an AI provider.
+
+The same boundary applies when a student submits an answer. `evaluate_lab_answer()` resolves Academy's configured scope (never created or inferred) and uses only an **active** `Lab Exercise Evaluator` owned by it. If the scope is missing or inactive, or the only evaluator belongs to another scope, no session is created, nothing is sent to it, and the attempt is saved with a `pending` score. `bootstrap_academy_scope` and the seeds also treat an evaluator in another scope as an ownership conflict.
 
 **Management command:**
 
 ```bash
 # Seed lab exercises for all tutorial modules
 python manage.py seed_lab_exercises
+
+# ... and also create the AI evaluator agent (needs Academy's scope and an active non-training model)
+python manage.py seed_lab_exercises --create-evaluator
 ```
 
 ---
@@ -194,7 +202,7 @@ python manage.py seed_lab_exercises
 | `import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database | No |
 | `embed_docs` | Generate semantic embeddings for all active documentation chunks | Yes (`bge-m3:latest`) |
 | `embed_docs --force` | Re-generate embeddings even for chunks that already have one | Yes (`bge-m3:latest`) |
-| `seed_lab_exercises` | Seed lab exercises. Do not use `--create-evaluator` yet: it currently fails to create the evaluator agent ([issue #26](https://github.com/Vgarcan/ai_hub-academy_app/issues/26)) | No |
+| `seed_lab_exercises` | Seed lab exercises. With `--create-evaluator` it also creates the AI evaluator agent in Academy's scope, or refuses with a non-zero exit and writes nothing | No |
 | `seed_ollama_agents` | Set up Ollama provider, LLM model, embedding model, and GAME agents | Yes (`qwen3:8b`, `bge-m3:latest`) |
 | `run_doc_sync` | Synchronize both documentation roots through the Documentation Sync GAME agent (smoke test) | Yes (`qwen3:8b`) |
 
@@ -207,7 +215,7 @@ python manage.py seed_academy_training_data   # tutorials, training provider
 python manage.py import_academy_docs          # docs into database
 python manage.py seed_ollama_agents           # Ollama provider + agents
 python manage.py embed_docs --model bge-m3:latest  # semantic search
-python manage.py seed_lab_exercises          # labs (AI scoring: see the known limitation above)
+python manage.py seed_lab_exercises          # labs; add --create-evaluator to enable AI scoring
 python manage.py run_doc_sync                 # smoke test
 ```
 

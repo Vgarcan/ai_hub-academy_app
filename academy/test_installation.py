@@ -39,6 +39,7 @@ from academy.services.scope_bootstrap import (
     ACADEMY_COLLECTION_NAMES,
     ACADEMY_SCOPE_NAME,
     ACADEMY_SCOPE_SLUG,
+    LAB_EVALUATOR_AGENT_NAME,
     SETTING_NAME,
     ScopeBootstrapError,
     ensure_academy_scope,
@@ -334,6 +335,38 @@ class ScopeBootstrapServiceTests(TestCase):
             AgentProfile.objects.get(name="Input Normalizer").application_scope_id, legacy.pk
         )  # never reassigned
 
+    def test_the_lab_evaluator_in_an_inactive_scope_blocks_the_bootstrap(self):
+        """Review of PR #29: the evaluator is an Academy-owned agent name too."""
+        legacy = self.inactive_legacy_scope_holding(agent=LAB_EVALUATOR_AGENT_NAME)
+        before = counts()
+
+        with self.assertRaises(ScopeBootstrapError) as raised:
+            ensure_academy_scope()
+        with self.assertRaises(CommandError):
+            run("bootstrap_academy_scope")
+
+        self.assertIn(LAB_EVALUATOR_AGENT_NAME, str(raised.exception))
+        self.assertIn("'legacy-default'", str(raised.exception))
+        self.assertEqual(counts(), before)  # nothing created
+        self.assertFalse(ApplicationScope.objects.filter(slug=ACADEMY_SCOPE_SLUG).exists())
+        legacy.refresh_from_db()
+        self.assertFalse(legacy.is_active)  # never reactivated
+        self.assertEqual(
+            AgentProfile.objects.get(name=LAB_EVALUATOR_AGENT_NAME).application_scope_id,
+            legacy.pk,
+        )  # never reassigned
+
+    def test_an_evaluator_in_another_scope_is_a_conflict_for_an_existing_academy_scope(self):
+        academy = ensure_academy_scope().scope
+        self.inactive_legacy_scope_holding(agent=LAB_EVALUATOR_AGENT_NAME)
+
+        with self.assertRaises(CommandError) as raised:
+            run("seed_academy_training_data")
+
+        self.assertIn(LAB_EVALUATOR_AGENT_NAME, str(raised.exception))
+        academy.refresh_from_db()
+        self.assertTrue(academy.is_active)
+
     def test_the_same_holds_for_an_academy_collection_in_an_inactive_scope(self):
         self.inactive_legacy_scope_holding(collection="AI Hub Official Docs")
 
@@ -399,7 +432,9 @@ class ScopeBootstrapServiceTests(TestCase):
         ensure_academy_scope()
         run("seed_academy_training_data")
         run("seed_ollama_agents")
+        run("seed_lab_exercises", "--create-evaluator")
 
+        self.assertIn(LAB_EVALUATOR_AGENT_NAME, AgentProfile.objects.values_list("name", flat=True))
         self.assertLessEqual(
             set(AgentProfile.objects.values_list("name", flat=True)),
             set(ACADEMY_AGENT_NAMES),
@@ -910,14 +945,14 @@ class ReadmeIsAnOperationalContractTests(SimpleTestCase):
                 self.assertIn("never adopts", flattened)
                 self.assertIn("another application", flattened)
 
-    def test_the_lab_evaluator_is_not_presented_as_a_working_installation_step(self):
-        text = self.documents()["docs_source/15_ACADEMY_FEATURES.md"]
-        order = text[text.index("### Full Setup Order"):]
-        order = order[: order.index("```", order.index("```bash") + 7)]
-        self.assertNotIn("--create-evaluator", order)
-        self.assertIn("issues/26", text)
-        self.assertIn("issues/25", text)
-        self.assertNotIn("to enable AI scoring", text)
+    def test_the_lab_evaluator_step_is_documented_as_all_or_nothing(self):
+        text = " ".join(self.documents()["docs_source/15_ACADEMY_FEATURES.md"].split())
+        self.assertIn("seed_lab_exercises --create-evaluator", text)
+        self.assertIn("all-or-nothing", text)
+        self.assertIn("non-zero status", text)
+        self.assertNotIn("Known limitation", text)
+        self.assertNotIn("Do not use `--create-evaluator` yet", text)
+        self.assertNotIn("issues/26", text)
 
     def test_markdown_tables_in_the_academy_docs_are_not_torn_apart_by_pipes(self):
         """GitHub splits a table row on EVERY unescaped `|`, even inside `code`.

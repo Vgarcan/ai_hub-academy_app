@@ -13,7 +13,7 @@ from ai_hub.models import (
     ModelConfig,
     ProviderConfig,
 )
-from ai_hub.services.application_scope import require_single_active_scope
+from academy.services.scope_bootstrap import resolve_seed_scope
 
 
 def _scope():
@@ -21,9 +21,10 @@ def _scope():
 
     Academy is a consumer of Core and defines no scope concept of its own.
     Resolving through Core's helper means this command refuses - rather than
-    guessing - once an installation hosts more than one application.
+    guessing - once an installation hosts more than one application. On a
+    fresh database, `bootstrap_academy_scope` supplies it explicitly first.
     """
-    return require_single_active_scope()
+    return resolve_seed_scope()
 
 
 def _get_or_create_provider():
@@ -877,6 +878,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # Resolve the scope before writing anything: a refusal must not leave a
+        # half-seeded provider and model behind.
+        _scope()
         self.stdout.write("Seeding Academy training data...")
         provider = _get_or_create_provider()
         model = _get_or_create_model(provider)

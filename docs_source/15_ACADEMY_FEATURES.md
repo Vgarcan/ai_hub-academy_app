@@ -167,6 +167,15 @@ Coding and concept exercises attached to tutorial modules. Users submit free-tex
 
 **AI evaluation:** `academy.services.lab_evaluator.evaluate_lab_answer()` creates an `ExecutionSession` with the `Lab Exercise Evaluator` agent. The agent returns JSON with `score`, `feedback`, and `follow_up_question`. If no agent is configured, the attempt is saved with a `pending` score.
 
+> **Known limitation.** AI scoring cannot currently be enabled through a documented
+> path. `seed_lab_exercises --create-evaluator` fails to create the evaluator agent
+> because it is created without an ApplicationScope
+> ([issue #26](https://github.com/Vgarcan/ai_hub-academy_app/issues/26)), and the
+> Admin form for agents does not yet offer the scope field
+> ([issue #25](https://github.com/Vgarcan/ai_hub-academy_app/issues/25)). Until
+> they are fixed, lab attempts are saved with a `pending` score; the exercises
+> themselves work without an evaluator.
+
 **Management command:**
 
 ```bash
@@ -180,28 +189,57 @@ python manage.py seed_lab_exercises
 
 | Command | What it does | Requires Ollama |
 | --- | --- | --- |
-| `seed_academy_training_data` | Create training provider, models, agents, tutorial modules and missions | No |
+| `bootstrap_academy_scope` | Create Academy's own `academy` ApplicationScope when it is safe to, or confirm the existing one. Never adopts another application's scope; never reactivates, renames or reassigns anything | No |
+| `seed_academy_training_data` | Create training provider, models, agents, tutorial modules and missions (needs Academy's ApplicationScope) | No |
 | `import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database | No |
 | `embed_docs` | Generate semantic embeddings for all active documentation chunks | Yes (`bge-m3:latest`) |
 | `embed_docs --force` | Re-generate embeddings even for chunks that already have one | Yes (`bge-m3:latest`) |
-| `seed_lab_exercises` | Seed lab exercises; add `--create-evaluator` after configuring a non-Training model to enable AI scoring | No |
+| `seed_lab_exercises` | Seed lab exercises. Do not use `--create-evaluator` yet: it currently fails to create the evaluator agent ([issue #26](https://github.com/Vgarcan/ai_hub-academy_app/issues/26)) | No |
 | `seed_ollama_agents` | Set up Ollama provider, LLM model, embedding model, and GAME agents | Yes (`qwen3:8b`, `bge-m3:latest`) |
 | `run_doc_sync` | Synchronize both documentation roots through the Documentation Sync GAME agent (smoke test) | Yes (`qwen3:8b`) |
 
 ### Full Setup Order
 
 ```bash
+python manage.py migrate
+python manage.py bootstrap_academy_scope      # the seeds need an ApplicationScope
 python manage.py seed_academy_training_data   # tutorials, training provider
 python manage.py import_academy_docs          # docs into database
 python manage.py seed_ollama_agents           # Ollama provider + agents
 python manage.py embed_docs --model bge-m3:latest  # semantic search
-python manage.py seed_lab_exercises --create-evaluator  # labs + AI evaluator
+python manage.py seed_lab_exercises          # labs (AI scoring: see the known limitation above)
 python manage.py run_doc_sync                 # smoke test
 ```
 
-`setup_dev.py` runs the first two automatically. Ollama is required only for
-the Ollama-backed agent and embedding commands. Labs can be seeded without it;
-`--create-evaluator` needs any configured non-Training model.
+`setup_dev.py` runs `migrate` and the first three commands automatically, then
+creates the `admin` user. Every step is safe to repeat. Ollama is required only for
+the Ollama-backed agent and embedding commands; labs can be seeded without it.
+
+**Why a scope, and whose.** AI Hub Core keeps every agent, Knowledge collection and
+GAME workspace inside an `ApplicationScope` and never creates or guesses one. A fresh
+database has none, so Academy provides its own explicitly with
+`bootstrap_academy_scope`. Academy owns one named scope, `academy` (or the slug in
+`ACADEMY_APPLICATION_SCOPE_SLUG`), and **never adopts another application's scope**
+merely because it is the only one active. The decision is shared by the bootstrap
+and every seed (`seed_academy_training_data`, `seed_ollama_agents`), and each refuses
+before writing anything:
+
+- no scope at all: the `academy` scope is created, with no embedding egress;
+- the `academy` scope exists and is active: it is used unchanged, whether or not other
+  scopes are active;
+- the `academy` scope is inactive: stop; it is not reactivated;
+- another application's scope is the only active one: stop; it is not adopted, and a
+  second active scope is not added beside it. Install Academy in a dedicated database
+  (the default SQLite file is one), or, for a scope that really is Academy's, such
+  as `legacy-default` after an upgrade from before scopes existed, declare it with
+  `ACADEMY_APPLICATION_SCOPE_SLUG=legacy-default` in `.env`. A declared scope must
+  already exist and be active; it is never created or modified;
+- Academy-seeded agents or collections that already live in a different scope: stop;
+  they are never reused or moved across the boundary.
+
+Existing data is never reassigned, renamed, deleted or reactivated. Core's Build
+Console and GAME quick-start resolve a single active scope and refuse while several
+are active, which is a further reason to keep Academy in its own database.
 
 ---
 

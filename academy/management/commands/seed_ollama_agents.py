@@ -14,7 +14,7 @@ import os
 from django.core.management.base import BaseCommand
 
 from ai_hub.models import AgentProfile, ModelConfig, ProviderConfig, ToolDefinition
-from ai_hub.services.application_scope import require_single_active_scope
+from academy.services.scope_bootstrap import resolve_seed_scope
 
 
 DOC_SYNC_SYSTEM_PROMPT = """\
@@ -112,9 +112,10 @@ def _scope():
 
     Academy is a consumer of Core and defines no scope concept of its own.
     Resolving through Core's helper means this command refuses - rather than
-    guessing - once an installation hosts more than one application.
+    guessing - once an installation hosts more than one application. On a
+    fresh database, `bootstrap_academy_scope` supplies it explicitly first.
     """
-    return require_single_active_scope()
+    return resolve_seed_scope()
 
 
 class Command(BaseCommand):
@@ -150,6 +151,10 @@ class Command(BaseCommand):
         sync_model_name = options["sync_model"]
         chat_model_name = options["chat_model"]
         force = options["force_update"]
+
+        # Resolve the scope before the first write, so a refusal leaves no
+        # half-created provider behind.
+        _scope()
 
         # ── Provider ──────────────────────────────────────────────────────────
         provider, created = ProviderConfig.objects.get_or_create(

@@ -21,6 +21,12 @@ SECURE_HSTS_SECONDS=0
 # is ready for browser preload registration.
 SECURE_HSTS_INCLUDE_SUBDOMAINS=False
 SECURE_HSTS_PRELOAD=False
+# The ApplicationScope Academy owns. Leave unset for a normal installation (the
+# 'academy' scope is created for you). Set it only to declare, explicitly, that an
+# existing scope is Academy's - e.g. an installation upgraded from before scopes
+# existed, whose data Core placed in 'legacy-default'. Academy never adopts a
+# scope it was not told it owns.
+# ACADEMY_APPLICATION_SCOPE_SLUG=academy
 # Anonymous assistant calls may incur provider cost. Enable only behind rate limiting.
 ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=False
 

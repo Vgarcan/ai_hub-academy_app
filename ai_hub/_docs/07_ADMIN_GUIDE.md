@@ -400,6 +400,14 @@ It also shows counts for pipeline usage and GAME sessions.
 
 Use this to avoid losing track of which agents are operational and which are only drafts.
 
+### Agent ownership and Knowledge collections
+
+An agent belongs to one application scope, chosen when it is created and read-only afterwards. The **Knowledge collections** field accepts only collections owned by that same scope. The Admin rejects any other with an error on that field, naming the collection and its scope. When you create an agent, the check uses the scope selected in the same submission, so you can pick the scope and attach its collections in one save.
+
+This is configuration hygiene, not the security boundary: at runtime an agent can retrieve only collections of its own scope whatever is stored, so a cross-scope assignment never grants access.
+
+An agent saved before this check may still hold a collection from another scope. Nothing deletes or rewrites it. The agent's change page lists it in a warning, you can keep editing and saving the agent (including deactivating it), and the stale row stays until you deselect it in the Knowledge collections field and save. Adding a *new* cross-scope collection is refused.
+
 ## Tools And Toolboxes
 
 Use `Tools` for the underlying reusable capability and `Toolboxes` for role-level

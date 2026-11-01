@@ -514,6 +514,13 @@ Host-project features should be documented in the host project, not here.
   active scopes are offered. It is read-only after creation so existing
   ownership cannot be reassigned from a form. The installation guide now covers
   creating a scope first.
+- Fixed the Agent Admin accepting a Knowledge collection owned by a different
+  `ApplicationScope`. The form now rejects it with a field error on
+  `knowledge_collections`, comparing against the scope chosen in the same
+  submission (add) or the stored read-only scope (edit), so a forged POST cannot
+  bypass it. Existing cross-scope assignments are neither deleted nor rewritten:
+  they are listed in a warning on the agent's page and can be removed there.
+  Runtime authorization (S-15) is unchanged.
 
 #### Documentation truth audit
 

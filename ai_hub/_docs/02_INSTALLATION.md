@@ -253,7 +253,7 @@ Minimum useful setup:
 - Give the agent a clear role.
 - Write a focused system prompt.
 - Add an output contract if the result must be structured JSON.
-- Attach knowledge collections only when the agent needs curated context. Attach collections from the agent's own scope: a collection owned by a different scope is never retrievable by the agent.
+- Attach knowledge collections only when the agent needs curated context. The Admin accepts only collections from the agent's own scope and rejects any other with a field error; a collection owned by a different scope is never retrievable by the agent.
 - Attach tools only when the runtime can execute them safely.
 
 Good agent names are concrete:

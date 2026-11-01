@@ -1444,6 +1444,77 @@ class KnowledgeDocumentChunkAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, a
     )
 
 
+def _foreign_collections(agent):
+    """Collections assigned to `agent` that another ApplicationScope owns."""
+    return agent.knowledge_collections.exclude(
+        application_scope_id=agent.application_scope_id
+    ).select_related("application_scope")
+
+
+class AgentProfileAdminForm(forms.ModelForm):
+    """An agent may only be assigned Knowledge collections of its OWN scope.
+
+    `AgentProfile.knowledge_collections` is an assignment mechanism, not a
+    security boundary (S-15 grants a cross-scope row zero authorization), but a
+    row that can never work is misleading configuration, so the Admin refuses to
+    create one. This is a form-layer check only: no signal, no schema change, and
+    the ORM and S-15 are untouched.
+
+    The scope compared against is the one chosen in the SAME submission when
+    adding, and the stored, read-only one when editing - never a posted value
+    for an existing agent. Rows that already cross scopes are not deleted or
+    rewritten: they may stay while the operator edits other fields (so an agent
+    can still be deactivated), and only NEWLY adding a foreign collection is
+    refused. The change page warns about the existing ones by name.
+    """
+
+    class Meta:
+        model = AgentProfile
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        collections = cleaned.get("knowledge_collections")
+        if not collections:
+            return cleaned
+
+        if self.instance.pk:
+            scope = self.instance.application_scope
+            already_assigned = set(
+                self.instance.knowledge_collections.values_list("pk", flat=True)
+            )
+        else:
+            scope = cleaned.get("application_scope")
+            already_assigned = set()
+        if scope is None:
+            # The missing/invalid scope is reported on its own field; comparing
+            # against nothing would only add a misleading second error.
+            return cleaned
+
+        foreign = [
+            c for c in collections
+            if c.application_scope_id != scope.pk and c.pk not in already_assigned
+        ]
+        if foreign:
+            self.add_error(
+                "knowledge_collections",
+                ValidationError(
+                    "Knowledge collections must belong to the agent's application "
+                    "scope '%(scope)s'. Not allowed: %(collections)s. Remove them, "
+                    "or create the collection in that scope.",
+                    code="cross_scope_collection",
+                    params={
+                        "scope": scope.slug,
+                        "collections": ", ".join(
+                            f"{c.name} (scope '{c.application_scope.slug}')"
+                            for c in foreign
+                        ),
+                    },
+                ),
+            )
+        return cleaned
+
+
 @admin.register(AgentProfile)
 class AgentProfileAdmin(ExplicitApplicationScopeMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Agents")
@@ -1479,6 +1550,7 @@ class AgentProfileAdmin(ExplicitApplicationScopeMixin, AIHubListPageMixin, admin
     search_fields = ("name", "role", "model_config__model_name", "knowledge_collections__name")
     autocomplete_fields = ("model_config", "tools", "knowledge_collections")
     filter_horizontal = ("tools", "knowledge_collections")
+    form = AgentProfileAdminForm
     inlines = [AgentToolboxAssignmentInline, AgentToolGrantInline]
     readonly_fields = ("resolved_tool_manifest",)
     change_form_template = "admin/ai_hub/agentprofile/change_form.html"
@@ -1509,7 +1581,10 @@ class AgentProfileAdmin(ExplicitApplicationScopeMixin, AIHubListPageMixin, admin
             ),
         },
         "knowledge_collections": {
-            "help_text": _("Optional knowledge groups injected into this agent's prompt context."),
+            "help_text": _(
+                "Optional knowledge groups injected into this agent's prompt context. Only collections "
+                "owned by this agent's application scope can be attached."
+            ),
         },
         "knowledge_max_chars": {
             "placeholder": "6000",
@@ -1595,6 +1670,28 @@ class AgentProfileAdmin(ExplicitApplicationScopeMixin, AIHubListPageMixin, admin
                     distinct=True,
                 ),
             )
+        )
+
+    def render_change_form(self, request, context, add=False, change=False, form_url="", obj=None):
+        if change and obj is not None:
+            foreign = list(_foreign_collections(obj))
+            if foreign:
+                messages.warning(
+                    request,
+                    _(
+                        "This agent is assigned Knowledge collections owned by a different "
+                        "application scope: %(collections)s. They grant it no access and are "
+                        "kept until you remove them. Remove them from the Knowledge collections "
+                        "field and save."
+                    )
+                    % {
+                        "collections": ", ".join(
+                            f"{c.name} (scope '{c.application_scope.slug}')" for c in foreign
+                        )
+                    },
+                )
+        return super().render_change_form(
+            request, context, add=add, change=change, form_url=form_url, obj=obj
         )
 
     @admin.display(description="Workspace")

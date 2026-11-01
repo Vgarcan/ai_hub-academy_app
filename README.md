@@ -43,8 +43,8 @@ the packages is the slow part). It will:
 - install all packages
 - create `.env` with a generated secret key
 - run database migrations
-- create Academy's **ApplicationScope**, but only when the database has no active
-  one (see *The application scope* below)
+- create Academy's own **ApplicationScope** (`academy`), when it is safe to do so
+  (see *The application scope* below)
 - seed tutorial and training data
 - import the reusable docs from `ai_hub/_docs/` and the Academy docs from
   `docs_source/`
@@ -102,20 +102,45 @@ Now open **http://localhost:8000/** in your browser.
 AI Hub keeps every agent, Knowledge collection and GAME workspace inside an
 **ApplicationScope**, the boundary that says which application owns it. AI Hub
 itself never creates one and never guesses: a fresh database has none, and the
-seed commands stop until one exists. Academy supplies its own, explicitly:
+seed commands stop until one exists. Academy owns **one explicitly named scope**,
+`academy`, and supplies it with:
 
 ```bash
 python manage.py bootstrap_academy_scope
 ```
 
-It is safe to repeat and it never changes existing data:
+Academy never adopts a scope just because it is the only active one: that scope
+may belong to a different application. The command is safe to repeat and never
+changes, renames, reactivates or reassigns existing data:
 
 | Database state | What it does |
 |---|---|
 | No scope at all | Creates the `academy` scope (external embedding egress stays denied) |
-| Exactly one active scope | Uses it as it is; nothing is created or modified |
-| Several active scopes | Stops and lists them. In **Admin → Application scopes**, clear *Is active* on the ones that do not belong to this installation, leaving exactly one |
-| An inactive `academy` scope only | Stops. It will not reactivate a scope someone turned off; tick *Is active* yourself if it should be used |
+| `academy` scope exists and is active | Uses it as it is. Other active scopes are left alone and reported |
+| `academy` scope exists but is inactive | Stops. It will not reactivate a scope someone turned off; tick *Is active* yourself if it should be used |
+| No `academy` scope, but another application's scope is active | Stops and changes nothing. It will not adopt that scope and will not add a second active one beside it |
+| Academy's agents or collection already exist in a different scope | Stops, naming them. They are never reused or moved across the boundary |
+
+The seed commands apply exactly the same decision before they write anything.
+
+**If another application's scope is the only one active**, do not deactivate it.
+Use one of these instead:
+
+- **A dedicated development database for Academy.** The default SQLite file is one;
+  to keep a separate copy, set `SQLITE_NAME` in `.env` to a new file path.
+- **An explicit ownership declaration**, only for a scope that really is Academy's.
+  A typical case is an installation upgraded from before scopes existed, whose data
+  Core placed in `legacy-default`. Add this line to `.env`, then run setup again:
+  ```
+  ACADEMY_APPLICATION_SCOPE_SLUG=legacy-default
+  ```
+  Academy then uses that scope (it must already exist and be active, and is never
+  created, renamed or modified), and the bootstrap and every seed enforce the same
+  choice. Leave the variable unset for a normal installation.
+
+Note: Core features that resolve "the" single active scope (the Build Console, the
+GAME quick-start) refuse to run while more than one scope is active. Keeping Academy
+in its own database avoids that.
 
 ---
 
@@ -251,7 +276,7 @@ suite runs it against a disposable database.
 | Command | What it does |
 |---|---|
 | `python manage.py migrate` | Apply all database migrations |
-| `python manage.py bootstrap_academy_scope` | Create Academy's ApplicationScope when the database has no active one; otherwise report the existing one. Idempotent; run before the seeds |
+| `python manage.py bootstrap_academy_scope` | Create Academy's own `academy` ApplicationScope when it is safe to, or confirm the existing one. Never adopts another application's scope. Idempotent; run before the seeds |
 | `python manage.py seed_academy_training_data` | Create training provider, agents, tutorial modules and missions |
 | `python manage.py import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database |
 | `python manage.py seed_lab_exercises` | Create or update the Academy lab exercises |
@@ -259,10 +284,10 @@ suite runs it against a disposable database.
 | `python manage.py run_doc_sync` | Run the Documentation Sync GAME agent once |
 | `python manage.py embed_docs` | Generate semantic embeddings for active documentation chunks (requires Ollama with `bge-m3:latest`) |
 | `python manage.py embed_docs --force` | Re-generate active chunks even when they already have an embedding |
-| `python manage.py knowledge_embedding_index --scope <slug|id> --embedding-config <name|id>` | Report governed Core Knowledge embedding coverage without writing |
-| `python manage.py knowledge_embedding_index --scope <slug|id> --embedding-config <name|id> --execute` | Index missing/stale Core Knowledge chunks through the governed local embedding path |
-| `python manage.py knowledge_retrieval_evaluate --suite <path> --agent <name|id>` | Validate a controlled retrieval-quality suite against its exact corpus and vector coverage without calling a provider |
-| `python manage.py knowledge_retrieval_evaluate --suite <path> --agent <name|id> --execute [--json]` | Run lexical and hybrid retrieval over the suite and report content-free metrics; fails closed on drift or degraded hybrid |
+| `python manage.py knowledge_embedding_index --scope <slug or id> --embedding-config <name or id>` | Report governed Core Knowledge embedding coverage without writing |
+| `python manage.py knowledge_embedding_index --scope <slug or id> --embedding-config <name or id> --execute` | Index missing/stale Core Knowledge chunks through the governed local embedding path |
+| `python manage.py knowledge_retrieval_evaluate --suite <path> --agent <name or id>` | Validate a controlled retrieval-quality suite against its exact corpus and vector coverage without calling a provider |
+| `python manage.py knowledge_retrieval_evaluate --suite <path> --agent <name or id> --execute [--json]` | Run lexical and hybrid retrieval over the suite and report content-free metrics; fails closed on drift or degraded hybrid |
 | `python manage.py seed_demo_data` | Seed the support-demo tickets and training configuration |
 | `python manage.py test` | Run the full test suite |
 | `python manage.py createsuperuser` | Create an admin user interactively |
@@ -386,21 +411,25 @@ database retains the audit payloads for controlled access and retention.
 
 ## Troubleshooting
 
-**`No active application scope exists` (setup or a seed command stopped)**
-→ The database has no ApplicationScope yet, and AI Hub never creates one for you.
-Nothing is wrong with your data. Run:
+**`The 'academy' application scope does not exist yet` (setup or a seed command stopped)**
+→ Older versions of the seed stopped with Core's own message instead,
+`No active application scope exists`, and left a half-seeded database. Either way
+the database has no scope yet and AI Hub never creates one for you. Nothing is
+wrong with your data. Run:
 ```bash
 python manage.py bootstrap_academy_scope
 ```
 then re-run `python setup_dev.py` (or the seed command you were on). The seeds
 check for the scope before writing anything, so a refusal leaves the database as
-it was. If an earlier version of this repository got further and stopped part way,
-its `Academy Training Provider` and model are simply reused, not duplicated.
+it was. If an earlier version stopped part way, its `Academy Training Provider`
+and model are simply reused, not duplicated.
 
-**`This database has N active application scopes … will not choose`**
-→ More than one scope is active, so setup will not guess. In **Admin → Application
-scopes** clear *Is active* on the scopes that do not belong to this installation,
-leaving exactly one, then run setup again.
+**`Academy's own application scope 'academy' does not exist, but another application scope is active`**
+→ Academy will not adopt a scope it does not own and will not touch the other
+application's scope. Do **not** deactivate it. Install Academy in a dedicated
+database, or, if that scope really is Academy's (for example an upgraded
+installation using `legacy-default`), declare it with
+`ACADEMY_APPLICATION_SCOPE_SLUG=<slug>` in `.env` (see *The application scope*).
 
 **Setup stopped part way (a failed step, a closed window, no network)**
 → Run `python setup_dev.py` again. It is safe to repeat: it reuses `venv/` and
@@ -427,7 +456,7 @@ and type a new password (the characters stay hidden as you type — that's norma
 → Make sure you're running from the project root (the folder with `manage.py`)
 
 **Tutorials show no data**
-→ Run `python manage.py bootstrap_academy_scope`, then `python manage.py seed_academy_training_data`
+→ Run `python manage.py bootstrap_academy_scope`, then `python manage.py seed_academy_training_data` (if the scope step refuses, see *The application scope* above)
 
 **Documentation pages missing**
 → Run `python manage.py import_academy_docs`

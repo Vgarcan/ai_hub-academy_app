@@ -216,8 +216,8 @@ def run_migrations(python: Path) -> None:
 def bootstrap_scope(python: Path) -> None:
     _step("Providing Academy's ApplicationScope")
     result = _manage(python, "bootstrap_academy_scope")
-    first_line = (result.stdout or "").strip().splitlines()
-    _ok(first_line[-1] if first_line else "Application scope ready")
+    lines = (result.stdout or "").strip().splitlines()
+    _ok(lines[0] if lines else "Application scope ready")
 
 
 def seed_data(python: Path) -> None:

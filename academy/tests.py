@@ -289,7 +289,7 @@ class OllamaSeedCommandTests(TestCase):
     def test_seed_output_points_to_the_real_assistant_route(self):
         stdout = StringIO()
 
-        test_scope()  # the seed requires an existing scope
+        test_scope("AI Hub Academy", slug="academy")  # the seeds need Academy's own scope
         call_command(
             "seed_ollama_agents",
             "--base-url",
@@ -309,14 +309,16 @@ class OllamaSeedCommandTests(TestCase):
             provider=training_provider,
             model_name="training/assistant",
         )
+        # The assistant a prior seed run created lives in Academy's own scope.
+        # (One in another scope is a conflict the seeds now refuse.)
+        academy_scope = test_scope("AI Hub Academy", slug="academy")
         assistant = AgentProfile.objects.create(
-            application_scope=test_scope(),
+            application_scope=academy_scope,
             name="AI Hub Documentation Assistant",
             role="Documentation assistant",
             model_config=training_model,
         )
 
-        test_scope()  # the seed requires an existing scope
         call_command(
             "seed_ollama_agents",
             "--base-url",
@@ -503,7 +505,7 @@ class TutorialTest(TestCase):
 class AcademySeedCommandTests(TestCase):
     def test_seed_force_update_refreshes_existing_mission_text(self):
         with patch("builtins.print"):
-            test_scope()  # the seed requires an existing scope
+            test_scope("AI Hub Academy", slug="academy")  # the seeds need Academy's own scope
             call_command("seed_academy_training_data", stdout=StringIO())
 
         mission = TutorialMission.objects.get(slug="enter-the-control-room")
@@ -511,7 +513,7 @@ class AcademySeedCommandTests(TestCase):
         mission.save(update_fields=["instructions_markdown"])
 
         with patch("builtins.print"):
-            test_scope()  # the seed requires an existing scope
+            test_scope("AI Hub Academy", slug="academy")  # the seeds need Academy's own scope
             call_command("seed_academy_training_data", "--force-update", stdout=StringIO())
 
         mission.refresh_from_db()

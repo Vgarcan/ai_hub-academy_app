@@ -140,6 +140,11 @@ AI_HUB_ALLOWED_TOOL_CALLABLES = tuple(
 )
 
 # Anonymous AI requests can create provider cost. Enable only with external rate limiting.
+# The one ApplicationScope Academy owns. Academy never adopts another
+# application's scope; a legacy installation declares its own scope here (for
+# example `legacy-default`) as an explicit ownership decision.
+ACADEMY_APPLICATION_SCOPE_SLUG = os.environ.get("ACADEMY_APPLICATION_SCOPE_SLUG", "academy").strip()
+
 ACADEMY_ASSISTANT_ALLOW_ANONYMOUS = (
     os.environ.get("ACADEMY_ASSISTANT_ALLOW_ANONYMOUS", "False") == "True"
 )

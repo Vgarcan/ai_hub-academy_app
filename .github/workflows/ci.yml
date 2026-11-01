@@ -73,6 +73,29 @@ jobs:
           python manage.py import_academy_docs
           python manage.py check
 
+      # Another application's scope must never be adopted: with `customer-portal`
+      # as the only active scope, bootstrap and seed must both refuse and write
+      # nothing.
+      - name: Installation smoke test (foreign scope is never adopted)
+        env:
+          DATABASE_URL: ""
+          DATABASE_ENGINE: sqlite
+          SQLITE_NAME: ${{ runner.temp }}/install-foreign.sqlite3
+        run: |
+          python manage.py migrate --noinput
+          python manage.py shell -c "from ai_hub.models import ApplicationScope as S; S.objects.create(slug='customer-portal', name='Customer Portal')"
+          if python manage.py bootstrap_academy_scope; then
+            echo "Academy must not adopt or sit beside a foreign scope"; exit 1
+          fi
+          if python manage.py seed_academy_training_data; then
+            echo "The seed must refuse a scope Academy does not own"; exit 1
+          fi
+          python manage.py shell -c "
+          from ai_hub.models import ApplicationScope, AgentProfile, ProviderConfig
+          assert list(ApplicationScope.objects.values_list('slug', flat=True)) == ['customer-portal']
+          assert AgentProfile.objects.count() == 0 and ProviderConfig.objects.count() == 0
+          print('foreign scope untouched; nothing written')"
+
   postgresql:
     name: PostgreSQL 16 + pgvector 0.8.6 / concurrency tests (Python 3.12)
     runs-on: ubuntu-latest

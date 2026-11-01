@@ -260,6 +260,10 @@ to the model.
 
 ## Evidence Still Required
 
+An isolated public-document exploratory pilot is available separately; see
+[`RAG_EXPLORATORY_PILOT.md`](RAG_EXPLORATORY_PILOT.md). It is unjudged,
+report-first and does not produce representative or promotion evidence.
+
 Before broad production enablement:
 
 1. Have the data owner prepare an independently adjudicated representative

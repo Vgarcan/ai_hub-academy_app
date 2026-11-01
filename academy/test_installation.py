@@ -910,14 +910,14 @@ class ReadmeIsAnOperationalContractTests(SimpleTestCase):
                 self.assertIn("never adopts", flattened)
                 self.assertIn("another application", flattened)
 
-    def test_the_lab_evaluator_is_not_presented_as_a_working_installation_step(self):
-        text = self.documents()["docs_source/15_ACADEMY_FEATURES.md"]
-        order = text[text.index("### Full Setup Order"):]
-        order = order[: order.index("```", order.index("```bash") + 7)]
-        self.assertNotIn("--create-evaluator", order)
-        self.assertIn("issues/26", text)
-        self.assertIn("issues/25", text)
-        self.assertNotIn("to enable AI scoring", text)
+    def test_the_lab_evaluator_step_is_documented_as_all_or_nothing(self):
+        text = " ".join(self.documents()["docs_source/15_ACADEMY_FEATURES.md"].split())
+        self.assertIn("seed_lab_exercises --create-evaluator", text)
+        self.assertIn("all-or-nothing", text)
+        self.assertIn("non-zero status", text)
+        self.assertNotIn("Known limitation", text)
+        self.assertNotIn("Do not use `--create-evaluator` yet", text)
+        self.assertNotIn("issues/26", text)
 
     def test_markdown_tables_in_the_academy_docs_are_not_torn_apart_by_pipes(self):
         """GitHub splits a table row on EVERY unescaped `|`, even inside `code`.

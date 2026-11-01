@@ -280,6 +280,7 @@ suite runs it against a disposable database.
 | `python manage.py seed_academy_training_data` | Create training provider, agents, tutorial modules and missions |
 | `python manage.py import_academy_docs` | Synchronize `ai_hub/_docs/` and `docs_source/` into the database |
 | `python manage.py seed_lab_exercises` | Create or update the Academy lab exercises |
+| `python manage.py seed_lab_exercises --create-evaluator` | Also create the AI evaluator agent in Academy's scope. Needs an active non-training model; refuses, with a non-zero exit and nothing written, if the scope, the model or an existing evaluator is unusable |
 | `python manage.py seed_ollama_agents` | Set up Ollama provider and GAME agents (requires local Ollama) |
 | `python manage.py run_doc_sync` | Run the Documentation Sync GAME agent once |
 | `python manage.py embed_docs` | Generate semantic embeddings for active documentation chunks (requires Ollama with `bge-m3:latest`) |

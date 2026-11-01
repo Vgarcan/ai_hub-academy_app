@@ -5,8 +5,22 @@ Usage:
     python manage.py seed_lab_exercises
     python manage.py seed_lab_exercises --force           # overwrite existing
     python manage.py seed_lab_exercises --create-evaluator  # also create/update the AI evaluator agent
+
+`--create-evaluator` is all-or-nothing. Academy's ApplicationScope, the model and
+any existing evaluator are validated BEFORE anything is written, the exercises and
+the evaluator are written in one transaction, and every refusal is a CommandError
+(non-zero exit) that leaves the database as it was.
 """
-from django.core.management.base import BaseCommand
+from contextlib import nullcontext
+
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
+
+from academy.services.scope_bootstrap import SETTING_NAME, resolve_seed_scope
+from ai_hub.models import AgentProfile, ModelConfig, ProviderConfig
+
+EVALUATOR_NAME = "Lab Exercise Evaluator"
+EVALUATOR_ROLE = "Evaluates student answers for Academy Lab exercises. Do not modify the system prompt."
 
 
 EVALUATOR_SYSTEM_PROMPT = """You are an educational assistant that evaluates student answers for AI Hub Academy lab exercises.
@@ -520,15 +534,51 @@ class Command(BaseCommand):
             "--create-evaluator",
             action="store_true",
             help=(
-                "Also create/update the 'Lab Exercise Evaluator' AgentProfile "
-                "using the first available non-training model config."
+                "Also create/update the 'Lab Exercise Evaluator' AgentProfile in "
+                "Academy's ApplicationScope, using an active non-training model "
+                "config. Refuses (non-zero exit, nothing written) if the scope, the "
+                "model or an existing evaluator is not usable."
             ),
         )
 
     def handle(self, *args, **options):
+        plan = None
+        if options["create_evaluator"]:
+            # Read-only. Ownership and the model are decided before ANY write, so
+            # a refusal cannot leave seeded exercises behind as a partial success.
+            plan = self._plan_evaluator()
+
+        try:
+            with transaction.atomic() if plan else nullcontext():
+                created_count, skipped_count = self._seed_exercises(options["force"])
+                if plan:
+                    self._apply_evaluator(plan)
+        except CommandError:
+            raise
+        except Exception as exc:
+            if plan is None:
+                raise
+            raise CommandError(
+                f"Could not create the '{EVALUATOR_NAME}' agent: {exc}\n\n"
+                "Nothing was written by this command; fix the cause and run it again."
+            ) from exc
+
+        self.stdout.write(self.style.SUCCESS(
+            f"\nDone. {created_count} exercise(s) created/updated, {skipped_count} skipped."
+        ))
+
+        if not plan:
+            self.stdout.write(
+                "\nNext step: to enable AI evaluation, create an AgentProfile named "
+                f"'{EVALUATOR_NAME}' in Admin > AI Hub > Agent profiles.\n"
+                "Recommended system prompt:\n"
+                f"{EVALUATOR_SYSTEM_PROMPT}\n"
+                "Or re-run with --create-evaluator to do it automatically."
+            )
+
+    def _seed_exercises(self, force):
         from academy.models import LabExercise, TutorialModule
 
-        force = options["force"]
         created_count = 0
         skipped_count = 0
 
@@ -582,52 +632,95 @@ class Command(BaseCommand):
                 action = "Created" if was_created else "Updated"
                 self.stdout.write(self.style.SUCCESS(f"  [{action}] {exercise.title}"))
                 created_count += 1
+        return created_count, skipped_count
 
-        self.stdout.write(self.style.SUCCESS(
-            f"\nDone. {created_count} exercise(s) created/updated, {skipped_count} skipped."
-        ))
+    def _plan_evaluator(self):
+        """Validate everything the evaluator needs. Writes nothing."""
+        scope = resolve_seed_scope()
+        existing = (
+            AgentProfile.objects.select_related("application_scope", "model_config__provider")
+            .filter(name=EVALUATOR_NAME)
+            .first()
+        )
+        if existing is not None and existing.application_scope_id != scope.pk:
+            # Names are globally unique, so Academy cannot own a second evaluator,
+            # and it will not borrow, edit or move another scope's agent.
+            raise CommandError(
+                f"An agent named '{EVALUATOR_NAME}' already exists in application "
+                f"scope '{existing.application_scope.slug}', not in Academy's scope "
+                f"'{scope.slug}'. Agent names are globally unique, and this command "
+                "will not reuse, modify or reassign an agent that belongs to another "
+                "scope. If that scope really is Academy's, declare it with "
+                f"{SETTING_NAME}={existing.application_scope.slug} in .env; otherwise "
+                "rename or remove that agent deliberately in the Admin. "
+                "Nothing was written by this command."
+            )
 
-        if options["create_evaluator"]:
-            self._create_evaluator_agent()
+        if existing is not None and self._model_is_usable(existing.model_config):
+            # Repeatable: an evaluator that already works keeps the model it has.
+            model = existing.model_config
         else:
-            self.stdout.write(
-                "\nNext step: to enable AI evaluation, create an AgentProfile named "
-                "'Lab Exercise Evaluator' in Admin > AI Hub > Agent profiles.\n"
-                "Recommended system prompt:\n"
-                f"{EVALUATOR_SYSTEM_PROMPT}\n"
-                "Or re-run with --create-evaluator to do it automatically."
-            )
+            model = self._select_model()
+        return scope, existing, model
 
-    def _create_evaluator_agent(self):
-        try:
-            from ai_hub.models import AgentProfile, ModelConfig, ProviderConfig
+    @staticmethod
+    def _model_is_usable(model):
+        return (
+            model.is_active
+            and model.provider.is_active
+            and model.provider.provider_type != ProviderConfig.ProviderType.TRAINING
+        )
 
-            model = (
-                ModelConfig.objects.filter(is_active=True)
-                .exclude(provider__provider_type=ProviderConfig.ProviderType.TRAINING)
-                .first()
-            )
-            if not model:
-                self.stdout.write(self.style.WARNING(
-                    "No non-training model found. "
-                    "Create a model config first, then re-run with --create-evaluator."
-                ))
-                return
+    @staticmethod
+    def _select_model():
+        candidates = ModelConfig.objects.exclude(
+            provider__provider_type=ProviderConfig.ProviderType.TRAINING
+        ).select_related("provider")
+        model = candidates.filter(is_active=True, provider__is_active=True).first()
+        if model is not None:
+            return model
 
-            agent, created = AgentProfile.objects.update_or_create(
-                name="Lab Exercise Evaluator",
-                defaults={
-                    "role": "Evaluates student answers for Academy Lab exercises. Do not modify the system prompt.",
-                    "model_config": model,
-                    "system_prompt": EVALUATOR_SYSTEM_PROMPT,
-                    "is_active": True,
-                },
+        unusable = [str(m) for m in candidates.order_by("id")[:3]]
+        if unusable:
+            raise CommandError(
+                "No active non-training model is available: the existing model "
+                f"config(s) or their providers are inactive ({', '.join(unusable)}). "
+                "Activate one in Admin > AI Hub, then re-run with --create-evaluator. "
+                "Nothing was written by this command."
             )
-            action = "Created" if created else "Updated"
+        raise CommandError(
+            "No active non-training model config exists. Create a provider and a "
+            "model config first, then re-run with --create-evaluator. "
+            "Nothing was written by this command."
+        )
+
+    def _apply_evaluator(self, plan):
+        scope, existing, model = plan
+        fields = {
+            "role": EVALUATOR_ROLE,
+            "model_config": model,
+            "system_prompt": EVALUATOR_SYSTEM_PROMPT,
+            "is_active": True,
+        }
+        if existing is None:
+            AgentProfile.objects.create(
+                application_scope=scope, name=EVALUATOR_NAME, **fields
+            )
             self.stdout.write(self.style.SUCCESS(
-                f"{action} 'Lab Exercise Evaluator' agent (model: {model})."
+                f"Created '{EVALUATOR_NAME}' agent in scope '{scope.slug}' (model: {model})."
             ))
-        except ImportError:
-            self.stdout.write(self.style.WARNING("ai_hub app not available — skipping evaluator creation."))
-        except Exception as exc:
-            self.stdout.write(self.style.ERROR(f"Could not create evaluator agent: {exc}"))
+            return
+
+        changed = [name for name, value in fields.items() if getattr(existing, name) != value]
+        if not changed:
+            self.stdout.write(
+                f"'{EVALUATOR_NAME}' agent in scope '{scope.slug}' is already up to date."
+            )
+            return
+        for name in changed:
+            setattr(existing, name, fields[name])
+        existing.save(update_fields=[*changed, "updated_at"])
+        self.stdout.write(self.style.SUCCESS(
+            f"Updated '{EVALUATOR_NAME}' agent in scope '{scope.slug}' "
+            f"(changed: {', '.join(changed)}; model: {existing.model_config})."
+        ))

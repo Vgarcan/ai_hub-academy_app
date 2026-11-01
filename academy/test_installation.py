@@ -299,6 +299,101 @@ class ScopeBootstrapServiceTests(TestCase):
         self.assertIn(f"{SETTING_NAME}=legacy-default", message)
         self.assertFalse(ApplicationScope.objects.filter(slug=ACADEMY_SCOPE_SLUG).exists())
 
+    def inactive_legacy_scope_holding(self, *, agent=None, collection=None):
+        """`legacy-default` is INACTIVE and holds Academy-named resources; no `academy`."""
+        legacy = ApplicationScope.objects.create(
+            slug="legacy-default", name="Legacy default", is_active=False
+        )
+        if agent:
+            provider = ProviderConfig.objects.create(name="p", provider_type="training")
+            model = ModelConfig.objects.create(provider=provider, model_name="m")
+            AgentProfile.objects.create(
+                name=agent, role="r", model_config=model, application_scope=legacy
+            )
+        if collection:
+            KnowledgeCollection.objects.create(name=collection, application_scope=legacy)
+        return legacy
+
+    def test_bootstrap_does_not_create_academy_beside_academy_resources_in_an_inactive_scope(self):
+        """No scope is active, so the old code created `academy`, then the seed refused."""
+        legacy = self.inactive_legacy_scope_holding(agent="Input Normalizer")
+        self.assertFalse(ApplicationScope.objects.filter(is_active=True).exists())
+
+        with self.assertRaises(ScopeBootstrapError) as raised:
+            ensure_academy_scope()
+
+        message = str(raised.exception)
+        self.assertIn("Input Normalizer", message)
+        self.assertIn("'legacy-default'", message)
+        self.assertIn(f"{SETTING_NAME}=", message)
+        self.assertFalse(ApplicationScope.objects.filter(slug=ACADEMY_SCOPE_SLUG).exists())
+        self.assertEqual(ApplicationScope.objects.count(), 1)
+        legacy.refresh_from_db()
+        self.assertFalse(legacy.is_active)  # never reactivated
+        self.assertEqual(
+            AgentProfile.objects.get(name="Input Normalizer").application_scope_id, legacy.pk
+        )  # never reassigned
+
+    def test_the_same_holds_for_an_academy_collection_in_an_inactive_scope(self):
+        self.inactive_legacy_scope_holding(collection="AI Hub Official Docs")
+
+        with self.assertRaises(ScopeBootstrapError) as raised:
+            ensure_academy_scope()
+
+        self.assertIn("AI Hub Official Docs", str(raised.exception))
+        self.assertFalse(ApplicationScope.objects.filter(slug=ACADEMY_SCOPE_SLUG).exists())
+
+    def test_bootstrap_command_leaves_no_scope_behind_for_the_seed_to_trip_over(self):
+        self.inactive_legacy_scope_holding(agent="Input Normalizer")
+
+        with self.assertRaises(CommandError):
+            run("bootstrap_academy_scope")
+        self.assertEqual(ApplicationScope.objects.count(), 1)
+
+        with self.assertRaises(CommandError) as raised:  # the seed agrees, and writes nothing
+            run("seed_academy_training_data")
+        self.assertIn("Input Normalizer", str(raised.exception))
+        self.assertEqual(ProviderConfig.objects.count(), 1)  # only the fixture's
+        self.assertEqual(ApplicationScope.objects.count(), 1)
+
+    def test_install_sequence_stops_at_the_bootstrap_with_nothing_created(self):
+        self.inactive_legacy_scope_holding(agent="Input Normalizer")
+        before = counts()
+
+        with self.assertRaises(CommandError):
+            install_sequence()
+
+        self.assertEqual(counts(), before)
+
+    @override_settings(**{SETTING_NAME: "legacy-default"})
+    def test_declaring_that_inactive_scope_is_still_refused_not_reactivated(self):
+        """Declared ownership is honored, but an inactive scope is never reactivated."""
+        legacy = self.inactive_legacy_scope_holding(agent="Input Normalizer")
+
+        with self.assertRaises(ScopeBootstrapError) as raised:
+            ensure_academy_scope()
+
+        self.assertIn("will not reactivate", str(raised.exception))
+        legacy.refresh_from_db()
+        self.assertFalse(legacy.is_active)
+
+    def test_an_unrelated_inactive_scope_with_no_academy_resources_still_allows_creation(self):
+        """The conflict check must not block a legitimate fresh install."""
+        legacy = ApplicationScope.objects.create(
+            slug="legacy-default", name="Legacy default", is_active=False
+        )
+        provider = ProviderConfig.objects.create(name="p", provider_type="training")
+        model = ModelConfig.objects.create(provider=provider, model_name="m")
+        AgentProfile.objects.create(
+            name="Somebody Else's Agent", role="r", model_config=model, application_scope=legacy
+        )
+
+        result = ensure_academy_scope()
+
+        self.assertTrue(result.created)
+        legacy.refresh_from_db()
+        self.assertFalse(legacy.is_active)
+
     def test_every_seeded_academy_name_is_covered_by_the_conflict_check(self):
         """The conflict check lists names by hand; keep it in step with the seeds."""
         ensure_academy_scope()

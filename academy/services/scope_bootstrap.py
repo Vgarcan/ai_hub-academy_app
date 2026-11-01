@@ -93,19 +93,24 @@ def _quoted(slugs) -> str:
     return ", ".join(f"'{slug}'" for slug in slugs)
 
 
-def _foreign_resources(scope: ApplicationScope) -> list:
-    """Academy-named agents/collections that live in some other scope."""
+def _foreign_resources(scope: ApplicationScope | None) -> list:
+    """Academy-named agents/collections that live in a scope other than `scope`.
+
+    With `scope=None` (Academy's scope does not exist yet) every such resource is
+    foreign by definition.
+    """
+    agents = AgentProfile.objects.filter(name__in=ACADEMY_AGENT_NAMES)
+    collections = KnowledgeCollection.objects.filter(name__in=ACADEMY_COLLECTION_NAMES)
+    if scope is not None:
+        agents = agents.exclude(application_scope=scope)
+        collections = collections.exclude(application_scope=scope)
     found = [
         f"agent '{row.name}' (scope '{row.application_scope.slug}')"
-        for row in AgentProfile.objects.filter(name__in=ACADEMY_AGENT_NAMES)
-        .exclude(application_scope=scope)
-        .select_related("application_scope")
+        for row in agents.select_related("application_scope")
     ]
     found += [
         f"collection '{row.name}' (scope '{row.application_scope.slug}')"
-        for row in KnowledgeCollection.objects.filter(name__in=ACADEMY_COLLECTION_NAMES)
-        .exclude(application_scope=scope)
-        .select_related("application_scope")
+        for row in collections.select_related("application_scope")
     ]
     return found
 
@@ -219,6 +224,23 @@ def _decide(*, create: bool) -> ScopeBootstrapResult:
 
         if active:
             raise _foreign_scope_error(active)
+
+        # Nothing is active, but Academy-named resources may sit in an inactive
+        # scope. Creating `academy` beside them would only make the seeds refuse
+        # afterwards and leave a scope behind, so refuse first and create nothing.
+        conflicts = _foreign_resources(None)
+        if conflicts:
+            raise ScopeBootstrapError(
+                f"Academy's own application scope '{DEFAULT_SCOPE_SLUG}' does not "
+                "exist, but Academy-seeded resources already exist in another "
+                "(inactive) scope: "
+                + "; ".join(conflicts)
+                + ". Setup will not create a new scope beside them, and will not "
+                "reactivate, rename or reassign anything. If that scope really is "
+                "Academy's, reactivate it in Admin > Application scopes and "
+                f"declare it with {SETTING_NAME}=<slug> in .env, then run setup "
+                "again."
+            )
 
         taken_name = ApplicationScope.objects.filter(name=ACADEMY_SCOPE_NAME).first()
         if taken_name is not None:

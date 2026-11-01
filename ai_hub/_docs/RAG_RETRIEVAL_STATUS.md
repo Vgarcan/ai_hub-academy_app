@@ -3,7 +3,7 @@
 This is the concise, versioned status reference for reusable Core RAG
 retrieval. Historical design notes are not an operational source of truth.
 
-## Current Checkpoint — 2026-10-31
+## Current Checkpoint — 2026-11-01
 
 - S-28 Agent-facing hybrid Knowledge search is merged to `main` at `b91aa7c`
   through PR #15.
@@ -17,10 +17,47 @@ retrieval. Historical design notes are not an operational source of truth.
 - S-29 (controlled harness), S-30 (representative-evidence protocol), S-31
   (audit) and S-32 (evaluation integrity) are merged to `main`. S-33 below
   records the post-S-32 live revalidation and one further fail-closed fix.
-- **Current work:** the controlled baseline is reproduced and stable. The
-  blocking input is now external: an independently adjudicated representative
-  package from a data owner, following the S-30 protocol. No lexical behavior,
-  no-answer threshold or ANN routing change is authorized by this checkpoint.
+- S-34 adds a separate, isolated public-document exploratory pilot. Its real
+  local-embedding run is recorded below and remains unjudged evidence.
+- **Current dependency:** an independently adjudicated representative package
+  from a data owner, following the S-30 protocol. No lexical behavior,
+  no-answer threshold or ANN routing change follows from this checkpoint.
+
+## S-34 Isolated Exploratory Pilot — 2026-11-01
+
+PR #21 introduced the report-first `knowledge_exploratory_pilot` command for a
+dedicated, marked SQLite database and scoped public-document fixture. The
+candidate-v3 package is supplied locally, not committed to the repository.
+Report mode makes no provider call or write; fixture creation and governed
+embedding indexing require explicit opt-in. Execution composes existing
+lexical, exact semantic and hybrid services and rejects incomplete coverage,
+detected snapshot drift and degraded hybrid runs. The general indexing command
+does not enforce the pilot marker: operators must verify its database target.
+
+An isolated live run used local `bge-m3:latest`, with 1,024 dimensions and
+cosine/L2 normalization. The operator checked the model digest and the longest
+canonical input without truncation. It indexed **111/111** windows and ran
+**24/24** candidate questions through all three paths, with current coverage,
+no hybrid degradation and no detected pre/post snapshot drift. A foreign-scope
+assignment was excluded and refused in a rolled-back isolation check. CI #73
+passed the three required jobs on implementation commit `6306568`; 332 focused
+retrieval and embedding tests also passed during final review.
+
+Content-free run identifiers:
+
+- Candidate SHA-256: `f9ae91da0c49caa3de85b75896e4319db05a1780a1f8c3f02bc4fdaef3ee6fb0`.
+- Model digest: `7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab`.
+- Embedding contract: `e1:sha256:830aefe95e0ee54c0f1f7b64fe3d67bca5f08c8ff7daf1063771e51d953a487b`.
+- Results SHA-256: `943d3b2aff5917bb022b374fb7892fbbb244876a9c704b49c4dfef72862e3159`.
+
+Evidence class is **`public_exploratory_unjudged`**. Every path returned five
+windows for each of the six provisional no-answer cases, but those windows
+were not judged: this is not a false-positive rate or an abstention result.
+Separate query-embedding calls and pre/post snapshots limit comparison and do
+not rule out transient changes restored between checks. The run does not
+establish representative quality, authorize a threshold or promote a backend.
+See [`RAG_EXPLORATORY_PILOT.md`](RAG_EXPLORATORY_PILOT.md) for the operator
+contract and isolation limitations.
 
 ## S-29 Controlled Live Baseline — 2026-10-31
 
@@ -219,6 +256,8 @@ behind documents matched only by substrings of `is` and `what`.
 - Golden-query evaluation and a fail-closed promotion decision contract.
 - Versioned, report-first controlled retrieval-quality evaluation through
   `knowledge_retrieval_evaluate`.
+- A separate isolated, report-first public-document exploratory pilot through
+  `knowledge_exploratory_pilot`, without relevance or promotion claims.
 
 ## Activation Contract
 

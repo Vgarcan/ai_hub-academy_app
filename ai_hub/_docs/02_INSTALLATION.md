@@ -166,6 +166,25 @@ form widget on pages that need them.
 If the page renders without the guided UI styling, the most likely cause is a
 static files deployment issue.
 
+## Create An Application Scope
+
+Every Knowledge collection, Agent and GAME workspace belongs to exactly one
+`ApplicationScope`: the boundary that keeps one application's data apart from
+another's. A fresh Core installation has none, and Core never creates or
+chooses one for you. Create the first scope before the Knowledge collection or
+Agent below:
+
+```text
+/admin/ai_hub/applicationscope/add/
+```
+
+- `Name`: the application this installation serves, for example `Internal Support`.
+- `Slug`: the stable machine handle. It is filled from the name; keep it stable.
+- `Is active`: enabled. Only active scopes can be chosen for new resources.
+
+A host application that provisions its own scope (for example through its setup
+command) can skip this step. Check `/admin/ai_hub/applicationscope/` first.
+
 ## Configure The First Provider
 
 Open:
@@ -229,11 +248,12 @@ Open:
 
 Minimum useful setup:
 
+- Choose the `Application scope` that owns the agent. The selector has no default, even when only one scope exists, and the scope is read-only after the agent is saved.
 - Choose an active model.
 - Give the agent a clear role.
 - Write a focused system prompt.
 - Add an output contract if the result must be structured JSON.
-- Attach knowledge collections only when the agent needs curated context.
+- Attach knowledge collections only when the agent needs curated context. Attach collections from the agent's own scope: a collection owned by a different scope is never retrievable by the agent.
 - Attach tools only when the runtime can execute them safely.
 
 Good agent names are concrete:
@@ -245,6 +265,20 @@ Report Writer
 Support Triage Agent
 GAME Planning Agent
 ```
+
+## Create A Knowledge Collection
+
+Open:
+
+```text
+/admin/ai_hub/knowledgecollection/add/
+```
+
+Choose the `Application scope` that owns the collection. Like the agent form,
+the selector has no default and the form will not save without an explicit
+choice. The scope is read-only afterwards, because a collection's documents and
+embeddings are stored under it. If no scope is listed, create one first (see
+above); inactive scopes are not offered.
 
 ## Choose A Workspace
 

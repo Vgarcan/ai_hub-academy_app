@@ -508,6 +508,13 @@ Host-project features should be documented in the host project, not here.
 
 ### Fixed
 
+- Fixed the Admin add forms for Agents and Knowledge collections, which omitted
+  the required `application_scope` and could not create either object. The
+  scope is now an explicit, required selector with no preselected value; only
+  active scopes are offered. It is read-only after creation so existing
+  ownership cannot be reassigned from a form. The installation guide now covers
+  creating a scope first.
+
 #### Documentation truth audit
 
 - Audited the complete tracked documentation set against settings, model

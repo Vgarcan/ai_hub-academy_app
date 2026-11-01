@@ -21,6 +21,11 @@ from ai_hub.services.contracts import validate_payload
 from ai_hub.services.game_agent_resolution import resolve_game_entry_agent
 from ai_hub.services.game_feature_flags import is_game_feature_enabled, require_game_feature
 from ai_hub.services.game_operational_ux import redact_payload
+from ai_hub.services.knowledge_authorization import (
+    authorized_collections,
+    authorized_documents,
+    resolve_effective_knowledge_scope,
+)
 from ai_hub.services.tool_resolution import ResolvedTool, resolve_agent_tools
 from ai_hub.services.tools_runtime import bind_tool_runtime_context, execute_tool
 
@@ -219,9 +224,13 @@ def _handle_search_knowledge(action_run: GameActionRun, workspace, goal, payload
     max_chars = 4000
     remaining = max_chars
 
-    collections = entry_agent.knowledge_collections.filter(is_active=True).prefetch_related("documents")
-    for collection in collections:
-        for doc in collection.documents.filter(status="active").order_by("title"):
+    # The S-15 effective scope, resolved exactly as canonical retrieval does: a
+    # cross-scope assignment, an inactive agent or scope, or a foreign workspace
+    # authorizes nothing. Order is unchanged: collection name, then title.
+    scope = resolve_effective_knowledge_scope(entry_agent, workspace=workspace)
+    documents = authorized_documents(scope)
+    for collection in authorized_collections(scope):
+        for doc in documents.filter(collection=collection).order_by("title"):
             title_match = query_lower in doc.title.lower()
             tag_match = any(query_lower in str(t).lower() for t in (doc.tags or []))
             content_text = doc.curated_text or ""
@@ -265,16 +274,11 @@ def _handle_read_document(action_run: GameActionRun, workspace, goal, payload: d
         entry_agent = resolve_game_entry_agent(action_run.session)
     if entry_agent is None:
         raise ValidationError("read_document requires an effective GAME agent.")
-    allowed_collection_ids = set(
-        entry_agent.knowledge_collections.filter(is_active=True).values_list("id", flat=True)
-    )
+    # Same effective scope as search: the requested id only narrows within it.
+    scope = resolve_effective_knowledge_scope(entry_agent, workspace=workspace)
 
     try:
-        doc = KnowledgeDocument.objects.get(
-            pk=document_id,
-            collection_id__in=allowed_collection_ids,
-            status=KnowledgeDocument.Status.ACTIVE,
-        )
+        doc = authorized_documents(scope).get(pk=document_id)
     except KnowledgeDocument.DoesNotExist:
         raise ValidationError(
             f"Document {document_id} not found or not accessible in this session's knowledge collections."

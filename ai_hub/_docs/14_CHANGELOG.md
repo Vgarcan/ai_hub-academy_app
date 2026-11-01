@@ -474,6 +474,12 @@ Host-project features should be documented in the host project, not here.
 - Python context tools additionally require `read_only=True`; HTTP context tools
   additionally require GET or HEAD; both constraints close a prior classification
   loophole.
+- SEC-1: GAME's compatibility `search_knowledge` and `read_document` selected
+  actions now resolve the S-15 effective Knowledge scope instead of reading the
+  Agent's collection assignments directly. A collection assigned across
+  `ApplicationScope` boundaries, an inactive Agent or scope, and a foreign or
+  inactive workspace no longer expose Knowledge through these actions. Matching,
+  ordering, output shape and character limits are unchanged.
 
 #### Compatibility and environment
 

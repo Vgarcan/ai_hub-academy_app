@@ -171,8 +171,16 @@ path changes.
 - Knowledge is stored as collections, documents and chunks.
 - Retrieval services can list libraries, browse indexes, search chunks, read a
   selected chunk/section and return citation metadata.
-- Agent access is restricted to active collections and documents attached to the
-  agent.
+- Agent access is the S-15 effective scope: the Agent's active
+  `ApplicationScope` ∩ its collection assignments ∩ workspace coherence, limited
+  to active collections and documents. An assignment to a collection owned by
+  another scope, an inactive Agent or scope, or a foreign or inactive workspace
+  grants nothing.
+- Every Knowledge read surface resolves that scope through
+  `knowledge_authorization`: the canonical retrieval services and adapters, the
+  prompt index, the legacy eager context and, since SEC-1, GAME's compatibility
+  `search_knowledge` and `read_document` selected actions. Those GAME actions
+  keep their document-level matching, ordering and character limits.
 - The host defaults
   `AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=False`. Normal runner calls
   receive a bounded collection/document index and no document body.

@@ -158,6 +158,36 @@ class AIHubFormHelpMixin:
         return formfield
 
 
+class ExplicitApplicationScopeMixin:
+    """Make a required `application_scope` an explicit operator choice.
+
+    S-14 made ownership mandatory and Core never guesses a scope, so the Admin
+    must not either: the add form renders the selector with NO preselection,
+    even when exactly one scope is active, and a missing choice is a normal
+    required-field error. Only active scopes are offered for NEW resources.
+
+    Ownership is read-only once the object exists. A collection's scope is
+    denormalized onto its chunks and embeddings and an agent's scope decides
+    which Knowledge it may reach (S-15), so reassigning it from a form would
+    silently desynchronize both. Moving a resource between scopes is a
+    deliberate migration, not an edit. `readonly_fields` also means a forged
+    `application_scope` value in a change POST is ignored.
+
+    Use only on admins whose fieldsets list `application_scope`.
+    """
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly = list(super().get_readonly_fields(request, obj))
+        if obj is not None and "application_scope" not in readonly:
+            readonly.append("application_scope")
+        return readonly
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "application_scope":
+            kwargs["queryset"] = ApplicationScope.objects.filter(is_active=True).order_by("name")
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+
 class AIHubListPageMixin(AIHubFormHelpMixin):
     change_list_template = "admin/ai_hub/section_change_list.html"
     change_form_template = "admin/ai_hub/styled_change_form.html"
@@ -1221,7 +1251,7 @@ class ToolboxToolAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, admin.ModelA
 
 
 @admin.register(KnowledgeCollection)
-class KnowledgeCollectionAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class KnowledgeCollectionAdmin(ExplicitApplicationScopeMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Knowledge collections")
     ai_hub_section_description = _(
         "Group documents by the kind of context your agents should read. Collections are the container, "
@@ -1244,6 +1274,12 @@ class KnowledgeCollectionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     search_fields = ("name", "description", "documents__title", "documents__curated_text")
     inlines = [KnowledgeDocumentInline]
     ai_hub_field_guidance = {
+        "application_scope": {
+            "help_text": _(
+                "The application that owns this collection. Choose it explicitly: Core never guesses. "
+                "It cannot be changed after creation."
+            ),
+        },
         "name": {
             "placeholder": "Example: Safety rules, Product docs, Jungian symbols",
             "help_text": _("Name the collection by the kind of knowledge agents should receive."),
@@ -1259,7 +1295,7 @@ class KnowledgeCollectionAdmin(AIHubListPageMixin, admin.ModelAdmin):
     }
     fieldsets = (
         ("1.0 Knowledge collection", {
-            "fields": ("name", "description", "is_active"),
+            "fields": ("application_scope", "name", "description", "is_active"),
             "description": _(
                 "Group documents by the way agents should consume them: general symbols, Jungian references, "
                 "cultural context, product rules, safety guidance, etc. Agents attach to collections, not "
@@ -1409,7 +1445,7 @@ class KnowledgeDocumentChunkAdmin(AIHubHideFromIndexMixin, AIHubListPageMixin, a
 
 
 @admin.register(AgentProfile)
-class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
+class AgentProfileAdmin(ExplicitApplicationScopeMixin, AIHubListPageMixin, admin.ModelAdmin):
     ai_hub_section_title = _("Agents")
     ai_hub_section_description = _(
         "Define a specialist once, then reuse it in Orchestrator, GAME or both. This is where prompts, "
@@ -1447,6 +1483,12 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
     readonly_fields = ("resolved_tool_manifest",)
     change_form_template = "admin/ai_hub/agentprofile/change_form.html"
     ai_hub_field_guidance = {
+        "application_scope": {
+            "help_text": _(
+                "The application that owns this agent. Choose it explicitly: Core never guesses. "
+                "It cannot be changed after creation."
+            ),
+        },
         "name": {
             "placeholder": "Example: support_ticket_triage or symbol_extractor",
             "help_text": _("Use a short machine-friendly name. This appears in timelines and pipeline steps."),
@@ -1494,7 +1536,7 @@ class AgentProfileAdmin(AIHubListPageMixin, admin.ModelAdmin):
     }
     fieldsets = (
         ("3.0 Agent identity", {
-            "fields": ("name", "role", "is_active"),
+            "fields": ("application_scope", "name", "role", "is_active"),
             "description": _(
                 "An agent is one specialist in the pipeline. Name it by job, for example symbol_extractor, "
                 "knowledge_interpreter or interpretation_writer."

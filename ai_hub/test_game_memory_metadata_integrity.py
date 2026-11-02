@@ -9,11 +9,16 @@ The contract pinned here:
 
   * `source`, `source_id`, `model_derived` are written by the runtime and cannot
     be influenced by model input;
-  * the complete model-supplied metadata is kept, verbatim, under the single
-    `model_supplied` key; a model key literally named `model_supplied` is not a
-    collision, it simply stays inside that namespace;
+  * the complete model-supplied metadata, including any forged values for those
+    keys, is kept verbatim and visible under the single `model_supplied` key,
+    while the top-level runtime fields stay authoritative; a model key literally
+    named `model_supplied` is not a collision, it simply stays inside that
+    namespace;
   * missing or empty metadata keeps the previous stored shape (no namespace key);
-  * non-object metadata is a `ValidationError` before any memory is written;
+  * non-object metadata is a `ValidationError` raised before a memory entry is
+    created; the attempted action is still audited (`execute_game_action()`
+    records a `GameActionRun` first and marks it FAILED), which is existing
+    behaviour and unchanged;
   * scope, content, importance, persistence and retrieval are unchanged, and the
     service-level `record_memory()` (operators, Admin) is untouched.
 
@@ -79,6 +84,7 @@ class RecordMemoryMetadataIntegrityTests(TestCase):
         return GameMemoryEntry.objects.get(pk=action_run.output_payload["memory_entry_id"])
 
     def snapshot(self):
+        """Memory entries and SUCCESSFUL runs. FAILED audit runs are deliberately excluded."""
         return (
             GameMemoryEntry.objects.count(),
             GameActionRun.objects.filter(status=GameActionRun.Status.SUCCESS).count(),
@@ -207,7 +213,7 @@ class NamespaceCollisionTests(RecordMemoryMetadataIntegrityTests):
 
 
 class MalformedMetadataTests(RecordMemoryMetadataIntegrityTests):
-    def test_non_object_metadata_is_rejected_without_writing_anything(self):
+    def test_non_object_metadata_is_rejected_without_creating_a_memory_entry(self):
         for bad in ("text", "", 0, 7, 1.5, True, False, ["a"], []):
             with self.subTest(bad=bad):
                 before = self.snapshot()
@@ -218,7 +224,7 @@ class MalformedMetadataTests(RecordMemoryMetadataIntegrityTests):
                 self.assertEqual(self.snapshot(), before)
                 self.assertFalse(GameMemoryEntry.objects.filter(content="never stored").exists())
 
-    def test_a_rejected_write_is_recorded_as_a_failed_action_run(self):
+    def test_a_rejected_attempt_is_still_audited_as_a_failed_action_run(self):
         with self.assertRaises(ValidationError):
             self.write(content="never stored", metadata=["x"])
 
@@ -233,7 +239,7 @@ class MalformedMetadataTests(RecordMemoryMetadataIntegrityTests):
 
         self.assertEqual(self.snapshot(), before)
 
-    def test_unknown_scope_is_still_rejected_without_writing(self):
+    def test_unknown_scope_is_still_rejected_without_creating_a_memory_entry(self):
         before = self.snapshot()
 
         with self.assertRaisesMessage(ValidationError, "Unknown GAME memory scope"):

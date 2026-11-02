@@ -255,11 +255,14 @@ actions now pass only the links allowed by their scope.
 Memory written through the model's `record_memory` action carries runtime-owned
 provenance in `metadata`: `source` (`"action_run"`), `source_id` (the writing
 `GameActionRun`) and `model_derived` (`true`). The runtime assigns these
-unconditionally, so a model cannot supply or override them. Any metadata the
-model sends is preserved verbatim under `metadata.model_supplied` (omitted when
-none was sent; a model key named `model_supplied` stays nested inside it), and
-non-object `metadata` is rejected with a validation error before anything is
-written. Entries created in the Admin or through the `record_memory()` service
+unconditionally, so a model cannot supply or override them: the top-level
+runtime fields are authoritative. Any metadata the model sends, including
+forged values for those three keys, remains visible and is preserved verbatim
+under `metadata.model_supplied` (omitted when none was sent; a model key named
+`model_supplied` stays nested inside it). Non-object `metadata` is rejected with
+a validation error before a memory entry is created; the attempted action is
+still audited as a `FAILED` `GameActionRun` and the exception propagates, as for
+other validation errors. Entries created in the Admin or through the `record_memory()` service
 keep whatever metadata their author supplied. Rows written before this change
 may contain model-forged values; they cannot be told apart and are not repaired.
 

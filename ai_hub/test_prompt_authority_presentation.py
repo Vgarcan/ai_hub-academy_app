@@ -835,6 +835,8 @@ class SessionCase(PresentationCase):
             self.assertEqual(self.manifest_classes(messages), call["authority"])
             self.assertEqual(set(_user_json(messages)["context"]), set(call["payload"]))
 
+
+class OrchestratorSessionTests(SessionCase):
     @ON
     def test_orchestrator_downstream_outputs_are_non_authoritative_and_caller_keys_stay_caller_input(self):
         first, second = self.agent("o-first"), self.agent("o-second")
@@ -935,18 +937,23 @@ class SessionCase(PresentationCase):
     @ON
     def test_labels_apply_to_the_legacy_session_runtime_as_well(self):
         tool = self.macro_tool()
-        agent = self.agent("o-legacy", tools=[tool])
+        first, second = self.agent("o-legacy-1", tools=[tool]), self.agent("o-legacy-2")
         session = self.orchestrator_session(
-            [{"agent": agent}], {"q": "host"}, name="s35a1-legacy"
+            [{"agent": first}, {"agent": second}], {"q": "host"}, name="s35a1-legacy"
         )
         session.runtime_config = {"agent_tool_runtime": "legacy_preexecute"}
         session.save()
 
-        model, calls = self.run_session(session, [_final("legacy answer")])
+        model, calls = self.run_session(session, [_final("legacy one"), _final("legacy two")])
 
-        user = _user_json(model.messages[0])
+        step1, step2 = _user_json(model.messages[0]), _user_json(model.messages[1])
         self.assertEqual(model.messages[0][0]["content"], "You are careful." + PROMPT_AUTHORITY_SUFFIX)
-        self.assertEqual(user[MANIFEST_KEY]["tool_results"], NON_AUTHORITATIVE)
+        self.assertEqual(step1[MANIFEST_KEY]["tool_results"], NON_AUTHORITATIVE)
+        # The session classification (not the direct-call default) reaches the legacy runner:
+        classes = self.manifest_classes(model.messages[1])
+        self.assertEqual(classes["q"], CALLER_INPUT)
+        self.assertEqual(classes["llm"], NON_AUTHORITATIVE)  # written by step 1
+        self.assertEqual(step2[MANIFEST_KEY]["context"][CALLER_INPUT], ["q"])
         self.assertManifestMatchesSeam(model, calls)
 
 

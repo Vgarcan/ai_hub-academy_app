@@ -15,6 +15,13 @@ from ai_hub.services.knowledge_authorization import (
     resolve_effective_knowledge_scope,
 )
 from ai_hub.services.knowledge_tooling import KNOWLEDGE_RETRIEVAL_TOOL_NAMES
+from ai_hub.services.prompt_authority import (
+    MANIFEST_KEY,
+    build_context_manifest,
+    labels_enabled,
+    tool_observation_manifest,
+    with_authority_statement,
+)
 from ai_hub.services.provider_registry import resolve_model_config
 from ai_hub.services.tool_resolution import resolve_agent_tools
 from ai_hub.services.tools_runtime import (
@@ -379,7 +386,11 @@ def execute_agent_deliberate(
     allow_plain_final: bool = False,
     unwrap_final_answer: bool = False,
     allow_approval_requests: bool = True,
+    authority: dict | None = None,
 ) -> dict:
+    # `authority` is the internal S-35a0 classification of `payload`, supplied by the
+    # session runners. Hosts do not pass it; without it a direct call is classified
+    # conservatively. It is only used to PRESENT labels (S-35a1) and never gates a tool.
     require_active_agent(agent)
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
     model_cfg = resolve_model_config(agent.model_config)
@@ -404,18 +415,24 @@ def execute_agent_deliberate(
         max_rounds = int(getattr(settings, "AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL", 3))
     max_rounds = min(max(max_rounds, 0), 10)
 
-    messages = [
-        {"role": "system", "content": _structured_tool_system_prompt(agent)},
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "context": payload,
-                    "available_tools": tool_manifest,
-                },
-                default=str,
+    # S-35a1: with the flag off this is exactly the previous construction.
+    labels = labels_enabled()
+    system_content = _structured_tool_system_prompt(agent)
+    user_content = {
+        "context": payload,
+        "available_tools": tool_manifest,
+    }
+    if labels:
+        system_content = with_authority_statement(system_content)
+        user_content = {
+            MANIFEST_KEY: build_context_manifest(
+                payload, authority, envelope_keys=("available_tools",)
             ),
-        },
+            **user_content,
+        }
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": json.dumps(user_content, default=str)},
     ]
     tools_data = {}
     tool_run_ids = []
@@ -571,19 +588,23 @@ def execute_agent_deliberate(
             tool_run.output_payload = tool_result
             prompt_observation = _bounded_tool_observation(tool_name, tool_result)
             tools_data[tool_name] = prompt_observation
+            observation_message = {
+                "tool_observation": {
+                    "tool_name": tool_name,
+                    "result": prompt_observation,
+                }
+            }
+            if labels:
+                # The label sits outside the bounded `result`, so truncation cannot remove it.
+                observation_message = {
+                    MANIFEST_KEY: tool_observation_manifest(),
+                    **observation_message,
+                }
             messages.append({"role": "assistant", "content": json.dumps(decision, default=str)})
             messages.append(
                 {
                     "role": "user",
-                    "content": json.dumps(
-                        {
-                            "tool_observation": {
-                                "tool_name": tool_name,
-                                "result": prompt_observation,
-                            }
-                        },
-                        default=str,
-                    ),
+                    "content": json.dumps(observation_message, default=str),
                 }
             )
         except Exception as exc:
@@ -715,7 +736,9 @@ def execute_agent(
     tool_policy: str = TOOL_POLICY_ALL,
     workspace=None,
     execution_context=None,
+    authority: dict | None = None,
 ) -> dict:
+    # See `execute_agent_deliberate` for `authority` (internal, presentation only).
     require_active_agent(agent)
     validate_payload(payload, agent.input_contract or {}, f"Agent '{agent.name}' input")
     model_cfg = resolve_model_config(agent.model_config)
@@ -749,13 +772,25 @@ def execute_agent(
             tool_name: _bounded_tool_observation(tool_name, tool_result)
             for tool_name, tool_result in tools_data.items()
         }
+    system_content = agent.system_prompt or ""
+    if labels_enabled():
+        # S-35a1: advisory labels; with the flag off nothing below changes.
+        system_content = with_authority_statement(system_content)
+        user_content = {
+            MANIFEST_KEY: build_context_manifest(
+                payload,
+                authority,
+                envelope_keys=("tool_results",) if tools_data else (),
+            ),
+            **user_content,
+        }
     user_message = json.dumps(user_content, default=str)
 
     llm_result = completion_call(
         provider_type=model_cfg["provider_type"],
         model=model_cfg["model"],
         messages=[
-            {"role": "system", "content": agent.system_prompt or ""},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": user_message},
         ],
         api_key=model_cfg["api_key"],

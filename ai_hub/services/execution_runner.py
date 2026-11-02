@@ -99,9 +99,9 @@ def _execute_session_agent(
     authority: dict | None = None,
 ) -> dict:
     # `authority` is the S-35a0 structural classification of `payload` (top-level
-    # key -> authority class, see prompt_authority). It is computed and observable
-    # here but deliberately NOT used: S-35a0 changes nothing the model receives.
-    # S-35a1 will consume it.
+    # key -> authority class, see prompt_authority). S-35a1 hands it to the agent
+    # runners, which present it to the model only when
+    # AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED is on. It never gates tools or approvals.
     if agent_tool_runtime == AGENT_TOOL_RUNTIME_LEGACY:
         output_payload = execute_agent(
             agent,
@@ -109,6 +109,7 @@ def _execute_session_agent(
             tool_policy=tool_policy,
             workspace=_session_workspace(session),
             execution_context={"session": session, "step_run": step_run},
+            authority=authority,
         )
     else:
         workspace = _session_workspace(session)
@@ -124,6 +125,7 @@ def _execute_session_agent(
             # checkpoint. Approval-requiring work must use a governed GAME
             # action, whose dispatcher owns approval and resume.
             allow_approval_requests=False,
+            authority=authority,
         )
         if output_payload.get("status") != "final":
             detail = output_payload.get("error") or output_payload.get("requested_tool") or "unknown error"

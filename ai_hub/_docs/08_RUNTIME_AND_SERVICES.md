@@ -414,6 +414,47 @@ Legacy sessions with no `goal` never create or update a goal. Historical termina
 
 Each applied outcome stores a fingerprint on the session. Replaying the same historical outcome is a no-op, while a changed outcome after a future resume can be applied again. `reconcile_goal_outcomes()` repairs the detectable crash window where a terminal session was saved before its goal update completed.
 
+## Prompt Authority Classification (S-35a0)
+
+`ai_hub.services.prompt_authority` classifies the top-level containers of the
+payload an Orchestrator step or a GAME iteration sends to a model by
+**instructional authority**: who is entitled to direct the agent. It is a
+structural classifier only. **It changes nothing the model receives, grants
+nothing and denies nothing**; the runners compute the result and pass it to the
+private `_execute_session_agent` seam, which ignores it. A later slice (S-35a1)
+will present it to the model. It is not a prompt-injection defence and does not
+prevent injection.
+
+Classes, highest to lowest authority:
+
+| Class | Meaning |
+| --- | --- |
+| `instruction` | The system message (operator prompt plus Core contracts). Not a payload key. |
+| `runtime` | A Core control field whose current value Core computed or overwrote before the model call. |
+| `caller_input` | Supplied by the caller of the run: `initial_context`, the operator goal, `continuation_payload`. Core does not vouch for its content; a host may place end-user or retrieved text there. |
+| `delegated_task` | A work request written by a model and handed to another session. Never promoted to `caller_input`. |
+| `non_authoritative` | Everything else: Knowledge, tool observations, earlier model output, memory and observations. The name means "not entitled to direct the agent", not "malicious". |
+
+Rules. Inputs are structural only (container name, the persisted
+`initial_context` key set, Core's field tables, the `GameDelegationRun` relation,
+input mappings, and an execution-local record of keys written by agent steps);
+**content is never inspected**.
+
+- Total and conservative: unknown or ambiguous data is `non_authoritative`, and the classifier never raises into the runtime.
+- Classification is structural and assigns **one class per top-level key**. Containers Core assembles from mixed sources (observations, memory, tool outputs, step outputs) are `non_authoritative` as a whole, by table; nested paths inherit their top-level key; a size-bounded replacement keeps the class of the container it replaced. `lowest()` implements the ordering for code that combines classes, but the classifiers assign classes by table and do not compute joins at runtime. Mixed content **nested inside a caller- or host-supplied container** (for example end-user text inside `initial_context`) is not detected: that container keeps a single class.
+- A Core field *name* is not proof that Core owns the value the model actually receives. Core restores only the reserved GAME keys after `input_mapping` (`goal`, `goal_text`, `iteration`, `max_iterations`, `memory`, `scoped_memory`, `observations`, `previous_response`, `available_actions`, `game_policy`, `game_response_contract`), so only those keep their class under any mapping: `iteration`, `max_iterations`, `available_actions`, `game_policy`, `game_response_contract` are `runtime`; `goal`/`goal_text` are `caller_input`; `memory`, `scoped_memory`, `observations` and `previous_response` are `non_authoritative`. `knowledge_context` is always overwritten by Core and is `non_authoritative`.
+- `response_contract`, `game_action_dispatch_enabled`, `finish_reason` (Core constants) and `final_answer` are written by Core but **not restored**: unmapped they are `runtime` (`final_answer`: `non_authoritative`, model-derived); when `runtime_config.input_mapping` targets one of them the model receives the mapped source value and the class **follows that source** (for example mapped from `ticket` it is `caller_input`, from `observations` it is `non_authoritative`).
+- `execution_outcome`, `goal_outcome`, `waiting_reason`, `failed_iteration` and `last_error` are written by Core only after a run segment ends or on failure. They are `runtime` only if the current execution witnessed the write (never the case at a model call); otherwise `caller_input` if the caller supplied that name, else `non_authoritative`. `last_error` is never `runtime` because it carries formatted exception text.
+- Orchestrator: keys of the session's `initial_context` are `caller_input`; keys written by any step output (including empty mappings and the `final_output` merge) are `non_authoritative`, **even when they overwrite a caller key**; an input-mapping target inherits the class of the root of its source path; the fallback agent gets the same classification as the primary.
+- A session is delegated only when a `GameDelegationRun` row points at it, never because of `source_label`. In a delegated session `goal`, `goal_text` and every `initial_context` key are `delegated_task`.
+- Direct callers of the agent runners have no session, so every key is `caller_input` except `knowledge_context`.
+
+Limitations: nothing is persisted, so classification is recomputed from
+structural facts and **exact historical provenance is not claimed**; a resumed
+run does not witness the previous segment's writes and classifies them
+conservatively. Source origin, per-call input origins and exposure tracking are
+not part of this classifier (S-35c).
+
 ## Execution Sessions
 
 `ExecutionSession` stores:

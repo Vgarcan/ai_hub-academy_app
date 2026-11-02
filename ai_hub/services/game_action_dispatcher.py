@@ -170,10 +170,24 @@ def _handle_record_memory(action_run: GameActionRun, workspace, goal, payload: d
     except Exception:
         importance_score = Decimal("0.50")
 
-    metadata = dict(payload.get("metadata") or {})
-    metadata.setdefault("source", "action_run")
-    metadata.setdefault("source_id", action_run.pk)
-    metadata.setdefault("model_derived", True)
+    # S-35m. `source`, `source_id` and `model_derived` are RUNTIME facts: this
+    # entry was written by this action run on a model's request. They are
+    # assigned unconditionally, so model input cannot forge them, and everything
+    # the model supplied is kept verbatim, nested under `model_supplied` (a model
+    # key named `model_supplied` stays inside that namespace; nothing collides
+    # and nothing is dropped). No model-supplied metadata -> no namespace key.
+    model_supplied = payload.get("metadata")
+    if model_supplied is None:
+        model_supplied = {}
+    elif not isinstance(model_supplied, dict):
+        raise ValidationError("record_memory 'metadata' must be a JSON object.")
+    metadata = {
+        "source": "action_run",
+        "source_id": action_run.pk,
+        "model_derived": True,
+    }
+    if model_supplied:
+        metadata["model_supplied"] = model_supplied
 
     scope_links = {
         GameMemoryEntry.ScopeType.WORKSPACE: {"goal": None, "session": None},

@@ -521,6 +521,14 @@ Host-project features should be documented in the host project, not here.
   bypass it. Existing cross-scope assignments are neither deleted nor rewritten:
   they are listed in a warning on the agent's page and can be removed there.
   Runtime authorization (S-15) is unchanged.
+- Fixed GAME `record_memory` letting a model overwrite runtime provenance
+  metadata (S-35m). `source`, `source_id` and `model_derived` are now assigned
+  by the runtime unconditionally; the model's own metadata is kept verbatim
+  under `metadata.model_supplied` (forged values stay visible there; the
+  top-level runtime fields are authoritative), and non-object metadata is
+  rejected before a memory entry is created (the attempted action is still
+  audited as FAILED). Memory scope, importance, content and retrieval are unchanged;
+  existing rows are not rewritten.
 
 #### Documentation truth audit
 

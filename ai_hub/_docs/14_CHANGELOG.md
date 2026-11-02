@@ -9,6 +9,8 @@ Host-project features should be documented in the host project, not here.
 
 ### Added
 
+- Added a structural prompt-authority classifier (`ai_hub.services.prompt_authority`, S-35a0). It classifies the containers of Orchestrator and GAME model payloads as `runtime`, `caller_input`, `delegated_task` or `non_authoritative` from runtime-controlled structure only and is observable through a private runner seam. It is behaviour-neutral: messages, tools, contracts, persisted payloads and approvals are unchanged, and it is not an injection defence. `_merge_final_output_object` now returns the keys it wrote; its merge is unchanged.
+
 #### RAG retrieval operationalization
 
 - Added the isolated, report-first `knowledge_exploratory_pilot` for an

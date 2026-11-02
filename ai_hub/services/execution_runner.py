@@ -20,6 +20,11 @@ from ai_hub.services.knowledge_authorization import (
     PipelineScopeError,
     require_coherent_pipeline_scope,
 )
+from ai_hub.services.prompt_authority import (
+    classify_game_payload,
+    classify_orchestrator_payload,
+    session_is_delegated,
+)
 from ai_hub.services.tools_runtime import TOOL_POLICY_ALL, TOOL_POLICY_GAME_CONTEXT_ONLY
 
 
@@ -91,7 +96,12 @@ def _execute_session_agent(
     payload: dict,
     agent_tool_runtime: str,
     tool_policy: str,
+    authority: dict | None = None,
 ) -> dict:
+    # `authority` is the S-35a0 structural classification of `payload` (top-level
+    # key -> authority class, see prompt_authority). It is computed and observable
+    # here but deliberately NOT used: S-35a0 changes nothing the model receives.
+    # S-35a1 will consume it.
     if agent_tool_runtime == AGENT_TOOL_RUNTIME_LEGACY:
         output_payload = execute_agent(
             agent,
@@ -467,10 +477,15 @@ def _extract_json_object_text(value: str) -> str:
     return stripped
 
 
-def _merge_final_output_object(context: dict) -> None:
+def _merge_final_output_object(context: dict) -> list:
+    """Merge a model's `final_output` object into `context`; return the keys written.
+
+    The return value lets the runner record those keys as written by an agent
+    step (S-35a0); the merge itself is unchanged.
+    """
     value = context.get("final_output")
     if not value:
-        return
+        return []
     if isinstance(value, dict):
         payload = value
     elif isinstance(value, str):
@@ -478,14 +493,17 @@ def _merge_final_output_object(context: dict) -> None:
             payload = json.loads(_extract_json_object_text(value))
         except (TypeError, ValueError) as exc:
             context["final_output_parse_error"] = str(exc)
-            return
+            return ["final_output_parse_error"]
     else:
-        return
+        return []
     if not isinstance(payload, dict):
-        return
+        return []
+    written = []
     for key, payload_value in payload.items():
         if key != "final_output":
             context[key] = payload_value
+            written.append(key)
+    return written
 
 
 def _raise_final_output_parse_error_if_required(context: dict, contract: dict) -> None:
@@ -707,6 +725,13 @@ def _run_game_session(
     final_answer = ""
     finish_reason = ""
     response_contract = _game_response_contract(runtime_config)
+    # S-35a0: structural facts for authority classification (nothing persisted).
+    authority_caller_keys = (
+        frozenset(session.initial_context)
+        if isinstance(session.initial_context, dict)
+        else frozenset()
+    )
+    authority_delegated = session_is_delegated(session)
     _update_game_context(
         context,
         goal_text=goal_text,
@@ -752,6 +777,14 @@ def _run_game_session(
             )
             prepared_payload = _restore_game_reserved_payload(prepared_payload, payload)
             request_payload = copy.deepcopy(prepared_payload)
+            # core_written is empty: Table B names are written only after a run
+            # segment ends or on failure, never before a model call.
+            authority = classify_game_payload(
+                prepared_payload,
+                input_mapping=runtime_config.get("input_mapping"),
+                caller_keys=authority_caller_keys,
+                delegated=authority_delegated,
+            )
             tool_policy = (
                 TOOL_POLICY_ALL
                 if (
@@ -767,6 +800,7 @@ def _run_game_session(
                 payload=prepared_payload,
                 agent_tool_runtime=agent_tool_runtime,
                 tool_policy=tool_policy,
+                authority=authority,
             )
             observation = _game_observation(output_payload, runtime_config)
             action_run = None
@@ -977,6 +1011,11 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
     if not steps:
         raise ValidationError("Pipeline has no steps.")
 
+    # S-35a0: caller keys are the session's initial context; step_written_keys is
+    # the execution-local record of context keys written by agent steps. The
+    # Orchestrator is never resumed, so neither is persisted.
+    authority_caller_keys = frozenset(context)
+    step_written_keys = set()
     waiting_async = False
     for index, step in enumerate(steps):
         step_run = _create_step_run(session, step)
@@ -999,12 +1038,19 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
                 payload=payload,
                 agent_tool_runtime=agent_tool_runtime,
                 tool_policy=TOOL_POLICY_ALL,
+                authority=classify_orchestrator_payload(
+                    payload,
+                    input_mapping=step.input_mapping,
+                    caller_keys=authority_caller_keys,
+                    step_written_keys=step_written_keys,
+                ),
             )
             mapped_output = _apply_step_output_mapping(
                 output_payload,
                 step.output_mapping or {},
             )
             context.update(mapped_output)
+            step_written_keys.update(mapped_output)
             step_run.status = ExecutionStepRun.Status.SUCCESS
             step_run.request_payload = payload
             step_run.response_payload = output_payload
@@ -1036,6 +1082,12 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
                         payload=fallback_payload,
                         agent_tool_runtime=agent_tool_runtime,
                         tool_policy=TOOL_POLICY_ALL,
+                        authority=classify_orchestrator_payload(
+                            fallback_payload,
+                            input_mapping=step.input_mapping,
+                            caller_keys=authority_caller_keys,
+                            step_written_keys=step_written_keys,
+                        ),
                     )
                     mapped_output = _apply_step_output_mapping(
                         fallback_output,
@@ -1057,6 +1109,7 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
                     }
                     raise
                 context.update(mapped_output)
+                step_written_keys.update(mapped_output)
                 step_run.status = ExecutionStepRun.Status.SUCCESS
                 step_run.error_detail = ""
                 step_run.response_payload = {
@@ -1093,7 +1146,7 @@ def _run_orchestrator_session(session: ExecutionSession, context: dict) -> None:
         session.status = ExecutionSession.Status.WAITING_ASYNC
         session.finished_at = None
     else:
-        _merge_final_output_object(context)
+        step_written_keys.update(_merge_final_output_object(context))
         _raise_final_output_parse_error_if_required(context, session.pipeline.global_output_contract or {})
         validate_payload(context, session.pipeline.global_output_contract or {}, "Pipeline output")
         session.status = ExecutionSession.Status.SUCCESS

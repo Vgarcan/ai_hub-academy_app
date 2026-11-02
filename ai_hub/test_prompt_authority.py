@@ -922,6 +922,179 @@ class GameDelegationRunTests(RunTestCase):
         self.assertEqual(authority["knowledge_context"], NON_AUTHORITATIVE)
 
 
+
+# ------------------------------------------------ mapped Core fields (PR #35 review)
+#
+# `GAME_RESERVED_PAYLOAD_KEYS` are restored by Core AFTER `input_mapping`, so the
+# model always sees Core's value under those names. `response_contract`,
+# `game_action_dispatch_enabled`, `finish_reason` and `final_answer` are written
+# into the context by Core but are NOT restored: when an `input_mapping` targets
+# one of them, the model sees the mapped SOURCE value, and the classification
+# must follow that value, not the target name.
+
+
+@override_settings(**GAME_FLAGS)
+class GameMappedCoreFieldTests(RunTestCase):
+    UNRESTORED = ("response_contract", "game_action_dispatch_enabled", "finish_reason")
+
+    def run_game(self, input_mapping, *, initial_context=None, name="m-agent", resumed=False):
+        session = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME,
+            entry_agent=self.agent(name),
+            goal_text="operator goal",
+            initial_context=initial_context if initial_context is not None else {"ticket": "T"},
+            runtime_config={"max_iterations": 2, "input_mapping": input_mapping},
+        )
+        _, calls = self.run_with(session, [_game("think"), _game("finish", complete=True, final_answer="ok")])
+        return session, calls
+
+    def test_unmapped_core_generated_fields_are_runtime_and_hold_core_values(self):
+        session, calls = self.run_game({})
+
+        for call in calls:
+            for name in self.UNRESTORED:
+                self.assertEqual(call["authority"][name], RUNTIME, name)
+            self.assertIsInstance(call["payload"]["response_contract"], dict)  # Core's contract
+            self.assertIn(call["payload"]["game_action_dispatch_enabled"], (True, False))
+            self.assertIn(call["payload"]["finish_reason"], ("", "agent_finished"))
+
+    def test_the_same_targets_mapped_from_caller_input_follow_the_mapped_value(self):
+        mapping = {name: "ticket" for name in self.UNRESTORED}
+
+        session, calls = self.run_game(mapping)
+
+        for call in calls:
+            for name in self.UNRESTORED:
+                self.assertEqual(call["payload"][name], "T", name)  # what really reaches the model
+                self.assertEqual(call["authority"][name], CALLER_INPUT, name)
+
+    def test_the_same_targets_mapped_from_non_authoritative_observations(self):
+        mapping = {name: "observations" for name in self.UNRESTORED}
+
+        session, calls = self.run_game(mapping)
+
+        for call in calls:
+            for name in self.UNRESTORED:
+                self.assertIsInstance(call["payload"][name], list, name)  # Core's observations list
+                self.assertEqual(call["authority"][name], NON_AUTHORITATIVE, name)
+
+    def test_each_issue_example_mapping_from_the_review(self):
+        for mapping, source_class in (
+            ({"response_contract": "ticket"}, CALLER_INPUT),
+            ({"game_action_dispatch_enabled": "ticket"}, CALLER_INPUT),
+            ({"finish_reason": "observations"}, NON_AUTHORITATIVE),
+        ):
+            with self.subTest(mapping=mapping):
+                (target,) = mapping
+                session, calls = self.run_game(mapping, name=f"m-agent-{target}")
+                self.assertEqual(calls[0]["authority"][target], source_class)
+                self.assertNotEqual(calls[0]["authority"][target], RUNTIME)
+
+    def test_an_identity_mapping_keeps_the_runtime_class_because_the_value_is_cores(self):
+        mapping = {name: name for name in self.UNRESTORED}
+
+        session, calls = self.run_game(mapping)
+
+        for call in calls:
+            for name in self.UNRESTORED:
+                self.assertEqual(call["authority"][name], RUNTIME, name)
+            self.assertIsInstance(call["payload"]["response_contract"], dict)
+
+    def test_a_mapping_from_another_runtime_field_keeps_the_runtime_class(self):
+        session, calls = self.run_game({"finish_reason": "response_contract", "response_contract": "iteration"})
+
+        self.assertEqual(calls[0]["authority"]["finish_reason"], RUNTIME)
+        self.assertEqual(calls[0]["authority"]["response_contract"], RUNTIME)  # iteration is restored/Core's
+
+    def test_unrestored_final_answer_follows_its_mapping(self):
+        _, mapped = self.run_game({"final_answer": "ticket"}, name="m-final")
+        _, unmapped = self.run_game({}, name="m-final-2")
+
+        self.assertEqual(mapped[0]["payload"]["final_answer"], "T")
+        self.assertEqual(mapped[0]["authority"]["final_answer"], CALLER_INPUT)
+        self.assertEqual(unmapped[0]["authority"]["final_answer"], NON_AUTHORITATIVE)
+
+    def test_knowledge_context_is_overwritten_by_core_whatever_the_mapping(self):
+        session, calls = self.run_game({"knowledge_context": "ticket"})
+
+        self.assertNotEqual(calls[0]["payload"]["knowledge_context"], "T")
+        self.assertEqual(calls[0]["authority"]["knowledge_context"], NON_AUTHORITATIVE)
+
+    def test_reserved_fields_restored_after_mapping_keep_their_own_class(self):
+        mapping = {
+            "iteration": "ticket", "max_iterations": "ticket", "available_actions": "ticket",
+            "game_policy": "ticket", "game_response_contract": "ticket", "goal": "ticket",
+            "goal_text": "ticket", "memory": "ticket", "scoped_memory": "ticket",
+            "observations": "ticket", "previous_response": "ticket",
+        }
+
+        session, calls = self.run_game(mapping)
+
+        payload, authority = calls[0]["payload"], calls[0]["authority"]
+        for name in mapping:
+            self.assertNotEqual(payload[name], "T", f"{name} must be restored by Core")
+        for name in ("iteration", "max_iterations", "available_actions", "game_policy", "game_response_contract"):
+            self.assertEqual(authority[name], RUNTIME, name)
+        self.assertEqual(authority["goal"], CALLER_INPUT)
+        self.assertEqual(authority["goal_text"], CALLER_INPUT)
+        for name in ("memory", "scoped_memory", "observations", "previous_response"):
+            self.assertEqual(authority[name], NON_AUTHORITATIVE, name)
+
+    def test_every_runtime_class_field_is_either_restored_or_follows_its_mapping(self):
+        """Audit of GAME_RUNTIME_FIELDS against the restore sequence."""
+        restored = set(execution_runner.GAME_RESERVED_PAYLOAD_KEYS)
+        self.assertEqual(prompt_authority.GAME_RESTORED_FIELDS, frozenset(restored))
+        for name in sorted(prompt_authority.GAME_RUNTIME_FIELDS):
+            with self.subTest(name=name):
+                result = classify_game_payload(
+                    {name: 1}, input_mapping={name: "ticket"}, caller_keys={"ticket"}
+                )
+                expected = RUNTIME if name in restored else CALLER_INPUT
+                self.assertEqual(result[name], expected)
+
+    def test_the_mapped_classification_matches_after_a_resume_too(self):
+        workspace = create_workspace(application_scope=self.scope, name="m-resume-ws")
+        goal = create_goal(workspace=workspace, title="m", description="d")
+        goal.context = {"ticket": "T-9"}
+        goal.save()
+        session = create_goal_execution_session(
+            goal=goal, entry_agent=self.agent("m-resume"),
+            runtime_config={"max_iterations": 1, "input_mapping": {"response_contract": "ticket",
+                                                                    "finish_reason": "observations"}},
+        )
+        _, first = self.run_with(session, [_game("think")])
+        GameGoal.objects.filter(pk=goal.pk).update(status=GameGoal.Status.RUNNING)
+        session.status = ExecutionSession.Status.RUNNING
+        session.save()
+
+        _, resumed = self.run_with(
+            session, [_game("finish", complete=True, final_answer="ok")],
+            runner=lambda pk, **kw: run_game_session_resume(pk, next_order=2),
+        )
+
+        for call in (first[0], resumed[0]):
+            self.assertEqual(call["payload"]["response_contract"], "T-9")
+            self.assertEqual(call["authority"]["response_contract"], CALLER_INPUT)
+            self.assertIsInstance(call["payload"]["finish_reason"], list)
+            self.assertEqual(call["authority"]["finish_reason"], NON_AUTHORITATIVE)
+
+    def test_mapping_does_not_change_the_model_messages_or_what_core_stores(self):
+        mapping = {name: "ticket" for name in self.UNRESTORED}
+        session = ExecutionSession.objects.create(
+            runtime_kind=ExecutionSession.RuntimeKind.GAME, entry_agent=self.agent("m-neutral"),
+            goal_text="g", initial_context={"ticket": "T"},
+            runtime_config={"max_iterations": 1, "input_mapping": mapping},
+        )
+
+        model, calls = self.run_with(session, [_game("finish", complete=True, final_answer="ok")])
+
+        sent = json.loads(model.messages[0][1]["content"])["context"]
+        for name in self.UNRESTORED:
+            self.assertEqual(sent[name], "T")  # the mapping behaves exactly as before
+        self.assertNotIn("authority", json.dumps(model.messages))
+        self.assertEqual(session.step_runs.get().request_payload["response_contract"], "T")
+
+
 # --------------------------------------------------------------- neutrality
 
 

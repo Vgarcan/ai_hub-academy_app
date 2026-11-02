@@ -252,6 +252,17 @@ another workspace or goal. A successful `record_memory` action refreshes this
 context before the next iteration. Workspace, goal, session and action-result
 actions now pass only the links allowed by their scope.
 
+Memory written through the model's `record_memory` action carries runtime-owned
+provenance in `metadata`: `source` (`"action_run"`), `source_id` (the writing
+`GameActionRun`) and `model_derived` (`true`). The runtime assigns these
+unconditionally, so a model cannot supply or override them. Any metadata the
+model sends is preserved verbatim under `metadata.model_supplied` (omitted when
+none was sent; a model key named `model_supplied` stays nested inside it), and
+non-object `metadata` is rejected with a validation error before anything is
+written. Entries created in the Admin or through the `record_memory()` service
+keep whatever metadata their author supplied. Rows written before this change
+may contain model-forged values; they cannot be told apart and are not repaired.
+
 The existing `memory`, `observations` and `previous_response` state remains for
 legacy compatibility, but each component has entry/character limits so long
 sessions do not carry raw action payloads indefinitely.

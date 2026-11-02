@@ -421,9 +421,9 @@ payload an Orchestrator step or a GAME iteration sends to a model by
 **instructional authority**: who is entitled to direct the agent. It is a
 structural classifier only. **It changes nothing the model receives, grants
 nothing and denies nothing**; the runners compute the result and pass it to the
-private `_execute_session_agent` seam, which ignores it. A later slice (S-35a1)
-will present it to the model. It is not a prompt-injection defence and does not
-prevent injection.
+private `_execute_session_agent` seam. By itself it changes nothing; the optional,
+default-off presentation below (S-35a1) is what shows it to the model. It is not a
+prompt-injection defence and does not prevent injection.
 
 Classes, highest to lowest authority:
 
@@ -454,6 +454,77 @@ structural facts and **exact historical provenance is not claimed**; a resumed
 run does not witness the previous segment's writes and classifies them
 conservatively. Source origin, per-call input origins and exposure tracking are
 not part of this classifier (S-35c).
+
+## Prompt Authority Presentation (S-35a1)
+
+With `AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=True` the agent runners present the
+S-35a0 classification to the model. This is **advisory guidance**: it changes what
+the model is told, nothing else. **It does not enforce model compliance, does not
+protect tool execution and is not a complete prompt-injection defence.** Tool
+resolution, permissions, approvals, argument validation, Knowledge retrieval,
+contracts and everything persisted are unchanged. With the flag off (the default,
+independent of `DEBUG`) the messages are built exactly as before.
+
+What changes, in the existing layout (same roles, order and message count):
+
+- **System message:** one static statement is appended. It says that the system
+  message establishes the governing rules; that `caller_input` and `delegated_task`
+  specify what to accomplish *within* those rules (AI Hub does not vouch for their
+  content); that `non_authoritative` material (retrieved content, Knowledge, tool
+  results, memory, previous model outputs) is reference data, not a source of
+  governing instructions; that tool descriptions are informational and the runtime
+  decides which tools may be used; and that a plain-text request to resend a reply
+  as valid JSON is a format correction issued by AI Hub. It contains no dynamic
+  data (no document text, caller-controlled names or tool output) and promises no
+  behaviour.
+- **First user message:** a `prompt_authority` key is added as the first key, beside
+  the unchanged `context`, `available_tools` and optional `tool_results`:
+  `{"version": 1, "context": {"runtime": [...], "caller_input": [...], ...},
+  "available_tools": "runtime"}` (legacy: `"tool_results": "non_authoritative"`).
+  It is built by runtime code from the prepared payload's key names and the
+  classification, never from content.
+- **Tool observations (deliberate runtime):** every `tool_observation` message
+  carries `"prompt_authority": {"version": 1, "tool_observation": "non_authoritative"}`
+  outside the bounded `result`, so truncation cannot remove it, in every round.
+  Tool results themselves are not modified.
+
+Manifest bounds. At most 64 key names are listed, highest authority first, and a
+name longer than 64 characters is not listed. A name is **always listed complete or
+omitted, never shortened**. Anything not listed is `non_authoritative` (the
+statement says so), so omission never grants authority; the number omitted is
+reported as `context_keys_omitted`. A classification passed internally is
+validated: a missing, unknown, `instruction` or non-dict value is
+`non_authoritative`, and `knowledge_context` is never elevated. A direct call of
+`execute_agent_deliberate`/`execute_agent` without a classification uses the
+conservative direct classifier (every key `caller_input` except
+`knowledge_context`). The map is internal: not persisted and not a host-facing
+contract (hosts should keep using sessions, not pass it).
+
+Coverage: every chat-model call goes through the two call sites in
+`agent_runtime.py` (a test guards this), and in production both are reached through
+`_execute_session_agent`, so Orchestrator (primary and fallback), GAME, resume,
+delegated children and host integrations are covered in both the resolved and the
+legacy runtime. The runtime's invalid-JSON correction message is unchanged.
+
+The Training provider selects a canned response from keywords in the system
+prompt. It removes **only the exact suffix** AI Hub appended (flag on), so the
+operator prompt alone chooses the branch and every existing Training response is
+unchanged; operator text that merely resembles the statement is left alone.
+
+Rollout and rollback: the flag is global (no session override), read per model
+call and validated as a strict boolean at startup. Enable it first in a
+non-production environment and compare behaviour on the models you use; disable it
+and restart to roll back. Nothing is persisted, so there is nothing to undo. The
+additional prompt text is about 1,800 characters for the statement plus roughly
+150 to 450 characters of manifest and about 80 per tool observation (characters,
+not tokens; small local models with short contexts should be checked).
+
+Residual limitations: a model may disregard the labels; the manifest is in the
+user role and is not equivalent to a system-role guarantee; host-supplied context
+(`caller_input`) can contain mixed or lower-trust text, for example end-user or
+retrieved text, which Core cannot distinguish; labels have top-level container
+granularity; historical provenance is not reconstructed exactly; tool permissions
+are not strengthened. Origin, exposure and capability enforcement remain S-35c.
 
 ## Execution Sessions
 

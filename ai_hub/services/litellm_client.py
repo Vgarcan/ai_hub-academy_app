@@ -8,6 +8,7 @@ except Exception:  # pragma: no cover
 import requests
 
 from ai_hub.models import ProviderConfig
+from ai_hub.services.prompt_authority import strip_authority_suffix
 
 
 class ProviderExecutionError(RuntimeError):
@@ -31,7 +32,9 @@ def _training_completion_call(*, model: str, messages: list, **kwargs) -> dict:
     user_content = ""
     for msg in messages:
         if msg.get("role") == "system":
-            system_content = str(msg.get("content", "")).lower()
+            # Only the exact static authority suffix the runtime appended (S-35a1) is
+            # ignored, so the operator-authored prompt alone selects the branch.
+            system_content = strip_authority_suffix(msg.get("content", "")).lower()
         elif msg.get("role") == "user":
             user_content = str(msg.get("content", ""))
 

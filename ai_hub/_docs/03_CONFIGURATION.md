@@ -335,6 +335,7 @@ AI_HUB_GAME_DELEGATION_ENABLED=False
 | `AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME` | `resolved` | Selects the normal Orchestrator/GAME agent-call path. Allowed values: `resolved` and temporary `legacy_preexecute`. |
 | `AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED` | `False` | Compatibility switch for bounded eager document injection. Retrieval-first indexes and tools are the default. |
 | `AI_HUB_HYBRID_KNOWLEDGE_SEARCH_ENABLED` | `False` | Offers the audited `search_knowledge_hybrid` tool to eligible non-GAME Agents. A configured scope and indexed corpus are also required. |
+| `AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED` | `False` | Advisory model-facing authority labels (S-35a1): a static statement in the system message and a `prompt_authority` manifest in the first user message. Global, strict boolean, independent of `DEBUG`. Not an enforcement or injection-prevention control; see "Prompt Authority Presentation" in `08_RUNTIME_AND_SERVICES.md`. Disable and restart to roll back. |
 | `AI_HUB_MAX_TOOL_ROUNDS_PER_AGENT_CALL` | `3` | Caps deliberate tool-call loops per agent call. |
 | `AI_HUB_MAX_TOOL_OBSERVATION_CHARS` | `12000` | Caps each tool result copied into the model prompt; the complete result remains in `ToolExecutionRun`. |
 

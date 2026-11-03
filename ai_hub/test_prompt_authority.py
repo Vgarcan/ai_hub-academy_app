@@ -1078,6 +1078,7 @@ class GameMappedCoreFieldTests(RunTestCase):
             self.assertIsInstance(call["payload"]["finish_reason"], list)
             self.assertEqual(call["authority"]["finish_reason"], NON_AUTHORITATIVE)
 
+    @override_settings(AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=False)  # pins the S-35a0 flag-off behaviour
     def test_mapping_does_not_change_the_model_messages_or_what_core_stores(self):
         mapping = {name: "ticket" for name in self.UNRESTORED}
         session = ExecutionSession.objects.create(
@@ -1101,6 +1102,7 @@ class GameMappedCoreFieldTests(RunTestCase):
 class NeutralityTests(RunTestCase):
     """The computed classification must not change what a model or a store receives."""
 
+    @override_settings(AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=False)  # pins the S-35a0 flag-off behaviour
     def test_the_seam_ignores_the_authority_argument(self):
         results = []
         for authority in (None, {"q": RUNTIME}, {"q": NON_AUTHORITATIVE, "nonsense": "x"}):
@@ -1124,6 +1126,7 @@ class NeutralityTests(RunTestCase):
         self.assertEqual(results[0], results[1])
         self.assertEqual(results[0], results[2])
 
+    @override_settings(AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=False)  # pins the S-35a0 flag-off behaviour
     def test_session_status_and_final_context_match_what_the_run_produces_without_classification(self):
         agent = self.agent("neutral-orch")
         pipeline = PipelineDefinition.objects.create(name="neutral-pipe", is_active=True, entry_agent=agent)

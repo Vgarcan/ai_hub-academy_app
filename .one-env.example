@@ -94,6 +94,9 @@ ACADEMY_ASSISTANT_ALLOW_ANONYMOUS=False
 # AI_HUB_UNIFIED_TOOL_RUNTIME_ENABLED=False
 # AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME=resolved
 # AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED=False
+# Advisory prompt-authority labels for the model (S-35a1). Off by default; not an
+# enforcement control. Disable and restart to roll back.
+# AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=False
 # Agent-facing hybrid Knowledge search. Off by default. Enabling this flag is
 # not sufficient by itself: each ApplicationScope must select an active
 # retrieval_embedding_model_config, and its corpus must be indexed explicitly.

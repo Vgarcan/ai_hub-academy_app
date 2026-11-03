@@ -194,6 +194,10 @@ if AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME not in {"resolved", "legacy_preexecute"}:
         "AI_HUB_DEFAULT_AGENT_TOOL_RUNTIME must be 'resolved' or 'legacy_preexecute'."
     )
 AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED = _env_bool("AI_HUB_LEGACY_EAGER_KNOWLEDGE_CONTEXT_ENABLED", False)
+# S-35a1: advisory model-facing authority labels (a static statement in the system
+# message plus a `prompt_authority` manifest). Global, off by default and
+# independent of DEBUG. Not an enforcement or injection-prevention control.
+AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED = _env_bool("AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED", False)
 # S-28: offer Agents the audited hybrid Knowledge search tool. Off by default.
 # Even when on, an application scope without a retrieval embedding
 # configuration is never offered the tool, and GAME contexts never are.

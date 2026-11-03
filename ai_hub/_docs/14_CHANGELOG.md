@@ -458,6 +458,7 @@ Host-project features should be documented in the host project, not here.
 
 ### Changed
 
+- Documentation alignment (D1, no runtime change): the Academy demo setup now includes the explicit `bootstrap_academy_scope` and `seed_demo_data` steps and notes that the Ticket Triage Pipeline is not seeded; `15_RUNTIME_STATUS.md` records S-35m, S-35a0 and S-35a1 (advisory, disabled by default) with S-35a2/b/c not implemented; the RAG status security statements and the Core quick start were updated (host-owned `ApplicationScope`); the testing guide documents the S-35a1 flag verification and exactly what CI runs; the duplicated document lists in `ai_hub/README.md` and `docs_source/README.md` now link to `ai_hub/_docs/README.md`.
 #### Runtime behaviour
 
 - GAME final context now distinguishes execution outcome, goal outcome, and finish

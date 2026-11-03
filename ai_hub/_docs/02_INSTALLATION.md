@@ -171,8 +171,8 @@ static files deployment issue.
 Every Knowledge collection, Agent and GAME workspace belongs to exactly one
 `ApplicationScope`: the boundary that keeps one application's data apart from
 another's. A fresh Core installation has none, and Core never creates or
-chooses one for you. Create the first scope before the Knowledge collection or
-Agent below:
+chooses one for you. Create the first scope before any Agent, Knowledge
+collection or GAME workspace:
 
 ```text
 /admin/ai_hub/applicationscope/add/
@@ -183,7 +183,11 @@ Agent below:
 - `Is active`: enabled. Only active scopes can be chosen for new resources.
 
 A host application that provisions its own scope (for example through its setup
-command) can skip this step. Check `/admin/ai_hub/applicationscope/` first.
+command) can skip this step. Check `/admin/ai_hub/applicationscope/` first. The
+bundled Academy host does this with its own `bootstrap_academy_scope` command,
+which creates only Academy's scope and refuses to adopt another application's;
+it is part of that host, not a Core installation mechanism, and Core never
+creates or guesses a scope.
 
 ## Configure The First Provider
 
@@ -279,6 +283,9 @@ the selector has no default and the form will not save without an explicit
 choice. The scope is read-only afterwards, because a collection's documents and
 embeddings are stored under it. If no scope is listed, create one first (see
 above); inactive scopes are not offered.
+
+For retrieval, embeddings and the optional hybrid search tool, see
+[`RAG_RETRIEVAL_STATUS.md`](RAG_RETRIEVAL_STATUS.md), the canonical RAG reference.
 
 ## Choose A Workspace
 

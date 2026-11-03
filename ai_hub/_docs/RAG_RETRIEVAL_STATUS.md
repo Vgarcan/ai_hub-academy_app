@@ -293,8 +293,14 @@ to the model.
 - External embedding execution is absent; the current execution path accepts
   providers declared local only.
 - No relevance threshold, no-answer policy or reranker is claimed.
-- Retrieved content has no dedicated prompt-injection trust boundary beyond
-  the existing Knowledge authorization boundary.
+- Retrieved content has no **enforced** prompt-injection boundary beyond the
+  existing Knowledge authorization boundary, which S-35 does not change.
+  S-35a1 can add advisory prompt-authority labels that mark retrieved content
+  as reference data in the model's prompt. It is disabled by default
+  (`AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED`), it is guidance rather than
+  enforcement, and no real-model validation has been run. It is unrelated to
+  retrieval quality and changes no retrieval result, scope or permission; see
+  [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md#prompt-authority).
 - The reusable Core does not provide automatic file parsing/chunking.
 
 ## Evidence Still Required
@@ -316,8 +322,10 @@ Before broad production enablement:
 4. Decide lexical semantics and no-answer thresholds from those results.
 5. Re-run the evaluation after any lexical change.
 6. Promote an ANN backend only through a separate reviewed runtime decision.
-7. Add a retrieved-content trust boundary and complete GAME/Path 1 convergence
-   before making hybrid retrieval a universal default.
+7. Decide an enforced retrieved-content trust boundary (S-35c, not authorized;
+   the advisory S-35a1 labels are not that boundary), evaluate any enabled
+   labels with real models, and complete GAME/Path 1 convergence before making
+   hybrid retrieval a universal default.
 
 ## Verification
 

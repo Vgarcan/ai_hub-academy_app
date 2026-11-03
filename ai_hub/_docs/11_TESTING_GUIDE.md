@@ -395,6 +395,66 @@ Use `@override_settings(FLAG_NAME=False)` in tests. The reusable app fallback is
 
 Feature tests cover whole boundaries rather than only one public function: goal-bound session creation/execution, memory read and write, action dispatch/approval, scheduler claims, resume and delegated child policy.
 
+## Prompt Authority Labels (S-35a1) Verification
+
+`AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED` controls advisory model-facing authority
+labels (see [`08_RUNTIME_AND_SERVICES.md`](08_RUNTIME_AND_SERVICES.md)). Verify it
+as follows.
+
+**Default off.** The flag defaults to `False`, independently of `DEBUG`, and the
+environment value is a strict boolean: an invalid value stops startup with
+`ImproperlyConfigured`. With it unset, the model messages and everything persisted
+are exactly what they were before the feature existed.
+
+**Run the complete suite in both states** before changing message construction or
+before enabling the flag anywhere:
+
+```bash
+# flag off (the default)
+python manage.py test
+
+# flag on (Unix shell)
+AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=True python manage.py test
+
+# flag on (PowerShell)
+$env:AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED = "True"; python manage.py test
+```
+
+Focused modules: `python manage.py test ai_hub.test_prompt_authority ai_hub.test_prompt_authority_presentation`.
+
+**Golden message compatibility.** The presentation tests compare the flag-off
+messages with literal fixtures written independently of the production message
+builder, and compare what is persisted with the flag on and off. Tests that describe
+the flag-off contract force it with `@override_settings`, so they do not depend on
+the environment; flag-on tests set it explicitly.
+
+**What CI runs.** `.github/workflows/ci.yml` runs on pushes to `main` and on pull
+requests to `main`. The SQLite job (Django 5.2 LTS and current Django) runs
+`manage.py check`, `makemigrations --check --dry-run`, the full suite and two
+installation smoke tests. The PostgreSQL 16 + pgvector job runs `check`,
+`makemigrations --check --dry-run` and the full suite. CI does **not** set the
+flag, so it runs the suite flag-off plus the tests that enable the flag
+themselves; it does not run the whole suite with the flag enabled. Run that locally.
+
+**PostgreSQL.** The PostgreSQL job must stay green. JSON columns there reject
+U+0000, so a test that persists hostile strings must not include NUL.
+
+**Rollback.** Set the flag to `False` (or remove it) and restart the application.
+It is global, read on every model call, and nothing is persisted, so there is
+nothing to undo.
+
+**Deterministic tests are not real-model evidence.** They use mocked completion
+calls and prove structure, labels and compatibility. They do not show that any model
+follows the labels or that prompt injection is prevented; the labels are advisory.
+Before broad activation, run a separate evaluation with the real models you use,
+comparing the flag off and on for contract and tool-protocol adherence and for
+behavior on adversarial content, and treat the results as evidence, not a guarantee.
+
+The suite totals are not a requirement. A review of S-35a1 recorded 2,597 passing
+tests in each flag state with 111 skipped on local SQLite; the skips are expected on
+SQLite (for example PostgreSQL-only concurrency tests and live-provider tests), and
+the numbers change as the suite grows. Use the summary your run prints.
+
 ## Release Gates
 
 Before enabling a GAME phase in a non-development environment, confirm all of these:

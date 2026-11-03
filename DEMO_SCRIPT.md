@@ -2,15 +2,28 @@
 
 ## Setup (before the demo)
 
+Run these from the project root inside the virtual environment, on the database
+you want to demo.
+
+> Already ran `python setup_dev.py`? It already ran `migrate`,
+> `bootstrap_academy_scope`, the training seed and the documentation import, and
+> created the admin user, but it does not create the demo tickets. Run only
+> `python manage.py seed_demo_data` once to add them, then skip to step 4 (or
+> step 6 if you do not need Ollama).
+
 ```bash
 # 1. Apply migrations
 python manage.py migrate
 
-# 2. Seed training data (providers, agents, tutorials)
-python manage.py seed_academy_training_data
+# 2. Create Academy's own ApplicationScope. Core never creates or guesses one
+#    and the seeds refuse to run without it. This never adopts another
+#    application's scope and is safe to repeat.
+python manage.py bootstrap_academy_scope
 
-# 3. Import documentation
-python manage.py import_academy_docs
+# 3. Seed the training data (providers, agents, tutorials) and the support-demo
+#    tickets, and import the documentation. seed_demo_data runs
+#    seed_academy_training_data itself, so do not run that separately.
+python manage.py seed_demo_data --with-docs
 
 # 4. (Optional) Seed Ollama GAME agents
 python manage.py seed_ollama_agents      # OLLAMA_BASE_URL or localhost:11434
@@ -22,6 +35,12 @@ python manage.py createsuperuser
 # 6. Start server
 python manage.py runserver
 ```
+
+> **Ticket Triage Pipeline.** Sections 4 and 5 show and run a pipeline named
+> `Ticket Triage Pipeline`. No seed creates it, and the *Run AI triage* action
+> refuses without an active one. Create it before the demo by completing the
+> "Build Your First Conveyor Belt" tutorial mission (Orchestrator module, under
+> `/tutorials/`), or follow its steps in Admin > AI Hub > Pipeline definitions.
 
 Open http://localhost:8000/ and log in as admin.
 

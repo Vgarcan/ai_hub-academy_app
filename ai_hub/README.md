@@ -34,28 +34,28 @@ Then open the guided home:
 /admin/ai_hub/
 ```
 
+**Before you configure Agents, Knowledge collections or GAME workspaces, the host
+project must have an `ApplicationScope`.** Every one of them belongs to exactly
+one scope, and Core never creates or guesses a scope for you. Create yours in
+the Admin (`/admin/ai_hub/applicationscope/add/`) or from your own host setup
+command; see *Create An Application Scope* in
+[`_docs/02_INSTALLATION.md`](_docs/02_INSTALLATION.md#create-an-application-scope).
+(`bootstrap_academy_scope` belongs to the bundled Academy host and provisions
+only Academy's own scope; it is not a generic Core installer.) AI Hub is
+installed as a Django app inside the host project, as described there.
+
+For retrieval, embeddings and the optional hybrid Knowledge search, start at
+[`_docs/RAG_RETRIEVAL_STATUS.md`](_docs/RAG_RETRIEVAL_STATUS.md).
+
 Start small: one provider, one model, one narrow agent, one short run. The built-in `training` (stub) provider needs no API key — name its model `training` or `training/...`.
 
 ## Documentation
 
-Read in order from [`_docs/`](_docs/README.md):
-
-1. `01_PROJECT_OVERVIEW` — what it is and what it owns
-2. `02_INSTALLATION` — install, migrate, admin, static files
-3. `03_CONFIGURATION` — providers, models, agents, tools, GAME feature flags
-4. `04_CORE_CONCEPTS` — vocabulary
-5. `05_ORCHESTRATOR_WORKSPACE` — fixed pipelines
-6. `06_GAME_WORKSPACE` — autonomous goals
-7. `07_ADMIN_GUIDE` — guided admin and everyday operation
-8. `08_RUNTIME_AND_SERVICES` — service layer and execution
-9. `09_MODELS_AND_DATABASE` — model reference
-10. `10_INTEGRATION_GUIDE` — connecting a host project
-11. `11_TESTING_GUIDE` — test commands and strategy
-12. `12_TROUBLESHOOTING` — common failures and fixes
-13. `13_ROADMAP` — recommended next work
-14. `14_CHANGELOG` — notable changes
-15. `15_RUNTIME_STATUS` — current, legacy, target, and not-implemented runtime paths
-16. `16_BUILD_CONSOLE` — guided GAME/Orchestrator creation wizard
+The canonical documentation index, with the reading order of every document
+(including the RAG references), is [`_docs/README.md`](_docs/README.md). Start with
+`01_PROJECT_OVERVIEW` and `02_INSTALLATION`, and read
+[`15_RUNTIME_STATUS`](_docs/15_RUNTIME_STATUS.md) before changing Tools, Knowledge,
+memory, prompt authority or worker behavior.
 
 ## Integration in one line
 

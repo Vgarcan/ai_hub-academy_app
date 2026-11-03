@@ -2,7 +2,7 @@
 
 This document separates shipped behavior from compatibility paths and intended
 architecture. It is the canonical status reference for Tools, Knowledge, GAME
-memory and execution modes.
+memory, prompt authority and execution modes.
 
 The source of truth remains code plus tests. Update this page whenever a runtime
 path changes.
@@ -242,7 +242,9 @@ path changes.
 - External embedding-provider execution; current embedding execution is local.
 - GAME access to the hybrid Agent tool and convergence of the two retrieval
   paths.
-- A retrieved-content prompt-injection trust boundary.
+- An enforced retrieved-content prompt-injection boundary. The advisory
+  authority labels (see Prompt Authority) are disabled by default, have not
+  been validated with real models and do not change Knowledge authorization.
 - Automatic file chunking/embedding pipelines in the reusable Core. The
   one-chunk curated-text fallback is not a semantic ingestion pipeline. Academy
   embedding features are host-specific and do not change Core behavior.
@@ -263,6 +265,10 @@ path changes.
   carried between iterations, with configurable entry/character limits.
 - Oversized rolling values become bounded previews in prompts and final context;
   raw `ExecutionStepRun` / `GameActionRun` audit payloads remain intact.
+- `record_memory` writes the runtime-owned provenance keys `source`,
+  `source_id` and `model_derived` unconditionally; anything the model
+  supplies as `metadata` is kept under `model_supplied` and cannot override
+  them (S-35m). See Prompt Authority.
 - `compact_goal_memory()` is a manual service that keeps high-importance/recent
   entries and expires the rest. It is not automatic summarisation and is not
   invoked by the normal runner.
@@ -283,6 +289,54 @@ path changes.
 - Semantic memory retrieval / memory RAG.
 - Automatic memory consolidation.
 - A `checkpointed` goal/session outcome.
+
+## Prompt Authority
+
+Prompt authority is **guidance to the model about which parts of a prompt may
+direct it**. It is not an authorization or enforcement layer. The design record
+is issue #31 (S-35), which remains open for the slices below that are not
+implemented.
+
+### CURRENT
+
+- **S-35m, merged (PR #33): GAME memory provenance integrity.** `record_memory`
+  stamps `source`, `source_id` and `model_derived` from the runtime and keeps
+  model-supplied metadata under `model_supplied`; non-object metadata is a
+  validation error. Existing rows are not corrected retroactively.
+- **S-35a0, merged (PR #35): structural authority classification.**
+  `ai_hub.services.prompt_authority` assigns each top-level key of an
+  Orchestrator or GAME payload one of `runtime`, `caller_input`,
+  `delegated_task` or `non_authoritative` (`instruction` is the system message)
+  from runtime-controlled structure only, never from content. It is recomputed,
+  not persisted, and changes nothing the model sees by itself.
+- **S-35a1, merged (PR #37): advisory model-facing presentation, implemented
+  but disabled by default** (`AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=False`).
+  When enabled, the existing messages carry a static authority statement in the
+  system message, a `prompt_authority` manifest in the first user message and a
+  `non_authoritative` label on every deliberate tool observation. Flag off, the
+  messages and everything persisted are unchanged. Tool resolution, permissions,
+  approvals, argument validation, Knowledge authorization (S-15), contracts and
+  persisted data are not affected either way. Verified with deterministic mocked
+  tests only; see [`08_RUNTIME_AND_SERVICES.md`](08_RUNTIME_AND_SERVICES.md) and
+  [`11_TESTING_GUIDE.md`](11_TESTING_GUIDE.md).
+
+### TARGET
+
+- None approved. Any further S-35 slice needs its own architectural approval.
+
+### NOT IMPLEMENTED
+
+- **S-35a2, S-35b and S-35c.** They are not implemented and not authorized:
+  optional spotlighting, GAME memory exposure facts, and source origin,
+  per-call input origins, exposure tracking and capability enforcement.
+- Any runtime capability enforcement based on prompt authority: the labels do
+  not restrict tools, arguments or approvals, so a model influenced by lower-
+  authority content can still request a tool it is permitted to use.
+- Verified prompt-injection prevention with real models. The labels are advisory,
+  a model may disregard them, and no real-model evaluation has been run.
+- Persisted provenance, per-key origin and finer-than-top-level classification.
+  Host-supplied `initial_context` is labelled `caller_input` even when it carries
+  end-user or retrieved text.
 
 ## Execution Modes And Workers
 

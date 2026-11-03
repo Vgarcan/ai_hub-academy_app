@@ -420,6 +420,13 @@ AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED=True python manage.py test
 $env:AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED = "True"; python manage.py test
 ```
 
+The Unix form sets the variable for that one command only. The PowerShell form
+sets it for the whole session, so remove it afterwards to return to the default:
+
+```powershell
+Remove-Item Env:AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED
+```
+
 Focused modules: `python manage.py test ai_hub.test_prompt_authority ai_hub.test_prompt_authority_presentation`.
 
 **Golden message compatibility.** The presentation tests compare the flag-off
@@ -450,8 +457,8 @@ Before broad activation, run a separate evaluation with the real models you use,
 comparing the flag off and on for contract and tool-protocol adherence and for
 behavior on adversarial content, and treat the results as evidence, not a guarantee.
 
-The suite totals are not a requirement. A review of S-35a1 recorded 2,597 passing
-tests in each flag state with 111 skipped on local SQLite; the skips are expected on
+The suite totals are not a requirement. A review of S-35a1 recorded 2,597 tests run
+in each flag state, with result OK and 111 skipped on local SQLite; the skips are expected on
 SQLite (for example PostgreSQL-only concurrency tests and live-provider tests), and
 the numbers change as the suite grows. Use the summary your run prints.
 

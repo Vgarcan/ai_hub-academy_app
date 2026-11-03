@@ -7,9 +7,10 @@ you want to demo.
 
 > Already ran `python setup_dev.py`? It already ran `migrate`,
 > `bootstrap_academy_scope`, the training seed and the documentation import, and
-> created the admin user, but it does not create the demo tickets. Run only
-> `python manage.py seed_demo_data` once to add them, then skip to step 4 (or
-> step 6 if you do not need Ollama).
+> created the superuser, but it does not create the demo tickets. Run only
+> `python manage.py seed_demo_data` once to add them. Then continue with the
+> optional Ollama step 4 if you want it, **skip step 5** (the superuser already
+> exists) and go directly to step 6.
 
 ```bash
 # 1. Apply migrations
@@ -38,9 +39,13 @@ python manage.py runserver
 
 > **Ticket Triage Pipeline.** Sections 4 and 5 show and run a pipeline named
 > `Ticket Triage Pipeline`. No seed creates it, and the *Run AI triage* action
-> refuses without an active one. Create it before the demo by completing the
-> "Build Your First Conveyor Belt" tutorial mission (Orchestrator module, under
-> `/tutorials/`), or follow its steps in Admin > AI Hub > Pipeline definitions.
+> refuses without an active one. The "Build Your First Conveyor Belt" tutorial
+> mission (Orchestrator module, under `/tutorials/`) only gives **instructions**
+> for creating it by hand: opening or completing the mission does not provision
+> anything, and its check only confirms that an active pipeline with at least two
+> steps exists. Before demonstrating ticket triage, start the server (step 6),
+> create the pipeline in Admin > AI Hub > Pipeline definitions by following the
+> mission's steps, activate it, and verify that it is active with its two steps.
 
 Open http://localhost:8000/ and log in as admin.
 

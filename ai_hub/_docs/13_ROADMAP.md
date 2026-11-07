@@ -1,12 +1,46 @@
 # Roadmap
 
-This roadmap describes the recommended direction for AI Hub as a reusable Django
-AI operations app.
+This roadmap is a **technical capability map** for AI Hub as a reusable Django
+AI operations app: what is delivered in each area and which technical work is
+recommended next.
+
+> **It is not the authoritative strategic execution order, and nothing here
+> authorises implementation.** The strategic order of work is set by the
+> project's Master Plan, which is kept outside this repository and is not
+> reproduced here. The "Priority 1" to "Priority 10" headings below are
+> **historical identifiers** from an earlier version of this roadmap, kept so
+> that existing references keep working. The number is a label, not a ranking.
+> What is implemented today is recorded in
+> [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md) and
+> [`RAG_RETRIEVAL_STATUS.md`](RAG_RETRIEVAL_STATUS.md); the code and its tests
+> remain the source of truth.
 
 AI Hub should grow carefully. The priority is not to add every AI framework
 feature at once. The priority is to make providers, models, agents, knowledge,
 tools, Orchestrator workflows and GAME sessions understandable, testable and
 portable.
+
+## Strategic Phases And This Map
+
+The Master Plan's seven strategic phases, in their agreed order, and where each
+appears in this map. A phase marked "not described here" is **not** thereby
+implemented or planned in detail: it only means this document has no section for
+it.
+
+| # | Strategic phase | Where it appears in this map |
+|---|---|---|
+| 1 | RAG / Knowledge: retrieval, hybrid search, representative evaluation, secure agent integration | Priority 5, with [`RAG_RETRIEVAL_STATUS.md`](RAG_RETRIEVAL_STATUS.md) |
+| 2 | MCP / MCPO: discovery, registration, explicit per-agent enablement | Not described here. No MCP or MCPO capability is documented or implemented in this repository |
+| 3 | Tools Runtime: permissions, approvals, execution, auditing | Priority 4 |
+| 4 | Memory: reusable persistence, scope, provenance, retention | Not a standalone section. GAME scoped memory is listed under Current Foundation and in [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md) (GAME Memory), which also lists what is not implemented |
+| 5 | Workers / durable tasks | Priority 3, as candidate work only (see the note there) |
+| 6 | API / stable Django integration | Priority 2. This is a stable Python/Django interface for host projects; it does not imply that an HTTP API must be built |
+| 7 | Testing / Core v1 readiness: integration, reliability, security, release readiness | Not described here. Current test practice is in [`11_TESTING_GUIDE.md`](11_TESTING_GUIDE.md) |
+
+Security, testing and documentation are cross-cutting requirements across all
+phases (see [Cross-Cutting Security: S-35 Prompt-Authority Status](#cross-cutting-security-s-35-prompt-authority-status)).
+Priorities 1, 6, 7, 8, 9 and 10 below are technical areas of this map; this
+document does not state how they relate to the strategic phases.
 
 ## Current Foundation
 
@@ -109,6 +143,13 @@ This should reduce direct model imports in host apps.
 
 Long AI runs should have a clear background execution model.
 
+> **Candidate work only.** Which responsibilities belong to AI Hub Core and which
+> to the host application has not been decided, and that decision must be made
+> before any worker or queue infrastructure is implemented. The items below are
+> candidates pending it, not a commitment. Today `async` does not enqueue
+> anything and no queue backend or worker command exists
+> ([`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md), Execution Modes And Workers).
+
 Recommended work:
 
 - Define pending/running/waiting lifecycle.
@@ -185,7 +226,10 @@ Still recommended:
 - Admin preview of injected context.
 - A representative, judged query corpus with no-answer and relevance policy.
 - Lexical precision improvements measured against that corpus.
-- A prompt-injection trust boundary for retrieved content.
+- A prompt-injection trust boundary for retrieved content: this is part of the
+  cross-cutting S-35 initiative; see
+  [Cross-Cutting Security: S-35 Prompt-Authority Status](#cross-cutting-security-s-35-prompt-authority-status)
+  for what is and is not done.
 - Production ANN promotion only after representative evidence.
 - Automated file ingestion and GAME/Path 1 retrieval convergence.
 
@@ -305,6 +349,27 @@ Each example should include:
 - Pipeline or GAME configuration.
 - Host adapter outline.
 - Test cases.
+
+## Cross-Cutting Security: S-35 Prompt-Authority Status
+
+S-35 (the prompt-authority trust boundary for retrieved and other lower-trust
+content) is a **cross-cutting security initiative**, not only a Knowledge/RAG
+feature: it covers Orchestrator and GAME payloads, tool observations and memory.
+Its design record is
+[issue #31](https://github.com/Vgarcan/ai_hub-academy_app/issues/31), which stays
+open, and its runtime status is in
+[`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md#prompt-authority).
+
+| Slice | Status |
+|---|---|
+| S-35m: GAME memory provenance integrity | Merged (PR #33) |
+| S-35a0: structural authority classification | Merged (PR #35) |
+| S-35a1: model-facing authority presentation | Merged (PR #37). Advisory and **disabled by default** (`AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED`). Verified with deterministic, mocked-model tests only; **not validated with real models** |
+| S-35a2, S-35b, S-35c | **Not implemented and not authorised** |
+
+There is no verified prompt-injection prevention and no capability enforcement
+based on prompt authority: tool resolution, permissions, approvals and Knowledge
+authorization are unchanged, and a model may disregard the advisory labels.
 
 ## Non-Goals
 

@@ -18,7 +18,7 @@ The docs are written from the point of view of `ai_hub` as a reusable Django app
 10. [`10_INTEGRATION_GUIDE.md`](10_INTEGRATION_GUIDE.md) - how a host project connects to `ai_hub`.
 11. [`11_TESTING_GUIDE.md`](11_TESTING_GUIDE.md) - recommended test commands and coverage strategy.
 12. [`12_TROUBLESHOOTING.md`](12_TROUBLESHOOTING.md) - common failures and fixes.
-13. [`13_ROADMAP.md`](13_ROADMAP.md) - recommended next product and engineering work.
+13. [`13_ROADMAP.md`](13_ROADMAP.md) - technical capability map: delivered capabilities and recommended technical work. It is not the strategic execution order and authorises nothing.
 14. [`14_CHANGELOG.md`](14_CHANGELOG.md) - notable app and documentation changes.
 15. [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md) - canonical CURRENT / LEGACY / TARGET / NOT IMPLEMENTED runtime status.
 16. [`16_BUILD_CONSOLE.md`](16_BUILD_CONSOLE.md) - Build Console wizard: step-by-step guide for the guided GAME and Orchestrator creation wizard.

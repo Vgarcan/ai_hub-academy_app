@@ -218,6 +218,14 @@ path changes.
 - `knowledge_exploratory_pilot` is a separate report-first operator command for
   a marked isolated SQLite fixture and a locally supplied public candidate.
   Its rankings are unjudged exploratory evidence, not representative evidence.
+- `ai_hub.services.knowledge_authoring.author_explicit_chunk_set` (T2) is the
+  public, scope-bound, trusted server-side service by which a host writes an
+  ordered `EXPLICIT` chunk set. It reuses the governed mutation foundation and
+  its principal-bound audit, preserves chunk ids for unchanged content, reports
+  `changed`/`unchanged`, rolls back everything on any failure and never changes
+  document status or runs embeddings. It is not reachable from a model, an
+  Admin action or the lifecycle command. See
+  [`10_INTEGRATION_GUIDE.md`](10_INTEGRATION_GUIDE.md#authoring-knowledge-from-a-host-t2).
 
 ### LEGACY
 
@@ -245,6 +253,9 @@ path changes.
 - An enforced retrieved-content prompt-injection boundary. The advisory
   authority labels (see Prompt Authority) are disabled by default, have not
   been validated with real models and do not change Knowledge authorization.
+- Host authoring of chunk metadata, of documents that keep a `curated_text` or
+  `source_file` representation, and of `DERIVED` documents through T2; and
+  Linux/PostgreSQL validation of T2 concurrency (pending).
 - Automatic file chunking/embedding pipelines in the reusable Core. The
   one-chunk curated-text fallback is not a semantic ingestion pipeline. Academy
   embedding features are host-specific and do not change Core behavior.

@@ -946,9 +946,13 @@ class MutationSecurityBoundaryTests(TestCase):
     # operation-specific services, which is exactly what Slice 9 said its callers
     # would be. Slice 10 added the first one. This list must stay short and must
     # never include a host adapter, an Admin view, a tool handler or anything
-    # reachable from a model.
+    # reachable from a model. T2 added `knowledge_authoring`: an in-Core,
+    # operation-specific service. It is host-CALLABLE (trusted server-side code),
+    # but it is not a host adapter and is not reachable from a model; its own tests
+    # enforce both.
     SANCTIONED_INTERNAL_MUTATOR_CALLERS = {
         "services/knowledge_adjudication.py",
+        "services/knowledge_authoring.py",
         "services/knowledge_regeneration.py",
         "services/knowledge_repair.py",
     }

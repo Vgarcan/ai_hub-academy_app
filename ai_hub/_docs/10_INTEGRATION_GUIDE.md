@@ -220,6 +220,80 @@ the executing agent identity, so callers must not expose `agent_id` as a model
 choice. This keeps large documents out of prompts until the agent asks for
 relevant evidence.
 
+### Authoring Knowledge From A Host (T2)
+
+An independent Django host that owns its own content store can publish chunk
+sets into Knowledge with one public, operation-specific service:
+
+```python
+from ai_hub.services.knowledge_authoring import AuthoredChunk, author_explicit_chunk_set
+from ai_hub.services.knowledge_mutation import (
+    ExpectedKnowledgeState, KnowledgeMutationPrincipal, build_snapshot,
+)
+
+expected = ExpectedKnowledgeState.from_snapshot(build_snapshot(document))
+result = author_explicit_chunk_set(
+    document.pk,
+    [AuthoredChunk(content="...", section_title="Intro"), AuthoredChunk(content="...")],
+    application_scope=my_scope,
+    expected=expected,
+    principal=KnowledgeMutationPrincipal.system("my-host-sync"),
+    reason_code="content_sync",
+)
+```
+
+What it does:
+
+- Replaces the document's chunk set with exactly the supplied ordered set,
+  declares it `EXPLICIT`, verifies the stored set against the request (indexes
+  `1..N`, fingerprint `c1`) and records one content-free, principal-bound
+  lifecycle event, all in one transaction. Any failure, including audit-event
+  creation, rolls back every change.
+- Preserves a chunk's id when its canonical content and section title are
+  unchanged (CRLF/NFC differences are not edits). Duplicates match
+  first-in-first-out. Changed content gets a new id; an id is never repurposed
+  for different text, so an old citation fails visibly instead of drifting.
+- Returns an `AuthoringResult` with `outcome` (`changed` or `unchanged`), the
+  document id, chunk count, kept/inserted/removed/moved counts and the resulting
+  `c1` fingerprint. It carries no event id. A genuine no-op writes nothing and
+  records no event.
+
+Host obligations:
+
+- Call it only from trusted server-side host code. It is not a tool, an Admin
+  action or a lifecycle command, and a model must never be able to reach it.
+- Pass the `ApplicationScope` the host owns. The document must belong to it and
+  the scope must be active, otherwise a uniform "not found or not accessible"
+  error is raised. The check is repeated inside the transaction.
+- Capture `expected` from the state the host planned against. A stale value
+  raises `KnowledgeMutationConflict`, even for a request that would be a no-op.
+  The host decides whether to re-plan.
+- Create the document shell yourself (`DRAFT`, no chunks, no generator facts).
+  First authoring is accepted only for an empty, unprovenanced `UNKNOWN`
+  `DRAFT` document; later authoring only for a valid `EXPLICIT` document.
+  `DERIVED` documents and populated `UNKNOWN` documents are refused (use the
+  operator lifecycle verbs for those).
+- Publication stays host-owned. The service never changes `status`. Authoring
+  into a `DRAFT` document is invisible to retrieval; the host activates the
+  document afterwards, ideally in the same outer transaction.
+- The service does not run embeddings. Kept chunks keep their vectors; new and
+  changed chunks have none until the host runs `knowledge_embedding_index`.
+
+Known limitations of this first version:
+
+- Chunk `metadata` is not an input. Documents whose chunks already carry
+  non-empty metadata are refused rather than silently rewritten.
+- Documents with a non-blank `curated_text` or a `source_file` are refused: the
+  chunks would otherwise claim to be synchronised with a source representation
+  the service does not maintain. GAME's Path 2 reads only `curated_text`, so
+  content authored this way is not visible through that path.
+- Limits (500 chunks, 20,000 characters per chunk, 2,000,000 characters per
+  call, and the model's title length) are bounded v1 operational limits owned
+  by this service. They are not scalability evidence.
+- Validated on Windows/SQLite only. `select_for_update` serialisation under
+  concurrent writers and database-level length enforcement on PostgreSQL are
+  pending Linux validation.
+
 ## Migration From A Product-Specific AI App
 
 Recommended sequence:

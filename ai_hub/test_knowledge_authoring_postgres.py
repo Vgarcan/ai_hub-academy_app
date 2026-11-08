@@ -38,6 +38,7 @@ Following the repository's convention (`GovernedMutationConcurrencyTests`,
 """
 import contextlib
 import re
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -90,6 +91,12 @@ requires_postgres = skipUnless(POSTGRES, SKIP_REASON)
 
 #: Bound for every Python-side wait in this module, in seconds.
 WAIT = 30
+
+#: Bound for the join that follows an emergency backend termination, in seconds.
+TERMINATE_JOIN = 10
+
+#: Workers that outlived a failed cleanup. While any is alive, no new harness starts.
+_ORPHANS = []
 
 #: Session bounds applied by each worker to its own connection, in milliseconds.
 #: They are longer than any wait the tests make on purpose: they exist so that a
@@ -173,6 +180,13 @@ class _Harness:
         self._stack = contextlib.ExitStack()
 
     def __enter__(self):
+        _ORPHANS[:] = [w for w in _ORPHANS if w.alive]
+        if _ORPHANS:
+            raise AssertionError(
+                "a previous test left worker(s) still running after its cleanup failed: "
+                f"{[w.name for w in _ORPHANS]}. Refusing to start another concurrency test "
+                "beside them. Run this module in a fresh process."
+            )
         return self
 
     # -- instrumentation ----------------------------------------------------
@@ -245,17 +259,20 @@ class _Harness:
 
     def _terminate_own_backends(self, workers):
         """Defensive, last resort: only PIDs these workers published, only in this
-        database, only under this user, never this session."""
+        database, only under this user, never this session. Returns the PIDs a
+        termination was *requested* for. That is a request, not proof that a worker
+        stopped: only the worker's thread actually ending proves that."""
         pids = [w.pid for w in workers if w.pid]
         if not (POSTGRES and pids):
-            return
+            return []
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "SELECT pid, pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE pid = ANY(%s) AND datname = current_database() "
                 "AND usename = current_user AND pid <> pg_backend_pid()",
                 [pids],
             )
+            return [row[0] for row in cursor.fetchall()]
 
     def _sessions_remaining(self):
         pids = [w.pid for w in self.workers if w.pid]
@@ -272,37 +289,81 @@ class _Harness:
                 return remaining
             time.sleep(0.05)
 
+    @staticmethod
+    def _attempt(problems, label, step, default=None):
+        """Run one cleanup phase. Its failure is recorded, never raised, so that the
+        remaining phases still run and the test's own exception stays primary."""
+        try:
+            return step()
+        except Exception as exc:  # noqa: BLE001 - collected as a diagnostic, not dropped
+            problems.append(f"{label} raised {exc!r}")
+            return default
+
+    def _survivors(self, problems):
+        # If even the inspection fails, assume the worst: every worker is alive.
+        return self._attempt(
+            problems, "inspecting workers",
+            lambda: [w for w in self.workers if w.alive], default=list(self.workers),
+        )
+
     def __exit__(self, exc_type, exc, tb):
         problems = []
-        self.release.set()  # always release the holder
+        attempt = self._attempt
+
+        attempt(problems, "releasing the holder", self.release.set)
         for worker in self.workers:
-            worker.thread.join(timeout=WAIT)
-        alive = [w for w in self.workers if w.alive]
+            attempt(problems, f"joining {worker.name}", lambda w=worker: w.thread.join(timeout=WAIT))
+
+        alive = self._survivors(problems)
+        survivors = alive
         if alive:
             problems.append(
                 "workers did not finish in time: "
                 + ", ".join(f"{w.name} (pid {w.pid})" for w in alive)
             )
-            self._terminate_own_backends(alive)
+            requested = attempt(
+                problems, "terminating worker backends",
+                lambda: self._terminate_own_backends(alive), default=[],
+            )
+            problems.append(
+                f"termination requested for backend pids {requested} (a request, not proof "
+                "that a worker stopped)"
+            )
             for worker in alive:
-                worker.thread.join(timeout=10)
-            still = [w.name for w in self.workers if w.alive]
-            if still:
-                problems.append(f"workers STILL running after termination: {still}")
-        # Instrumentation comes off only now, when no worker can still call it.
-        self._stack.close()
+                attempt(problems, f"joining {worker.name} after termination",
+                        lambda w=worker: w.thread.join(timeout=TERMINATE_JOIN))
+            survivors = self._survivors(problems)
+
+        if survivors:
+            # FAIL CLOSED. A Python thread cannot be killed, so a worker that outlived
+            # its backend termination may still run. The instrumentation it could still
+            # call is therefore left in place (it is pass-through once `release` is
+            # set), and the worker is registered so that the next harness refuses to
+            # start instead of running beside it.
+            _ORPHANS.extend(w for w in survivors if w not in _ORPHANS)
+            problems.append(
+                f"CLEANUP INCOMPLETE: workers STILL running: {[w.name for w in survivors]}; "
+                "instrumentation was left in place and later harnesses will refuse to start"
+            )
+        else:
+            attempt(problems, "removing the instrumentation", self._stack.close)
+
         for worker in self.workers:
             if worker.close_error is not None:
                 problems.append(f"{worker.name} could not close its connection: {worker.close_error!r}")
-        remaining = self._sessions_remaining()
+        remaining = attempt(problems, "checking for remaining sessions", self._sessions_remaining, default=0)
         if remaining:
             problems.append(f"{remaining} worker backend session(s) still present in pg_stat_activity")
 
         if problems:
             message = "T2 test cleanup problem: " + "; ".join(problems)
             if exc is not None:
+                # The original failure stays the primary exception; the diagnostics ride
+                # along on it. (`add_note` needs Python 3.11+; the fallback keeps them.)
                 if hasattr(exc, "add_note"):
-                    exc.add_note(message)  # keep the original failure, add the diagnostics
+                    exc.add_note(message)
+                else:
+                    exc.cleanup_diagnostics = message
                 return False
             raise AssertionError(message)
         return False
@@ -395,6 +456,163 @@ class HarnessCleanupTests(TestCase):
             harness.start("t2-late", late_call)
         self.assertEqual(seen, ["wrapper"])  # still the instrumented wrapper when it ran
         self.assertEqual(authoring._delete_rows.__name__, "_delete_rows")  # restored after
+
+
+class HarnessCleanupFailureTests(TestCase):
+    """Runs on every backend: cleanup that itself fails, or cannot finish.
+
+    Waits are shortened for these tests, and every stubborn worker is bounded and is
+    released and joined by the test's own cleanup. No thread here can block forever.
+    """
+
+    class Injected(Exception):
+        pass
+
+    def setUp(self):
+        module = sys.modules[__name__]
+        for name, value in (("WAIT", 0.5), ("TERMINATE_JOIN", 0.3)):
+            patcher = mock.patch.object(module, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(_ORPHANS.clear)  # registered early, so it runs late
+
+    def stubborn(self, harness):
+        """A worker that outlives the (shortened) joins, but only for a bounded time."""
+        gate = threading.Event()
+
+        def work():
+            gate.wait(5)
+            return "late"
+
+        worker = harness.start("t2-stubborn", work)
+
+        def reap():
+            gate.set()
+            worker.thread.join(timeout=10)
+            harness._stack.close()
+
+        self.addCleanup(reap)
+        return worker
+
+    @staticmethod
+    def notes_of(exc):
+        return list(getattr(exc, "__notes__", None) or [getattr(exc, "cleanup_diagnostics", "")])
+
+    def assertNote(self, exc, fragment):
+        joined = " | ".join(self.notes_of(exc))
+        self.assertIn(fragment, joined)
+
+    def test_a_failing_session_check_does_not_replace_the_original_exception(self):
+        harness = _Harness()
+        with mock.patch.object(_Harness, "_sessions_remaining", side_effect=RuntimeError("pg gone")):
+            with self.assertRaises(self.Injected) as raised:
+                with harness:
+                    raise self.Injected("the real failure")
+        self.assertEqual(str(raised.exception), "the real failure")
+        self.assertNote(raised.exception, "checking for remaining sessions raised")
+        self.assertNote(raised.exception, "pg gone")
+
+    def test_a_failing_termination_does_not_replace_the_original_exception(self):
+        harness = _Harness()
+        with mock.patch.object(_Harness, "_terminate_own_backends", side_effect=RuntimeError("no terminate")), \
+                mock.patch.object(_Harness, "_sessions_remaining", return_value=0) as sessions:
+            with self.assertRaises(self.Injected) as raised:
+                with harness:
+                    self.stubborn(harness)
+                    raise self.Injected("the real failure")
+        self.assertEqual(str(raised.exception), "the real failure")
+        self.assertNote(raised.exception, "terminating worker backends raised")
+        self.assertNote(raised.exception, "STILL running")
+        self.assertTrue(sessions.called, "later phases must still run")
+
+    def test_a_failing_instrumentation_removal_does_not_replace_the_original_exception(self):
+        harness = _Harness()
+        harness._stack = mock.Mock()
+        harness._stack.close.side_effect = RuntimeError("unpatch failed")
+        with mock.patch.object(_Harness, "_sessions_remaining", return_value=0) as sessions:
+            with self.assertRaises(self.Injected) as raised:
+                with harness:
+                    raise self.Injected("the real failure")
+        self.assertEqual(str(raised.exception), "the real failure")
+        self.assertNote(raised.exception, "removing the instrumentation raised")
+        self.assertTrue(sessions.called, "a failed phase must not stop the next one")
+
+    def test_several_cleanup_failures_are_all_reported_and_every_phase_runs(self):
+        harness = _Harness()
+        worker = harness.start("t2-w", lambda: "done")
+        worker.thread.join(timeout=5)
+        worker.close_error = RuntimeError("close failed")
+        harness._stack = mock.Mock()
+        harness._stack.close.side_effect = RuntimeError("unpatch failed")
+        with mock.patch.object(_Harness, "_sessions_remaining", side_effect=RuntimeError("pg gone")) as sessions:
+            with self.assertRaises(self.Injected) as raised:
+                with harness:
+                    raise self.Injected("the real failure")
+        self.assertEqual(str(raised.exception), "the real failure")
+        for fragment in ("removing the instrumentation raised", "unpatch failed",
+                         "could not close its connection", "close failed",
+                         "checking for remaining sessions raised", "pg gone"):
+            self.assertNote(raised.exception, fragment)
+        harness._stack.close.assert_called_once()
+        sessions.assert_called_once()
+
+    def test_failures_with_a_surviving_worker_are_all_reported_together(self):
+        harness = _Harness()
+        with mock.patch.object(_Harness, "_terminate_own_backends", side_effect=RuntimeError("no terminate")), \
+                mock.patch.object(_Harness, "_sessions_remaining", side_effect=RuntimeError("pg gone")):
+            with self.assertRaises(self.Injected) as raised:
+                with harness:
+                    self.stubborn(harness)
+                    raise self.Injected("the real failure")
+        self.assertEqual(str(raised.exception), "the real failure")
+        for fragment in ("terminating worker backends raised", "no terminate",
+                         "CLEANUP INCOMPLETE", "checking for remaining sessions raised"):
+            self.assertNote(raised.exception, fragment)
+
+    def test_without_an_original_exception_every_cleanup_failure_is_raised(self):
+        harness = _Harness()
+        harness._stack = mock.Mock()
+        harness._stack.close.side_effect = RuntimeError("unpatch failed")
+        with mock.patch.object(_Harness, "_sessions_remaining", side_effect=RuntimeError("pg gone")):
+            with self.assertRaises(AssertionError) as raised:
+                with harness:
+                    pass
+        message = str(raised.exception)
+        self.assertIn("removing the instrumentation raised", message)
+        self.assertIn("checking for remaining sessions raised", message)
+
+    def test_a_surviving_worker_fails_closed_and_is_never_reported_as_stopped(self):
+        harness = _Harness()
+        with mock.patch.object(_Harness, "_terminate_own_backends", return_value=[4242]) as terminate:
+            with self.assertRaises(AssertionError) as raised:
+                with harness:
+                    harness.instrument()
+                    worker = self.stubborn(harness)
+        message = str(raised.exception)
+
+        terminate.assert_called_once()
+        self.assertTrue(worker.alive, "the simulated worker survived the first cleanup attempt")
+        self.assertIn("CLEANUP INCOMPLETE", message)
+        self.assertIn("STILL running", message)
+        self.assertIn("t2-stubborn", message)
+        self.assertIn("a request, not proof", message)  # termination is never reported as success
+        self.assertNotIn("terminated successfully", message)
+
+        # Fail closed: the instrumentation the survivor could still call stays in place...
+        self.assertEqual(authoring._delete_rows.__name__, "wrapper")
+        # ...and the next harness refuses to start beside it.
+        self.assertIn(worker, _ORPHANS)
+        with self.assertRaisesRegex(AssertionError, "previous test left worker"):
+            _Harness().__enter__()
+
+    def test_a_finished_orphan_no_longer_blocks_a_new_harness(self):
+        done = _Worker("t2-done", lambda: "x")
+        done.thread.start()
+        done.thread.join(timeout=5)
+        _ORPHANS.append(done)
+        with _Harness():
+            pass
+        self.assertEqual(_ORPHANS, [])
 
 
 # ---------------------------------------------------------------------------

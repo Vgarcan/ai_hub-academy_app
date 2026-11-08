@@ -21,7 +21,11 @@ Host-project features should be documented in the host project, not here.
   chunk metadata or accept documents with a `curated_text`/`source_file`
   representation, and it refuses `DERIVED` and populated `UNKNOWN` documents.
   The internal mutator allowlist gained this one service. No model, migration,
-  retrieval, flag or foundation change. Linux/PostgreSQL validation is pending.
+  retrieval, flag or foundation change. PostgreSQL-only regression tests for
+  contended authoring (real row locks) and for the ANN generation and leaf
+  behaviour of authored chunk sets are in `test_knowledge_authoring_postgres.py`;
+  they skip on SQLite and have not yet been executed on PostgreSQL, so
+  Linux/PostgreSQL validation is still pending.
 - Added an advisory, default-off model-facing presentation of the prompt-authority classification (S-35a1, `AI_HUB_PROMPT_AUTHORITY_LABELS_ENABLED`): a static authority statement in the system message, a `prompt_authority` manifest beside `context` in the first user message and a `non_authoritative` label on every deliberate tool observation, in the existing message layout. Manifest names are listed complete or omitted and omitted names are `non_authoritative`. The Training provider ignores only the exact appended suffix. With the flag off, messages and persisted data are byte-identical to before. It does not enforce compliance, does not change tool permissions or approvals and is not a prompt-injection defence.
 - Added a structural prompt-authority classifier (`ai_hub.services.prompt_authority`, S-35a0). It classifies the containers of Orchestrator and GAME model payloads as `runtime`, `caller_input`, `delegated_task` or `non_authoritative` from runtime-controlled structure only and is observable through a private runner seam. It is behaviour-neutral: messages, tools, contracts, persisted payloads and approvals are unchanged, and it is not an injection defence. `_merge_final_output_object` now returns the keys it wrote; its merge is unchanged.
 

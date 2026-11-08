@@ -12,7 +12,8 @@ WHAT IT GUARANTEES
 * **Scope-bound.** The document's collection must belong to `application_scope`,
   and that scope must be active. This is checked before anything else and again
   inside the governed transaction. A missing document, a document of another
-  scope and an inactive scope are indistinguishable: one error, one message.
+  scope and an inactive scope are indistinguishable: one error, one message, and it
+  takes precedence over every other argument or payload error.
 * **Governed and audited.** A change runs inside the mutation foundation: lock,
   compare-and-swap against `expected`, one `KnowledgeLifecycleEvent` in the same
   transaction. If any step or the event write fails, everything rolls back.
@@ -50,13 +51,15 @@ part of the operator lifecycle command.
 
 THE `unchanged` RESULT, PRECISELY
 ---------------------------------
-When the request equals the stored set, the call returns `unchanged` without
-entering the governed context: no lock, no write, no event. It first checks the
-scope, then verifies `expected` against the document's current state (a stale
-`expected` is a `KnowledgeMutationConflict`, never `unchanged`). The comparison is
-a point-in-time read; it is NOT serialised with other writers and is not a
-committed mutation. A concurrent change after that read is simply a later change.
-A `changed` result is the only one with a transactional guarantee.
+Every call, including one that turns out to change nothing, is decided inside the
+governed boundary: the document is locked, `expected` is verified against that locked
+state, and only then are the stored chunks read and compared with the request. A stale
+`expected` is therefore always a `KnowledgeMutationConflict`, never `unchanged`, even
+when the request happens to match what is stored now. When the locked state matches
+`expected` and the request equals the stored set, the transaction is rolled back
+untouched: no write and no lifecycle event. `unchanged` is not a committed mutation and
+carries no audit event, but it is decided against the same locked state as a change
+(on PostgreSQL; SQLite has no row locks, so that serialisation is not exercised here).
 
 LIMITS ARE BOUNDED V1 OPERATING LIMITS
 --------------------------------------
@@ -82,8 +85,6 @@ from ai_hub.services.knowledge_mutation import (
     KnowledgeMutationPrincipal,
     KnowledgeMutationPrincipalError,
     _governed_knowledge_mutation,
-    build_snapshot,
-    verify_expected_state,
 )
 
 OPERATION_AUTHOR_EXPLICIT_CHUNK_SET = "author_explicit_chunk_set"
@@ -306,13 +307,14 @@ def _require_eligible(document, existing):
         raise AuthorityRefused(
             f"Knowledge document #{document.pk} has an unsupported authority mode."
         )
-    carried = (
-        document.generation_input_fingerprint,
-        document.generation_chunk_set_fingerprint,
-        document.generator_identity,
-        document.generator_version,
-    )
-    if any(carried):
+    # `generator_version` is null when no generator applies, so 0 is a stored
+    # provenance claim, not an absence: test it for None, never for truthiness.
+    if (
+        document.generation_input_fingerprint
+        or document.generation_chunk_set_fingerprint
+        or document.generator_identity
+        or document.generator_version is not None
+    ):
         raise ProvenanceRefused(
             f"Knowledge document #{document.pk} carries generation facts, which an "
             "authored chunk set must not; resolve it through repair first."
@@ -495,6 +497,11 @@ def author_explicit_chunk_set(
     `AuthoringIntegrityError`, and the foundation's principal/operation errors. Every
     failure leaves zero changes and zero lifecycle events.
     """
+    # Authorization is decided first, so that a caller who cannot see a document gets
+    # the one uniform refusal whatever else is wrong with the call. `principal` is
+    # audit attribution, never authorization.
+    document = _authorized_document(document_id, application_scope)
+
     if not isinstance(expected, ExpectedKnowledgeState):
         raise TypeError("expected must be an ExpectedKnowledgeState.")
     if not isinstance(principal, KnowledgeMutationPrincipal):
@@ -504,19 +511,13 @@ def author_explicit_chunk_set(
     principal.validate()
     _validate_reason_code(reason_code)
 
-    document = _authorized_document(document_id, application_scope)
     desired = _validate_chunks(chunks)
     desired_fingerprint = chunk_set_fingerprint(_desired_rows(desired))
 
-    # Point-in-time check for an identical request. Not under the lock, not a
-    # committed mutation, and never reached with a stale `expected`.
-    verify_expected_state(build_snapshot(document), expected)
-    existing = _load_existing(document)
-    _require_eligible(document, existing)
-    plan = _plan(existing, desired)
-    if plan.is_noop:
-        return _result(OUTCOME_UNCHANGED, document.pk, desired, plan, desired_fingerprint)
-
+    # There is deliberately no unlocked early return for an identical request. The
+    # compare-and-swap check and the chunk read must see the same locked state, so
+    # even a no-op is decided inside the governed boundary. A genuine no-op raises
+    # `_NothingToDo`, which rolls the (empty) transaction back: no write, no event.
     try:
         with _governed_knowledge_mutation(
             document.pk,

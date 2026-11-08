@@ -256,7 +256,9 @@ What it does:
 - Returns an `AuthoringResult` with `outcome` (`changed` or `unchanged`), the
   document id, chunk count, kept/inserted/removed/moved counts and the resulting
   `c1` fingerprint. It carries no event id. A genuine no-op writes nothing and
-  records no event.
+  records no event. Even a no-op is decided inside the governed boundary, against
+  the locked state verified with `expected`, so `unchanged` is never returned on
+  the strength of an unlocked read.
 
 Host obligations:
 

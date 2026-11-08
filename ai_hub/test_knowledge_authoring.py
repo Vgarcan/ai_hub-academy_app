@@ -277,23 +277,66 @@ class ScopeAuthorizationTests(AuthoringFixture, TestCase):
                 expected=unrelated, principal=self.principal,
             )
 
+    def test_authorization_precedes_every_control_argument_error(self):
+        """T2 audit finding 3: an inaccessible document never reveals itself through a
+        different error, whatever else is malformed."""
+        foreign = self.foreign_document()
+        good = self.expected(self.shell("Mine"))
+        cases = {
+            "expected None": dict(expected=None),
+            "expected wrong type": dict(expected="state"),
+            "principal None": dict(principal=None),
+            "principal wrong type": dict(principal="operator"),
+            "principal blank identifier": dict(principal=KnowledgeMutationPrincipal("human", " ")),
+            "bad reason code": dict(reason_code="Bad Code"),
+            "bad chunk payload": dict(chunks=[]),
+            "chunk payload of wrong type": dict(chunks="text"),
+            "everything malformed": dict(
+                expected=None, principal=None, reason_code="Bad Code", chunks=[]
+            ),
+        }
+        for name, overrides in cases.items():
+            with self.subTest(case=name):
+                kwargs = dict(
+                    chunks=[C("x")], application_scope=self.scope,
+                    expected=good, principal=self.principal, reason_code="",
+                )
+                kwargs.update(overrides)
+                chunks = kwargs.pop("chunks")
+                for target in (foreign.pk, 999_999):  # foreign and missing alike
+                    with self.assertRaises(KnowledgeAuthoringNotAuthorized) as raised:
+                        author_explicit_chunk_set(target, chunks, **kwargs)
+                    self.assertEqual(str(raised.exception), authoring.NOT_AUTHORIZED_MESSAGE)
+
+    def test_the_principal_is_attribution_not_authorization(self):
+        """A well-formed principal grants nothing: scope ownership alone decides."""
+        foreign = self.foreign_document()
+        expected = self.expected(foreign)
+        for principal in (
+            KnowledgeMutationPrincipal.human("an-admin"),
+            KnowledgeMutationPrincipal.system("a-trusted-service"),
+        ):
+            with self.assertRaises(KnowledgeAuthoringNotAuthorized):
+                author_explicit_chunk_set(
+                    foreign.pk, [C("x")], application_scope=self.scope,
+                    expected=expected, principal=principal,
+                )
+
     def test_ownership_is_rechecked_inside_the_governed_transaction(self):
         """The collection leaves the scope after the pre-check but before the lock."""
         document = self.shell()
         before = db_state()
-        real = authoring._load_existing
-        calls = []
+        real = authoring._governed_knowledge_mutation
 
-        def flip_scope_after_the_precheck(doc):
-            rows = real(doc)
-            if not calls:
-                calls.append(1)
-                KnowledgeCollection.objects.filter(pk=self.collection.pk).update(
-                    application_scope=self.other_scope
-                )
-            return rows
+        def flip_scope_after_the_precheck(*args, **kwargs):
+            # The collection keeps its id (so the compare-and-swap still passes) but
+            # changes owner between the first authorization and the lock.
+            KnowledgeCollection.objects.filter(pk=self.collection.pk).update(
+                application_scope=self.other_scope
+            )
+            return real(*args, **kwargs)
 
-        with mock.patch.object(authoring, "_load_existing", side_effect=flip_scope_after_the_precheck):
+        with mock.patch.object(authoring, "_governed_knowledge_mutation", flip_scope_after_the_precheck):
             with self.assertRaises(KnowledgeAuthoringNotAuthorized):
                 self.author(document, [C("x")])
         document.refresh_from_db()
@@ -378,17 +421,33 @@ class AuthorityStateTests(AuthoringFixture, TestCase):
                     self.author(document, [C("x")])
                 self.assertNothingChanged(before)
 
-    def test_generation_facts_are_refused(self):
+    def test_every_generation_fact_is_refused_independently(self):
+        """T2 audit finding 2: `generator_version=0` is a stored fact, not an absence."""
+        facts = {
+            "generation_input_fingerprint": "i1:abc",
+            "generation_chunk_set_fingerprint": "c1:abc",
+            "generator_identity": "curated_text_single_chunk",
+            "generator_version=0": 0,
+            "generator_version=1": 1,
+        }
         for mode in (Mode.UNKNOWN, Mode.EXPLICIT):
-            with self.subTest(mode=mode):
-                document = self.shell(
-                    title=f"Provenanced {mode}", chunk_authority_mode=mode,
-                    generator_identity="curated_text_single_chunk", generator_version=1,
-                )
-                before = db_state()
-                with self.assertRaises(ProvenanceRefused):
-                    self.author(document, [C("x")])
-                self.assertNothingChanged(before)
+            for label, value in facts.items():
+                with self.subTest(mode=mode, fact=label):
+                    field = label.split("=")[0]
+                    document = self.shell(title=f"{mode} {label}", chunk_authority_mode=mode)
+                    KnowledgeDocument.objects.filter(pk=document.pk).update(**{field: value})
+                    before = db_state()
+                    with self.assertRaises(ProvenanceRefused):
+                        self.author(document, [C("x")])
+                    self.assertNothingChanged(before)  # nothing cleared, nothing written
+                    document.refresh_from_db()
+                    self.assertEqual(getattr(document, field), value)
+                    self.assertEqual(document.chunk_authority_mode, mode)
+
+    def test_a_null_generator_version_with_blank_facts_is_accepted(self):
+        document = self.shell("No facts")
+        self.assertIsNone(document.generator_version)
+        self.assertEqual(self.author(document, [C("x")]).outcome, authoring.OUTCOME_CHANGED)
 
     def test_source_text_or_file_is_refused_for_first_authoring_and_updates(self):
         first = self.shell("With text", curated_text="a separate source representation")
@@ -728,14 +787,85 @@ class NoOpAndConflictTests(AuthoringFixture, TestCase):
         self.assertEqual(self.events(), events)
         self.assertNothingChanged(before)
 
-    def test_an_unchanged_result_never_enters_the_governed_context(self):
+    def governed_spy(self):
+        """Record whether the governed boundary was entered and whether it was
+        active at each `_load_existing` call."""
+        spy = {"entered": 0, "active": False, "loads_outside": 0}
+        real_governed = authoring._governed_knowledge_mutation
+        real_load = authoring._load_existing
+
+        class Spy:
+            def __init__(self, *args, **kwargs):
+                self.inner = real_governed(*args, **kwargs)
+
+            def __enter__(self):
+                spy["entered"] += 1
+                value = self.inner.__enter__()
+                spy["active"] = True
+                return value
+
+            def __exit__(self, *exc):
+                spy["active"] = False
+                return self.inner.__exit__(*exc)
+
+        def load(document):
+            if not spy["active"]:
+                spy["loads_outside"] += 1
+            return real_load(document)
+
+        return spy, Spy, load
+
+    def test_an_identical_request_is_decided_inside_the_governed_boundary(self):
+        """T2 audit finding 1: no unlocked read may decide `unchanged`."""
         document = self.authored(["alpha"])
-        with mock.patch.object(
-            authoring, "_governed_knowledge_mutation", side_effect=AssertionError("entered")
-        ):
-            self.assertEqual(
-                self.author(document, [C("alpha")]).outcome, authoring.OUTCOME_UNCHANGED
-            )
+        spy, Spy, load = self.governed_spy()
+        before = db_state()
+        with mock.patch.object(authoring, "_governed_knowledge_mutation", Spy), \
+                mock.patch.object(authoring, "_load_existing", load):
+            result = self.author(document, [C("alpha")])
+        self.assertEqual(result.outcome, authoring.OUTCOME_UNCHANGED)
+        self.assertEqual(spy["entered"], 1)
+        self.assertEqual(spy["loads_outside"], 0)
+        self.assertNothingChanged(before)  # rolled back: no write, no event
+
+    def test_a_concurrent_change_before_the_read_cannot_become_unchanged(self):
+        """T2 audit finding 1, the reproduced race: stored A, expected A, a writer
+        commits A -> B, the host asks for B. It must never return `unchanged` on the
+        strength of an unlocked read."""
+        document = self.authored(["alpha"])
+        planned = self.expected(document)  # state A
+        spy, Spy, real_load = self.governed_spy()
+        raced = []
+
+        def load_after_a_concurrent_writer(doc):
+            if not spy["active"] and not raced:  # the old unlocked read
+                raced.append(1)
+                doc.chunks.update(content="beta")  # A -> B, committed elsewhere
+            return real_load(doc)
+
+        with mock.patch.object(authoring, "_governed_knowledge_mutation", Spy), \
+                mock.patch.object(authoring, "_load_existing", load_after_a_concurrent_writer):
+            try:
+                result = self.author(document, [C("beta")], expected=planned)
+            except KnowledgeMutationConflict:
+                return  # acceptable: the stale expectation was caught
+        self.assertNotEqual(result.outcome, authoring.OUTCOME_UNCHANGED)
+
+    def test_a_writer_committing_just_before_the_lock_is_a_conflict(self):
+        document = self.authored(["alpha"])
+        planned = self.expected(document)
+        real_governed = authoring._governed_knowledge_mutation
+
+        def writer_then_governed(*args, **kwargs):
+            document.chunks.update(content="beta")  # committed before the lock is taken
+            return real_governed(*args, **kwargs)
+
+        before_events = self.events()
+        with mock.patch.object(authoring, "_governed_knowledge_mutation", writer_then_governed):
+            with self.assertRaises(KnowledgeMutationConflict):
+                self.author(document, [C("beta")], expected=planned)
+        self.assertEqual(self.events(), before_events)
+        self.assertEqual(self.contents(document), ["beta"])  # the other writer's state stands
 
     def test_repeating_a_changed_request_is_unchanged_the_second_time(self):
         document = self.shell()

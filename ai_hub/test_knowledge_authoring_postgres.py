@@ -8,18 +8,36 @@ What SQLite cannot prove, and why these tests exist:
 * The ANN generation triggers and the mirrored HNSW leaves exist only on
   PostgreSQL with pgvector.
 
-Every class here is skipped on any other backend, with a reason that says so. A
-skipped test is NOT a passed PostgreSQL validation. The PostgreSQL gate for T2
-stays open until the Linux/PostgreSQL CI job has actually executed this module.
+Every PostgreSQL class here is skipped on any other backend, with a reason that
+says so. A skipped test is NOT a passed PostgreSQL validation. The PostgreSQL gate
+for T2 stays open until a Linux/PostgreSQL job has actually executed this module.
 
-The concurrency tests follow the repository's existing convention
-(`GovernedMutationConcurrencyTests`, `ProvisioningConcurrencyTests`): a
-`TransactionTestCase`, one real connection per thread, the server's own
-`pg_backend_pid()` to prove the connections differ, and no mocking of the lock.
-They use explicit events instead of sleeps, and observe the waiting writer through
-`pg_stat_activity` rather than assuming it waits. Every wait is bounded.
+HOW THE CONCURRENCY TESTS STAY SAFE
+-----------------------------------
+All of them run their workers through `_Harness`:
+
+* Workers are ordinary (non-daemon) threads that own their database connection:
+  each one opens it, bounds its own session (`lock_timeout`, `statement_timeout`,
+  `idle_in_transaction_session_timeout`), publishes the server's `pg_backend_pid()`
+  and closes the connection itself in its own `finally`.
+* The harness is a context manager. Whatever happens inside the `with` block,
+  including a failed synchronisation assertion, its exit (1) releases every gate,
+  (2) joins every started worker, (3) only if one is still running after a bounded
+  wait, terminates exactly the backend PIDs those workers published, and only when
+  they belong to this database and user, (4) removes the instrumentation last, so
+  patched code stays in place until no worker can still call it, and (5) checks
+  that the sessions are gone. An in-flight test exception is never replaced by a
+  cleanup message; the cleanup diagnostics are attached to it as a note.
+* "The second author is blocked by the first" is established from the server, not
+  assumed: the second worker's own PID must be waiting with
+  `wait_event_type = 'Lock'` and the holder's PID must appear in
+  `pg_blocking_pids(second_pid)`. An unrelated waiting backend proves nothing.
+
+Following the repository's convention (`GovernedMutationConcurrencyTests`,
+`ProvisioningConcurrencyTests`): `TransactionTestCase`, no mocking of the lock.
 """
 import contextlib
+import re
 import threading
 import time
 from collections import defaultdict
@@ -27,6 +45,7 @@ from unittest import mock, skipUnless
 
 from django.db import connection, connections
 from django.test import TestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 
 from ai_hub.models import (
     KnowledgeChunkEmbedding,
@@ -69,8 +88,15 @@ SKIP_REASON = (
 )
 requires_postgres = skipUnless(POSTGRES, SKIP_REASON)
 
-#: Bound for every wait in this module, in seconds.
+#: Bound for every Python-side wait in this module, in seconds.
 WAIT = 30
+
+#: Session bounds applied by each worker to its own connection, in milliseconds.
+#: They are longer than any wait the tests make on purpose: they exist so that a
+#: broken test ends a database session, never so that a healthy one is cut short.
+LOCK_TIMEOUT_MS = 45_000
+STATEMENT_TIMEOUT_MS = 60_000
+IDLE_IN_TRANSACTION_TIMEOUT_MS = 90_000
 
 #: The only helpers that write chunk or document rows inside the governed block.
 MUTATING_HELPERS = ("_delete_rows", "_move_rows", "_insert_rows", "_declare_explicit")
@@ -80,8 +106,210 @@ def C(content, title=""):
     return AuthoredChunk(content=content, section_title=title)
 
 
+class _Abort(Exception):
+    """Raised by a lock holder to roll its transaction back unchanged."""
+
+
 # ---------------------------------------------------------------------------
-# Runs on every backend: the module imports and skips for the right reason
+# Worker and harness
+# ---------------------------------------------------------------------------
+
+class _Worker:
+    """One thread, one owned connection, one published backend PID."""
+
+    def __init__(self, name, fn):
+        self.name = name
+        self._fn = fn
+        self.pid = None
+        self.result = None
+        self.error = None
+        self.close_error = None
+        self.ready = threading.Event()     # connection initialised, PID published
+        self.finished = threading.Event()  # connection closed by its owner
+        self.thread = threading.Thread(target=self._run, name=name)  # not a daemon
+
+    def _run(self):
+        try:
+            if POSTGRES:
+                with connections["default"].cursor() as cursor:
+                    cursor.execute(f"SET lock_timeout = {LOCK_TIMEOUT_MS}")
+                    cursor.execute(f"SET statement_timeout = {STATEMENT_TIMEOUT_MS}")
+                    cursor.execute(
+                        f"SET idle_in_transaction_session_timeout = {IDLE_IN_TRANSACTION_TIMEOUT_MS}"
+                    )
+                    cursor.execute("SELECT pg_backend_pid()")
+                    self.pid = cursor.fetchone()[0]
+            self.ready.set()
+            self.result = self._fn()
+        except BaseException as exc:  # noqa: BLE001 - reported to the test, never swallowed
+            self.error = exc
+        finally:
+            self.ready.set()  # never leave the harness waiting on a worker that failed early
+            try:
+                connections["default"].close()  # closed by the thread that owns it
+            except Exception as exc:  # noqa: BLE001
+                self.close_error = exc
+            self.finished.set()
+
+    def outcome(self):
+        """The worker's result, or its original exception."""
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    @property
+    def alive(self):
+        return self.thread.is_alive()
+
+
+class _Harness:
+    """Runs workers and guarantees they are finished, whatever the test does."""
+
+    def __init__(self):
+        self.locked = threading.Event()   # a holder reached its critical point
+        self.release = threading.Event()  # let the holder go
+        self.workers = []
+        self.calls = defaultdict(list)
+        self._stack = contextlib.ExitStack()
+
+    def __enter__(self):
+        return self
+
+    # -- instrumentation ----------------------------------------------------
+
+    def instrument(self, *, hold=None):
+        """Record which worker calls each mutating helper. If `hold` is the name of
+        a worker, that worker pauses inside the governed block, after the lock and
+        the compare-and-swap and before its first write, until `release` is set."""
+        def wrap(name, real):
+            def wrapper(*args, **kwargs):
+                who = threading.current_thread().name
+                self.calls[who].append(name)
+                if hold is not None and name == "_delete_rows" and who == hold:
+                    self.locked.set()
+                    if not self.release.wait(WAIT):
+                        raise AssertionError("the lock holder was never released")
+                return real(*args, **kwargs)
+            return wrapper
+
+        for name in MUTATING_HELPERS:
+            self._stack.enter_context(
+                mock.patch.object(authoring, name, wrap(name, getattr(authoring, name)))
+            )
+        return self.calls
+
+    # -- workers ------------------------------------------------------------
+
+    def start(self, name, fn):
+        worker = _Worker(name, fn)
+        self.workers.append(worker)
+        worker.thread.start()
+        if not worker.ready.wait(WAIT):
+            raise AssertionError(f"worker {name!r} never initialised its connection")
+        return worker
+
+    def wait_blocked(self, waiter, holder):
+        """Establish from the server that `waiter` is waiting on a lock held by
+        `holder`. Bounded; fails with what was actually observed."""
+        if not (waiter.pid and holder.pid):
+            raise AssertionError(f"backend pids were not published: {waiter.pid=} {holder.pid=}")
+        if waiter.pid == holder.pid:
+            raise AssertionError("the two workers share one backend; this proves nothing")
+        deadline = time.monotonic() + WAIT
+        observed = None
+        while time.monotonic() < deadline:
+            if waiter.finished.is_set():
+                raise AssertionError(
+                    f"{waiter.name} finished instead of waiting: result={waiter.result!r} "
+                    f"error={waiter.error!r}"
+                )
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT wait_event_type, wait_event, state, pg_blocking_pids(pid) "
+                    "FROM pg_stat_activity "
+                    "WHERE pid = %s AND datname = current_database()",
+                    [waiter.pid],
+                )
+                row = cursor.fetchone()
+            observed = row
+            if row is not None and row[0] == "Lock" and holder.pid in (row[3] or []):
+                return
+            time.sleep(0.05)
+        raise AssertionError(
+            f"{waiter.name} (pid {waiter.pid}) was never seen waiting on a lock held by "
+            f"{holder.name} (pid {holder.pid}); last observation "
+            f"(wait_event_type, wait_event, state, blocking_pids) = {observed!r}"
+        )
+
+    # -- cleanup ------------------------------------------------------------
+
+    def _terminate_own_backends(self, workers):
+        """Defensive, last resort: only PIDs these workers published, only in this
+        database, only under this user, never this session."""
+        pids = [w.pid for w in workers if w.pid]
+        if not (POSTGRES and pids):
+            return
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE pid = ANY(%s) AND datname = current_database() "
+                "AND usename = current_user AND pid <> pg_backend_pid()",
+                [pids],
+            )
+
+    def _sessions_remaining(self):
+        pids = [w.pid for w in self.workers if w.pid]
+        if not (POSTGRES and pids):
+            return 0
+        deadline = time.monotonic() + 10
+        while True:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT count(*) FROM pg_stat_activity WHERE pid = ANY(%s)", [pids]
+                )
+                remaining = cursor.fetchone()[0]
+            if remaining == 0 or time.monotonic() > deadline:
+                return remaining
+            time.sleep(0.05)
+
+    def __exit__(self, exc_type, exc, tb):
+        problems = []
+        self.release.set()  # always release the holder
+        for worker in self.workers:
+            worker.thread.join(timeout=WAIT)
+        alive = [w for w in self.workers if w.alive]
+        if alive:
+            problems.append(
+                "workers did not finish in time: "
+                + ", ".join(f"{w.name} (pid {w.pid})" for w in alive)
+            )
+            self._terminate_own_backends(alive)
+            for worker in alive:
+                worker.thread.join(timeout=10)
+            still = [w.name for w in self.workers if w.alive]
+            if still:
+                problems.append(f"workers STILL running after termination: {still}")
+        # Instrumentation comes off only now, when no worker can still call it.
+        self._stack.close()
+        for worker in self.workers:
+            if worker.close_error is not None:
+                problems.append(f"{worker.name} could not close its connection: {worker.close_error!r}")
+        remaining = self._sessions_remaining()
+        if remaining:
+            problems.append(f"{remaining} worker backend session(s) still present in pg_stat_activity")
+
+        if problems:
+            message = "T2 test cleanup problem: " + "; ".join(problems)
+            if exc is not None:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(message)  # keep the original failure, add the diagnostics
+                return False
+            raise AssertionError(message)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Runs on every backend: gating contract and harness cleanup
 # ---------------------------------------------------------------------------
 
 class SkipContractTests(TestCase):
@@ -102,6 +330,71 @@ class SkipContractTests(TestCase):
 
     def test_the_gate_follows_the_connection_vendor(self):
         self.assertEqual(POSTGRES, connection.vendor == "postgresql")
+
+
+class HarnessCleanupTests(TestCase):
+    """Runs on every backend: a failed synchronisation must not strand a worker."""
+
+    class Injected(Exception):
+        pass
+
+    def test_a_failing_test_body_still_releases_and_joins_the_workers(self):
+        started = threading.Event()
+        harness = _Harness()
+        workers = []
+
+        def hold():
+            started.set()
+            # Waits for the gate; only the harness exit can open it here.
+            if not harness.release.wait(WAIT):
+                raise AssertionError("never released")
+            return "released"
+
+        with self.assertRaises(self.Injected):
+            with harness:
+                workers.append(harness.start("t2-holder", hold))
+                self.assertTrue(started.wait(WAIT))
+                workers.append(harness.start("t2-second", hold))
+                raise self.Injected("a synchronisation assertion failed")
+
+        for worker in workers:
+            self.assertFalse(worker.alive, f"{worker.name} was left running")
+            self.assertTrue(worker.finished.is_set(), "the owning thread closes its connection")
+            self.assertEqual(worker.outcome(), "released")
+
+    def test_the_original_exception_survives_a_cleanup_problem(self):
+        harness = _Harness()
+        harness.start("t2-w", lambda: "done")
+        with mock.patch.object(_Harness, "_sessions_remaining", return_value=2):
+            with self.assertRaises(self.Injected) as raised:
+                with harness:
+                    raise self.Injected("the real failure")
+        self.assertEqual(str(raised.exception), "the real failure")
+        if hasattr(raised.exception, "__notes__"):
+            self.assertTrue(any("cleanup problem" in n for n in raised.exception.__notes__))
+
+    def test_a_cleanup_problem_alone_is_reported_not_hidden(self):
+        harness = _Harness()
+        harness.start("t2-w", lambda: "done")
+        with mock.patch.object(_Harness, "_sessions_remaining", return_value=1):
+            with self.assertRaisesRegex(AssertionError, "cleanup problem"):
+                with harness:
+                    pass
+
+    def test_instrumentation_stays_until_every_worker_has_finished(self):
+        harness = _Harness()
+        seen = []
+
+        def late_call():
+            harness.release.wait(WAIT)
+            seen.append(authoring._delete_rows.__name__)  # touches the patched name
+            return "ok"
+
+        with harness:
+            harness.instrument()
+            harness.start("t2-late", late_call)
+        self.assertEqual(seen, ["wrapper"])  # still the instrumented wrapper when it ran
+        self.assertEqual(authoring._delete_rows.__name__, "_delete_rows")  # restored after
 
 
 # ---------------------------------------------------------------------------
@@ -129,9 +422,6 @@ class ContendedAuthoringTests(TransactionTestCase):
             document=self.document, chunk_index=1, content="alpha"
         )
         self.expected = ExpectedKnowledgeState.from_snapshot(build_snapshot(self.document))
-        self.stray = []
-
-    # -- harness ------------------------------------------------------------
 
     def contents(self):
         return list(
@@ -144,111 +434,36 @@ class ContendedAuthoringTests(TransactionTestCase):
             operation=authoring.OPERATION_AUTHOR_EXPLICIT_CHUNK_SET
         )
 
-    def blocked_backends(self):
-        """Other backends of this database currently waiting on a lock."""
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT count(*) FROM pg_stat_activity "
-                "WHERE datname = current_database() AND pid <> pg_backend_pid() "
-                "AND wait_event_type = 'Lock'"
-            )
-            return cursor.fetchone()[0]
-
-    def wait_until_blocked(self):
-        deadline = time.monotonic() + WAIT
-        while time.monotonic() < deadline:
-            if self.blocked_backends() >= 1:
-                return True
-            time.sleep(0.05)
-        return False
-
-    def spawn(self, name, target):
-        thread = threading.Thread(target=target, name=name, daemon=True)
-        self.stray.append(thread)
-        thread.start()
-        return thread
-
-    def join_all(self):
-        for thread in self.stray:
-            thread.join(timeout=WAIT)
-        alive = [t.name for t in self.stray if t.is_alive()]
-        self.assertEqual(alive, [], f"threads still running (deadlock?): {alive}")
-
-    def author_in_thread(self, results, label, texts, *, principal, pids):
-        """One independent connection, recorded by the server's own pid."""
-        try:
-            with connections["default"].cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                pids[label] = cursor.fetchone()[0]
-            results[label] = author_explicit_chunk_set(
-                self.document.pk, [C(text) for text in texts],
-                application_scope=self.scope, expected=self.expected,
-                principal=KnowledgeMutationPrincipal.system(principal),
-            )
-        except BaseException as exc:  # noqa: BLE001 - reported to the test, never swallowed
-            results[label] = exc
-        finally:
-            connections["default"].close()
-
-    @contextlib.contextmanager
-    def instrumented(self, *, hold_thread=None, locked=None, release=None):
-        """Record which thread calls each mutating helper; optionally make
-        `hold_thread` pause inside the governed block, after the lock and the
-        compare-and-swap, and before it writes."""
-        calls = defaultdict(list)
-
-        def wrap(name, real):
-            def wrapper(*args, **kwargs):
-                who = threading.current_thread().name
-                calls[who].append(name)
-                if name == "_delete_rows" and who == hold_thread:
-                    locked.set()
-                    if not release.wait(WAIT):
-                        raise AssertionError("the lock holder was never released")
-                return real(*args, **kwargs)
-            return wrapper
-
-        with contextlib.ExitStack() as stack:
-            for name in MUTATING_HELPERS:
-                stack.enter_context(
-                    mock.patch.object(authoring, name, wrap(name, getattr(authoring, name)))
-                )
-            yield calls
+    def author(self, texts, principal):
+        return author_explicit_chunk_set(
+            self.document.pk, [C(text) for text in texts],
+            application_scope=self.scope, expected=self.expected,
+            principal=KnowledgeMutationPrincipal.system(principal),
+        )
 
     def race_against_a_committing_holder(self, second_texts):
-        """Holder: A -> B, paused while holding the lock. Second: same `expected`.
-        Returns (results, calls, pids)."""
-        locked, release = threading.Event(), threading.Event()
-        results, pids = {}, {}
-        with self.instrumented(hold_thread="t2-holder", locked=locked, release=release) as calls:
-            try:
-                self.spawn("t2-holder", lambda: self.author_in_thread(
-                    results, "holder", ["beta"], principal="holder", pids=pids))
-                self.assertTrue(locked.wait(WAIT), "the holder never reached its write phase")
-
-                self.spawn("t2-second", lambda: self.author_in_thread(
-                    results, "second", second_texts, principal="second", pids=pids))
-                self.assertTrue(
-                    self.wait_until_blocked(),
-                    "the second author never appeared as waiting on a row lock",
-                )
-                self.assertNotIn("second", results, "the second author must still be waiting")
-            finally:
-                release.set()  # always, so no thread outlives a failed assertion
-            self.join_all()
-        return results, calls, pids
+        """Holder: A -> B, paused while holding the lock. Second: the same `expected`.
+        Returns (holder, second, calls); every worker is finished on return."""
+        with _Harness() as harness:
+            calls = harness.instrument(hold="t2-holder")
+            holder = harness.start("t2-holder", lambda: self.author(["beta"], "holder"))
+            self.assertTrue(harness.locked.wait(WAIT), "the holder never reached its write phase")
+            second = harness.start("t2-second", lambda: self.author(second_texts, "second"))
+            harness.wait_blocked(second, holder)
+            self.assertFalse(second.finished.is_set(), "the second author must still be waiting")
+            harness.release.set()
+        return holder, second, calls
 
     # -- A: the contended race ---------------------------------------------
 
     def test_a_waiting_author_with_a_stale_expectation_conflicts_after_the_commit(self):
-        results, calls, pids = self.race_against_a_committing_holder(["gamma"])
+        holder, second, calls = self.race_against_a_committing_holder(["gamma"])
 
-        self.assertNotEqual(pids["holder"], pids["second"], "needs two real connections")
-        self.assertEqual(results["holder"].outcome, authoring.OUTCOME_CHANGED)
-        self.assertIsInstance(results["second"], KnowledgeMutationConflict)
+        self.assertNotEqual(holder.pid, second.pid, "needs two real connections")
+        self.assertEqual(holder.outcome().outcome, authoring.OUTCOME_CHANGED)
+        self.assertIsInstance(second.error, KnowledgeMutationConflict)
 
         self.assertEqual(self.contents(), ["beta"])  # the holder's B, nothing of the second
-        self.assertEqual(KnowledgeDocumentChunk.objects.filter(document=self.document).count(), 1)
         self.assertFalse(KnowledgeDocumentChunk.objects.filter(pk=self.seed.pk).exists())
 
         events = list(self.authoring_events())
@@ -262,11 +477,11 @@ class ContendedAuthoringTests(TransactionTestCase):
     def test_a_waiting_identical_request_with_a_stale_expectation_is_a_conflict_not_unchanged(self):
         """The audited defect, on real locks: after the wait, B equals what is stored,
         but the caller planned against A. It must conflict, never report `unchanged`."""
-        results, calls, pids = self.race_against_a_committing_holder(["beta"])
+        holder, second, calls = self.race_against_a_committing_holder(["beta"])
 
-        self.assertNotEqual(pids["holder"], pids["second"])
-        self.assertEqual(results["holder"].outcome, authoring.OUTCOME_CHANGED)
-        self.assertIsInstance(results["second"], KnowledgeMutationConflict)
+        self.assertNotEqual(holder.pid, second.pid)
+        self.assertEqual(holder.outcome().outcome, authoring.OUTCOME_CHANGED)
+        self.assertIsInstance(second.error, KnowledgeMutationConflict)
         self.assertEqual(self.contents(), ["beta"])
         self.assertEqual(self.authoring_events().count(), 1)
         self.assertEqual(calls["t2-second"], [])
@@ -277,56 +492,38 @@ class ContendedAuthoringTests(TransactionTestCase):
         """The holder takes the same governed lock and gives it back unchanged, so
         the waiting caller's `expected` is still exact. Its identical request must
         have waited, then return `unchanged` with no write and no event."""
-        locked, release = threading.Event(), threading.Event()
-        results, pids = {}, {}
-
-        class Abort(Exception):
-            pass
-
-        def holder():
-            try:
-                with connections["default"].cursor() as cursor:
-                    cursor.execute("SELECT pg_backend_pid()")
-                    pids["holder"] = cursor.fetchone()[0]
-                with _governed_knowledge_mutation(
-                    self.document.pk, expected=self.expected,
-                    operation="t2_lock_holder",
-                    principal=KnowledgeMutationPrincipal.system("holder"),
-                ):
-                    locked.set()
-                    if not release.wait(WAIT):
-                        raise AssertionError("the lock holder was never released")
-                    raise Abort  # roll back: lock released, document untouched, no event
-            except Abort:
-                results["holder"] = "released unchanged"
-            except BaseException as exc:  # noqa: BLE001
-                results["holder"] = exc
-            finally:
-                connections["default"].close()
-
         before = list(KnowledgeDocumentChunk.objects.filter(document=self.document).values())
         document_updated_at = KnowledgeDocument.objects.get(pk=self.document.pk).updated_at
 
-        with self.instrumented() as calls:
-            try:
-                self.spawn("t2-holder", holder)
-                self.assertTrue(locked.wait(WAIT), "the holder never took the lock")
-                self.spawn("t2-second", lambda: self.author_in_thread(
-                    results, "second", ["alpha"], principal="second", pids=pids))
-                self.assertTrue(
-                    self.wait_until_blocked(),
-                    "an identical request must wait on the row lock, like any other",
-                )
-                self.assertNotIn("second", results, "it must not answer while the lock is held")
-            finally:
-                release.set()
-            self.join_all()
+        with _Harness() as harness:
+            calls = harness.instrument()
 
-        self.assertNotEqual(pids["holder"], pids["second"])
-        self.assertEqual(results["holder"], "released unchanged")
-        self.assertEqual(results["second"].outcome, authoring.OUTCOME_UNCHANGED)
-        self.assertEqual((results["second"].kept, results["second"].inserted,
-                          results["second"].removed, results["second"].moved), (1, 0, 0, 0))
+            def hold():
+                try:
+                    with _governed_knowledge_mutation(
+                        self.document.pk, expected=self.expected,
+                        operation="t2_lock_holder",
+                        principal=KnowledgeMutationPrincipal.system("holder"),
+                    ):
+                        harness.locked.set()
+                        if not harness.release.wait(WAIT):
+                            raise AssertionError("the lock holder was never released")
+                        raise _Abort  # roll back: lock released, document untouched, no event
+                except _Abort:
+                    return "released unchanged"
+
+            holder = harness.start("t2-holder", hold)
+            self.assertTrue(harness.locked.wait(WAIT), "the holder never took the lock")
+            second = harness.start("t2-second", lambda: self.author(["alpha"], "second"))
+            harness.wait_blocked(second, holder)
+            self.assertFalse(second.finished.is_set(), "it must not answer while the lock is held")
+            harness.release.set()
+
+        self.assertNotEqual(holder.pid, second.pid)
+        self.assertEqual(holder.outcome(), "released unchanged")
+        result = second.outcome()
+        self.assertEqual(result.outcome, authoring.OUTCOME_UNCHANGED)
+        self.assertEqual((result.kept, result.inserted, result.removed, result.moved), (1, 0, 0, 0))
         self.assertEqual(calls["t2-second"], [])
         self.assertEqual(KnowledgeLifecycleEvent.objects.count(), 0)
         self.assertEqual(
@@ -336,18 +533,30 @@ class ContendedAuthoringTests(TransactionTestCase):
             KnowledgeDocument.objects.get(pk=self.document.pk).updated_at, document_updated_at
         )
 
-    def test_the_governed_lock_is_a_real_row_lock_on_the_document(self):
-        """The locking the tests above rely on is `FOR UPDATE`, not a stand-in."""
-        from django.test.utils import CaptureQueriesContext
+    # -- the lock itself ----------------------------------------------------
 
+    def test_even_a_no_op_locks_the_document_and_its_chunks(self):
+        """The locking the tests above rely on is `FOR UPDATE` on BOTH the document
+        row and its chunk rows, checked against the SQL Django actually generated."""
         with CaptureQueriesContext(connection) as captured:
-            author_explicit_chunk_set(
+            result = author_explicit_chunk_set(
                 self.document.pk, [C("alpha")], application_scope=self.scope,
                 expected=self.expected,
                 principal=KnowledgeMutationPrincipal.system("probe"),
             )
-        locking = [q["sql"] for q in captured.captured_queries if "FOR UPDATE" in q["sql"].upper()]
-        self.assertGreaterEqual(len(locking), 1, "even a no-op must take the lock")
+        self.assertEqual(result.outcome, authoring.OUTCOME_UNCHANGED)
+
+        locking = [
+            re.sub(r"\s+", " ", q["sql"]) for q in captured.captured_queries
+            if re.search(r"\bFOR UPDATE\b", q["sql"], re.IGNORECASE)
+        ]
+        for model in (KnowledgeDocument, KnowledgeDocumentChunk):
+            table = connection.ops.quote_name(model._meta.db_table)
+            with self.subTest(table=model._meta.db_table):
+                self.assertTrue(
+                    any(re.search(r"\bFROM " + re.escape(table), sql) for sql in locking),
+                    f"no FOR UPDATE query selects FROM {table}; locking queries: {locking}",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -497,11 +706,14 @@ class AuthoredChunkSetsAndAnnTests(PgvectorFixtureMixin, TestCase):
         )
         self.assertNotIn(replacement.pk, self.search_ids())  # unindexed, so absent
 
-    def test_new_chunks_have_no_embedding_and_preserved_chunks_keep_ids_and_vectors(self):
+    def test_inserting_an_unembedded_chunk_does_not_invalidate_a_current_leaf(self):
         document = self.seed(["alpha", "bravo", "charlie"])
         ids = self.ids(document)
-        before = self.embeddings(document)
-        self.assertEqual(len(before), 3)
+        embeddings_before = self.embeddings(document)
+        self.assertEqual(len(embeddings_before), 3)
+        generation_before = self.generation(self.coll_t2)
+        readiness_before = self.readiness(self.coll_t2)
+        self.assertTrue(readiness_before.ready, readiness_before.reason)
 
         result = self.author(document, ["delta", "alpha", "bravo", "charlie"])  # new first
 
@@ -511,8 +723,17 @@ class AuthoredChunkSetsAndAnnTests(PgvectorFixtureMixin, TestCase):
             self.assertEqual(after_ids[content], ids[content])  # same chunk ids
         new_chunk = document.chunks.get(content="delta")
         self.assertFalse(new_chunk.embeddings.exists())  # not indexed until the host does it
-        self.assertEqual(self.embeddings(document), before)  # same rows, same k1
+        self.assertEqual(self.embeddings(document), embeddings_before)  # same rows, same k1
 
+        # Nothing the leaf mirrors changed, so it is still current BEFORE any rebuild,
+        # and the preserved vectors are still served from it.
+        self.assertEqual(self.generation(self.coll_t2), generation_before)
+        readiness_after = self.readiness(self.coll_t2)
+        self.assertTrue(readiness_after.ready, readiness_after.reason)
+        self.assertEqual(sorted(self.search_ids()), sorted(ids.values()))
+        self.assertNotIn(new_chunk.pk, self.search_ids())
+
+        # Existing post-rebuild expectations still hold.
         self.provision_and_rebuild(self.coll_t2)
         self.assertEqual(set(self.leaf_chunk_ids(self.coll_t2)), set(ids.values()))
         self.assertNotIn(new_chunk.pk, self.search_ids())
@@ -541,4 +762,37 @@ class AuthoredChunkSetsAndAnnTests(PgvectorFixtureMixin, TestCase):
         self.assertEqual(sorted(self.search_ids()), sorted(ids.values()))
 
 
-SkipContractTests.CLASSES = (ContendedAuthoringTests, AuthoredChunkSetsAndAnnTests)
+@requires_postgres
+class HarnessSessionCleanupTests(TransactionTestCase):
+    """PostgreSQL only: the harness leaves no backend behind when the body fails."""
+
+    class Injected(Exception):
+        pass
+
+    def test_a_failed_synchronisation_leaves_no_worker_session_behind(self):
+        workers = []
+        with self.assertRaises(self.Injected):
+            with _Harness() as harness:
+                def hold():
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                    harness.locked.set()
+                    harness.release.wait(WAIT)
+                    return "released"
+
+                workers.append(harness.start("t2-holder", hold))
+                self.assertTrue(harness.locked.wait(WAIT))
+                raise self.Injected("a synchronisation assertion failed")
+
+        (worker,) = workers
+        self.assertIsNotNone(worker.pid)
+        self.assertFalse(worker.alive)
+        self.assertEqual(worker.outcome(), "released")
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM pg_stat_activity WHERE pid = %s", [worker.pid])
+            self.assertEqual(cursor.fetchone()[0], 0, "the worker's backend session must be gone")
+
+
+SkipContractTests.CLASSES = (
+    ContendedAuthoringTests, AuthoredChunkSetsAndAnnTests, HarnessSessionCleanupTests,
+)

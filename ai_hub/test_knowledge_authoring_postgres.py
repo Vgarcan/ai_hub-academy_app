@@ -95,8 +95,42 @@ WAIT = 30
 #: Bound for the join that follows an emergency backend termination, in seconds.
 TERMINATE_JOIN = 10
 
-#: Workers that outlived a failed cleanup. While any is alive, no new harness starts.
-_ORPHANS = []
+#: Harnesses whose cleanup could not finish: each still owns instrumentation (its
+#: ExitStack) and at least one live worker. Nothing here is ever dropped without its
+#: instrumentation having been restored first.
+_RETAINED = []
+
+#: Set when restoring retained instrumentation failed. Permanent for this process:
+#: the module-level functions may no longer be the originals.
+_POISON = []
+
+
+def _settle_retained():
+    """Called before any harness starts. Refuses while a retained worker is alive;
+    otherwise restores the retained instrumentation (once, in reverse order) before
+    allowing the next harness. A failed restoration poisons the process."""
+    if _POISON:
+        raise AssertionError(
+            f"an earlier harness failed to restore its instrumentation ({_POISON[0]}); "
+            "refusing to run concurrency tests on possibly patched code. "
+            "Run this module in a fresh process."
+        )
+    for retained in list(_RETAINED):
+        live = [w.name for w in retained.retained_workers if w.alive]
+        if live:
+            raise AssertionError(
+                "a previous test left worker(s) still running after its cleanup failed: "
+                f"{live}. Refusing to start another concurrency test beside them. "
+                "Run this module in a fresh process."
+            )
+        try:
+            retained._stack.close()  # restores the originals, last patch first
+        except Exception as exc:  # noqa: BLE001 - recorded and refused, never ignored
+            _POISON.append(repr(exc))
+            raise AssertionError(
+                f"could not restore retained instrumentation ({exc!r}); refusing to continue"
+            ) from exc
+        _RETAINED.remove(retained)
 
 #: Session bounds applied by each worker to its own connection, in milliseconds.
 #: They are longer than any wait the tests make on purpose: they exist so that a
@@ -176,17 +210,12 @@ class _Harness:
         self.locked = threading.Event()   # a holder reached its critical point
         self.release = threading.Event()  # let the holder go
         self.workers = []
+        self.retained_workers = []  # survivors, if cleanup could not finish
         self.calls = defaultdict(list)
         self._stack = contextlib.ExitStack()
 
     def __enter__(self):
-        _ORPHANS[:] = [w for w in _ORPHANS if w.alive]
-        if _ORPHANS:
-            raise AssertionError(
-                "a previous test left worker(s) still running after its cleanup failed: "
-                f"{[w.name for w in _ORPHANS]}. Refusing to start another concurrency test "
-                "beside them. Run this module in a fresh process."
-            )
+        _settle_retained()
         return self
 
     # -- instrumentation ----------------------------------------------------
@@ -338,9 +367,12 @@ class _Harness:
             # FAIL CLOSED. A Python thread cannot be killed, so a worker that outlived
             # its backend termination may still run. The instrumentation it could still
             # call is therefore left in place (it is pass-through once `release` is
-            # set), and the worker is registered so that the next harness refuses to
-            # start instead of running beside it.
-            _ORPHANS.extend(w for w in survivors if w not in _ORPHANS)
+            # set). This harness is registered WITH its instrumentation: the next
+            # harness refuses while a survivor lives, and restores it once they have
+            # all finished (`_settle_retained`).
+            self.retained_workers = list(survivors)
+            if self not in _RETAINED:
+                _RETAINED.append(self)
             problems.append(
                 f"CLEANUP INCOMPLETE: workers STILL running: {[w.name for w in survivors]}; "
                 "instrumentation was left in place and later harnesses will refuse to start"
@@ -474,25 +506,44 @@ class HarnessCleanupFailureTests(TestCase):
             patcher = mock.patch.object(module, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.addCleanup(_ORPHANS.clear)  # registered early, so it runs late
+        self.addCleanup(_RETAINED.clear)  # registered early, so they run late
+        self.addCleanup(_POISON.clear)
 
     def stubborn(self, harness):
-        """A worker that outlives the (shortened) joins, but only for a bounded time."""
+        """A worker that outlives the (shortened) joins, but only for a bounded time.
+        The test's cleanup releases it, joins it and restores the instrumentation."""
         gate = threading.Event()
+        self.gate = gate
 
         def work():
             gate.wait(5)
             return "late"
 
         worker = harness.start("t2-stubborn", work)
+        real_stack = harness._stack  # captured: a test may swap the harness's own
 
         def reap():
             gate.set()
             worker.thread.join(timeout=10)
-            harness._stack.close()
+            real_stack.close()  # idempotent once already restored
 
         self.addCleanup(reap)
         return worker
+
+    def survive(self, harness):
+        """Run `harness` so that its worker survives cleanup. Returns the worker."""
+        holder = []
+        with mock.patch.object(_Harness, "_terminate_own_backends", return_value=[]):
+            with self.assertRaises(AssertionError):
+                with harness:
+                    harness.instrument()
+                    holder.append(self.stubborn(harness))
+        return holder[0]
+
+    def finish(self, worker):
+        self.gate.set()
+        worker.thread.join(timeout=10)
+        self.assertFalse(worker.alive)
 
     @staticmethod
     def notes_of(exc):
@@ -601,18 +652,68 @@ class HarnessCleanupFailureTests(TestCase):
         # Fail closed: the instrumentation the survivor could still call stays in place...
         self.assertEqual(authoring._delete_rows.__name__, "wrapper")
         # ...and the next harness refuses to start beside it.
-        self.assertIn(worker, _ORPHANS)
+        self.assertIn(harness, _RETAINED)  # registered together with its instrumentation
         with self.assertRaisesRegex(AssertionError, "previous test left worker"):
             _Harness().__enter__()
 
-    def test_a_finished_orphan_no_longer_blocks_a_new_harness(self):
-        done = _Worker("t2-done", lambda: "x")
-        done.thread.start()
-        done.thread.join(timeout=5)
-        _ORPHANS.append(done)
-        with _Harness():
-            pass
-        self.assertEqual(_ORPHANS, [])
+    def test_retained_instrumentation_is_restored_before_the_next_harness_starts(self):
+        original = authoring._delete_rows
+        first = _Harness()
+        worker = self.survive(first)
+
+        # 1. the real harness retained its instrumentation while the worker lives
+        self.assertTrue(worker.alive)
+        self.assertEqual(authoring._delete_rows.__name__, "wrapper")
+        self.assertEqual(_RETAINED, [first])
+        # 2. and a new harness is refused
+        with self.assertRaisesRegex(AssertionError, "previous test left worker"):
+            _Harness().__enter__()
+        self.assertEqual(_RETAINED, [first])  # refusal does not discard the responsibility
+        self.assertEqual(authoring._delete_rows.__name__, "wrapper")
+
+        # 3. once the worker has finished, the previous instrumentation is restored first
+        self.finish(worker)
+        second = _Harness()
+        with second:
+            # 4. the new harness sees the original functions, not the old wrappers
+            self.assertIs(authoring._delete_rows, original)
+            self.assertEqual(_RETAINED, [])
+            second.instrument()
+            self.assertEqual(authoring._delete_rows.__name__, "wrapper")
+        self.assertIs(authoring._delete_rows, original)  # exactly one layer, fully unwound
+
+    def test_wrappers_do_not_stack_across_harnesses(self):
+        original = authoring._delete_rows
+        worker = self.survive(_Harness())
+        self.finish(worker)
+        for _ in range(2):
+            with _Harness() as harness:
+                harness.instrument()
+                self.assertIsNot(authoring._delete_rows, original)
+            self.assertIs(authoring._delete_rows, original)
+
+    def test_a_failed_restoration_poisons_the_process_and_refuses_further_harnesses(self):
+        first = _Harness()
+        worker = self.survive(first)
+        real_stack = first._stack
+        first._stack = mock.Mock()
+        first._stack.close.side_effect = RuntimeError("unpatch failed")
+        self.finish(worker)
+
+        with self.assertRaisesRegex(AssertionError, "could not restore retained instrumentation"):
+            _Harness().__enter__()
+        self.assertEqual(len(_POISON), 1)
+        # Not retried and not forgotten: every later harness is refused too.
+        with self.assertRaisesRegex(AssertionError, "failed to restore its instrumentation"):
+            _Harness().__enter__()
+        first._stack.close.assert_called_once()
+        real_stack.close()  # test hygiene: put the real functions back
+
+    def test_a_clean_harness_registers_nothing(self):
+        with _Harness() as harness:
+            harness.instrument()
+        self.assertEqual(_RETAINED, [])
+        self.assertEqual(_POISON, [])
 
 
 # ---------------------------------------------------------------------------

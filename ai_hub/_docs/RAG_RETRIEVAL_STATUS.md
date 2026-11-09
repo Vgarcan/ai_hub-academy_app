@@ -302,6 +302,14 @@ to the model.
   retrieval quality and changes no retrieval result, scope or permission; see
   [`15_RUNTIME_STATUS.md`](15_RUNTIME_STATUS.md#prompt-authority).
 - The reusable Core does not provide automatic file parsing/chunking.
+- Host authoring (T2, `author_explicit_chunk_set`) changes only the chunk rows
+  and the authority declaration of a document. It does not change retrieval
+  algorithms, flags, scores or scope rules, never activates a document and does
+  not run embeddings. Retrieval sees an authored set only once the host has
+  activated the document. Kept chunks keep their ids and current vectors;
+  new or changed chunks are unindexed until `knowledge_embedding_index` runs,
+  so hybrid coverage reports them as missing in the meantime. Retrieval results
+  were not re-evaluated for T2 and no retrieval-quality claim is made.
 
 ## Evidence Still Required
 

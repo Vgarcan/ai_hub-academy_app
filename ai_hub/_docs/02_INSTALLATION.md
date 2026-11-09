@@ -346,6 +346,26 @@ tests:
 python manage.py test your_host_app ai_hub
 ```
 
+## Pending Deployment Security Action
+
+**Status: PENDING — deployment operator; before external publication (or promptly if already exposed).**
+This is an environment-specific operational follow-up, not an AI Hub Core change.
+
+A deployment `SECRET_KEY` was reportedly included in diagnostic output during Linux
+smoke testing. Treat that value as potentially compromised until the operator
+confirms rotation. Never copy the actual key into documentation, issues,
+commits, pull requests or logs.
+
+- **Owner:** operator responsible for the affected Django deployment.
+- **Action:** privately generate a new key, update only the deployment's
+  ignored `.env` or secret store, and restart every Django process using it.
+  Review the handling and access of the diagnostic output.
+- **Impact:** previously signed Django sessions, cookies or tokens may stop
+  validating; plan for users to sign in again.
+- **Closure evidence:** operator confirms the replacement and restart, runs a
+  basic authenticated smoke test, and records completion without storing the
+  secret value. Do not mark complete from a code change alone.
+
 ## Production Checklist
 
 - `ai_hub` is installed directly in `INSTALLED_APPS`.

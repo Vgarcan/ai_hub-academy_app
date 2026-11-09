@@ -44,11 +44,12 @@ import time
 from collections import defaultdict
 from unittest import mock, skipUnless
 
-from django.db import connection, connections
+from django.db import connection, connections, transaction
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 
 from ai_hub.models import (
+    ApplicationScope,
     KnowledgeChunkEmbedding,
     KnowledgeCollection,
     KnowledgeDocument,
@@ -58,6 +59,7 @@ from ai_hub.models import (
 from ai_hub.services import knowledge_authoring as authoring
 from ai_hub.services.knowledge_authoring import (
     AuthoredChunk,
+    KnowledgeAuthoringNotAuthorized,
     author_explicit_chunk_set,
 )
 from ai_hub.services.knowledge_authorization import resolve_effective_knowledge_scope
@@ -852,11 +854,103 @@ class ContendedAuthoringTests(TransactionTestCase):
             KnowledgeDocument.objects.get(pk=self.document.pk).updated_at, document_updated_at
         )
 
+    # -- scope deactivation serializes with authoring -----------------------
+
+    def test_author_commits_before_scope_deactivation_becomes_effective(self):
+        """T2 owns the active-scope lock first, so deactivation waits for its commit."""
+        with _Harness() as harness:
+            harness.instrument(hold="t2-author")
+            author = harness.start("t2-author", lambda: self.author(["beta"], "author"))
+            self.assertTrue(harness.locked.wait(WAIT), "the author never reached its write phase")
+
+            deactivate = harness.start(
+                "t2-deactivator",
+                lambda: ApplicationScope.objects.filter(pk=self.scope.pk).update(is_active=False),
+            )
+            harness.wait_blocked(deactivate, author)
+            self.assertFalse(
+                deactivate.finished.is_set(),
+                "deactivation must not become effective while authoring holds the scope lock",
+            )
+            harness.release.set()
+
+        self.assertEqual(author.outcome().outcome, authoring.OUTCOME_CHANGED)
+        self.assertEqual(deactivate.outcome(), 1)
+        self.scope.refresh_from_db()
+        self.assertFalse(self.scope.is_active)
+        self.assertEqual(self.contents(), ["beta"])
+        events = list(self.authoring_events())
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].principal_identifier, "author")
+
+    def test_scope_deactivation_commits_first_and_authoring_is_refused(self):
+        """A committed deactivation wins; the waiting author writes and audits nothing."""
+        with _Harness() as harness:
+            calls = harness.instrument()
+
+            def deactivate_first():
+                with transaction.atomic():
+                    scope = ApplicationScope.objects.select_for_update().get(pk=self.scope.pk)
+                    scope.is_active = False
+                    scope.save(update_fields=["is_active"])
+                    harness.locked.set()
+                    if not harness.release.wait(WAIT):
+                        raise AssertionError("the scope deactivator was never released")
+                return "deactivated"
+
+            deactivate = harness.start("t2-deactivator", deactivate_first)
+            self.assertTrue(harness.locked.wait(WAIT), "deactivation never took the scope lock")
+            author = harness.start("t2-author", lambda: self.author(["beta"], "author"))
+            harness.wait_blocked(author, deactivate)
+            self.assertFalse(author.finished.is_set(), "the author must wait for deactivation")
+            harness.release.set()
+
+        self.assertEqual(deactivate.outcome(), "deactivated")
+        self.assertIsInstance(author.error, KnowledgeAuthoringNotAuthorized)
+        self.assertEqual(str(author.error), authoring.NOT_AUTHORIZED_MESSAGE)
+        self.assertEqual(calls["t2-author"], [], "the refused author performed no writes")
+        self.scope.refresh_from_db()
+        self.document.refresh_from_db()
+        self.assertFalse(self.scope.is_active)
+        self.assertEqual(self.document.chunk_authority_mode, Mode.EXPLICIT)
+        self.assertEqual(self.contents(), ["alpha"])
+        self.assertEqual(self.authoring_events().count(), 0)
+        self.assertEqual(KnowledgeLifecycleEvent.objects.count(), 0)
+
+    def test_author_rollback_releases_the_scope_lock_without_partial_writes(self):
+        """Deactivation waits through a failed author transaction, then proceeds."""
+        with mock.patch.object(
+            authoring, "_insert_rows", side_effect=RuntimeError("injected author failure")
+        ):
+            with _Harness() as harness:
+                harness.instrument(hold="t2-author")
+                author = harness.start("t2-author", lambda: self.author(["beta"], "author"))
+                self.assertTrue(
+                    harness.locked.wait(WAIT), "the author never reached its write phase"
+                )
+                deactivate = harness.start(
+                    "t2-deactivator",
+                    lambda: ApplicationScope.objects.filter(pk=self.scope.pk).update(
+                        is_active=False
+                    ),
+                )
+                harness.wait_blocked(deactivate, author)
+                harness.release.set()
+
+        self.assertIsInstance(author.error, RuntimeError)
+        self.assertEqual(str(author.error), "injected author failure")
+        self.assertEqual(deactivate.outcome(), 1)
+        self.scope.refresh_from_db()
+        self.assertFalse(self.scope.is_active)
+        self.assertEqual(self.contents(), ["alpha"])
+        self.assertEqual(self.authoring_events().count(), 0)
+        self.assertEqual(KnowledgeLifecycleEvent.objects.count(), 0)
+
     # -- the lock itself ----------------------------------------------------
 
     def test_even_a_no_op_locks_the_document_and_its_chunks(self):
-        """The locking the tests above rely on is `FOR UPDATE` on BOTH the document
-        row and its chunk rows, checked against the SQL Django actually generated."""
+        """The lock order is scope, then document, then chunks, checked against
+        the SQL Django actually generated."""
         with CaptureQueriesContext(connection) as captured:
             result = author_explicit_chunk_set(
                 self.document.pk, [C("alpha")], application_scope=self.scope,
@@ -869,13 +963,21 @@ class ContendedAuthoringTests(TransactionTestCase):
             re.sub(r"\s+", " ", q["sql"]) for q in captured.captured_queries
             if re.search(r"\bFOR UPDATE\b", q["sql"], re.IGNORECASE)
         ]
-        for model in (KnowledgeDocument, KnowledgeDocumentChunk):
+        lock_positions = {}
+        for model in (ApplicationScope, KnowledgeDocument, KnowledgeDocumentChunk):
             table = connection.ops.quote_name(model._meta.db_table)
             with self.subTest(table=model._meta.db_table):
+                positions = [
+                    index for index, sql in enumerate(locking)
+                    if re.search(r"\bFROM " + re.escape(table), sql)
+                ]
                 self.assertTrue(
-                    any(re.search(r"\bFROM " + re.escape(table), sql) for sql in locking),
+                    positions,
                     f"no FOR UPDATE query selects FROM {table}; locking queries: {locking}",
                 )
+                lock_positions[model] = positions[0]
+        self.assertLess(lock_positions[ApplicationScope], lock_positions[KnowledgeDocument])
+        self.assertLess(lock_positions[KnowledgeDocument], lock_positions[KnowledgeDocumentChunk])
 
 
 # ---------------------------------------------------------------------------

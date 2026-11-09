@@ -854,14 +854,15 @@ class NoOpAndConflictTests(AuthoringFixture, TestCase):
     def test_a_writer_committing_just_before_the_lock_is_a_conflict(self):
         document = self.authored(["alpha"])
         planned = self.expected(document)
-        real_governed = authoring._governed_knowledge_mutation
+        real_validate = authoring._validate_chunks
 
-        def writer_then_governed(*args, **kwargs):
-            document.chunks.update(content="beta")  # committed before the lock is taken
-            return real_governed(*args, **kwargs)
+        def writer_then_validate(chunks):
+            desired = real_validate(chunks)
+            document.chunks.update(content="beta")  # committed before the transaction starts
+            return desired
 
         before_events = self.events()
-        with mock.patch.object(authoring, "_governed_knowledge_mutation", writer_then_governed):
+        with mock.patch.object(authoring, "_validate_chunks", writer_then_validate):
             with self.assertRaises(KnowledgeMutationConflict):
                 self.author(document, [C("beta")], expected=planned)
         self.assertEqual(self.events(), before_events)

@@ -11,9 +11,11 @@ WHAT IT GUARANTEES
 ------------------
 * **Scope-bound.** The document's collection must belong to `application_scope`,
   and that scope must be active. This is checked before anything else and again
-  inside the governed transaction. A missing document, a document of another
-  scope and an inactive scope are indistinguishable: one error, one message, and it
-  takes precedence over every other argument or payload error.
+  inside the governed transaction. The active scope row is locked before the
+  governed foundation locks the document and chunks, so deactivation and authoring
+  have one serial order. A missing document, a document of another scope and an
+  inactive scope are indistinguishable: one error, one message, and it takes
+  precedence over every other argument or payload error.
 * **Governed and audited.** A change runs inside the mutation foundation: lock,
   compare-and-swap against `expected`, one `KnowledgeLifecycleEvent` in the same
   transaction. If any step or the event write fails, everything rolls back.
@@ -75,6 +77,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import re
 
+from django.db import transaction
 from django.utils import timezone
 
 from ai_hub.models import ApplicationScope, KnowledgeDocument, KnowledgeDocumentChunk
@@ -102,8 +105,8 @@ NOT_AUTHORIZED_MESSAGE = (
     "Knowledge document not found or not accessible for this application scope."
 )
 
-# Mirrors the foundation's reason-code shape so the `unchanged` path, which never
-# enters the foundation, refuses exactly what the `changed` path would refuse.
+# Mirrors the foundation's reason-code shape for early control-argument validation.
+# Every authorized call, including `unchanged`, still enters the foundation.
 _REASON_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 
 
@@ -258,6 +261,30 @@ def _validate_chunks(chunks) -> list:
 
 def _scope_is_active(application_scope) -> bool:
     return ApplicationScope.objects.filter(pk=application_scope.pk, is_active=True).exists()
+
+
+def _lock_active_scope(application_scope):
+    """Lock the active authorization root for the rest of the transaction.
+
+    T2's lock order is root-to-leaf: ApplicationScope first, then the governed
+    foundation's document and chunk locks. If deactivation already owns the scope
+    lock, PostgreSQL waits and re-evaluates `is_active` after it commits; if T2 owns
+    it first, deactivation waits until authoring commits or rolls back. SQLite keeps
+    the fresh active-state check but provides no row-lock serialization.
+
+    The ORM's exclusive row lock also serializes T2 calls within one scope. That is
+    deliberate here: bounded payload validation happens before the lock, and the
+    locked region performs database work only (no parsing, embeddings or I/O).
+    """
+    locked = (
+        ApplicationScope.objects.select_for_update()
+        .only("pk")
+        .filter(pk=application_scope.pk, is_active=True)
+        .first()
+    )
+    if locked is None:
+        raise KnowledgeAuthoringNotAuthorized(NOT_AUTHORIZED_MESSAGE)
+    return locked
 
 
 def _owns(document, application_scope) -> bool:
@@ -515,29 +542,34 @@ def author_explicit_chunk_set(
     desired_fingerprint = chunk_set_fingerprint(_desired_rows(desired))
 
     # There is deliberately no unlocked early return for an identical request. The
-    # compare-and-swap check and the chunk read must see the same locked state, so
-    # even a no-op is decided inside the governed boundary. A genuine no-op raises
-    # `_NothingToDo`, which rolls the (empty) transaction back: no write, no event.
+    # active scope is locked first, then the governed foundation locks the document
+    # and chunks. This root-to-leaf order serializes scope deactivation without
+    # changing the shared foundation contract. The compare-and-swap check and the
+    # chunk read then see the same locked state, so even a no-op is decided inside
+    # the governed boundary. A genuine no-op raises `_NothingToDo`, which rolls the
+    # (empty) outer transaction back: no write, no event.
     try:
-        with _governed_knowledge_mutation(
-            document.pk,
-            expected=expected,
-            operation=OPERATION_AUTHOR_EXPLICIT_CHUNK_SET,
-            principal=principal,
-            reason_code=reason_code,
-        ) as mutation:
-            locked = mutation.document
-            _require_owned_under_lock(locked, application_scope)
-            existing = _load_existing(locked)
-            _require_eligible(locked, existing)
-            plan = _plan(existing, desired)
-            if plan.is_noop:
-                raise _NothingToDo
-            _delete_rows(plan)
-            _move_rows(plan, existing, len(desired))
-            _insert_rows(locked, plan)
-            _declare_explicit(locked)
-            _verify_result(locked, desired)
+        with transaction.atomic():
+            _lock_active_scope(application_scope)
+            with _governed_knowledge_mutation(
+                document.pk,
+                expected=expected,
+                operation=OPERATION_AUTHOR_EXPLICIT_CHUNK_SET,
+                principal=principal,
+                reason_code=reason_code,
+            ) as mutation:
+                locked = mutation.document
+                _require_owned_under_lock(locked, application_scope)
+                existing = _load_existing(locked)
+                _require_eligible(locked, existing)
+                plan = _plan(existing, desired)
+                if plan.is_noop:
+                    raise _NothingToDo
+                _delete_rows(plan)
+                _move_rows(plan, existing, len(desired))
+                _insert_rows(locked, plan)
+                _declare_explicit(locked)
+                _verify_result(locked, desired)
     except _NothingToDo:
         # Rolled back: no write, no event.
         return _result(OUTCOME_UNCHANGED, document.pk, desired, plan, desired_fingerprint)

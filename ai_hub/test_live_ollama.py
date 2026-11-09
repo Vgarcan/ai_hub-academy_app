@@ -25,6 +25,10 @@ from ai_hub.test_application_scope_helpers import test_scope
 LIVE_BASE_URL = os.getenv("AI_HUB_LIVE_OLLAMA_BASE_URL", "").strip()
 LIVE_MODEL = os.getenv("AI_HUB_LIVE_OLLAMA_MODEL", "").strip()
 LIVE_OLLAMA_CONFIGURED = bool(LIVE_BASE_URL and LIVE_MODEL)
+# Reasoning-capable models can spend part of their output budget before emitting
+# final content. This remains a small integration probe while allowing a final
+# response from compatible models without adapter-specific request options.
+LIVE_OUTPUT_BUDGET = 256
 LIVE_SKIP_REASON = (
     "Set AI_HUB_LIVE_OLLAMA_BASE_URL and AI_HUB_LIVE_OLLAMA_MODEL "
     "to run the opt-in live Ollama integration tests."
@@ -44,7 +48,7 @@ class LiveOllamaIntegrationTests(TestCase):
             provider=self.provider,
             model_name=LIVE_MODEL,
             temperature_default=0,
-            max_tokens_default=64,
+            max_tokens_default=LIVE_OUTPUT_BUDGET,
         )
         self.agent = AgentProfile.objects.create(
             application_scope=test_scope(),
